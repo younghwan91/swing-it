@@ -1,7 +1,8 @@
 """swing_it.engine — shared backtest primitives (metrics, panels, simulations).
 
-A leaf package: imports numpy/pandas only and is imported *by* strategies, never
-the reverse. Centralizes performance metrics and panel-construction conventions
+A leaf package: imports numpy/pandas and the shared krx-quant-core (canonical
+metrics, generic panels, cross-sectional loops) and is imported *by* strategies,
+never the reverse. Centralizes performance metrics and panel-construction conventions
 so future experiments reuse them instead of re-deriving accounting logic.
 """
 
