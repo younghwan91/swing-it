@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -493,8 +493,8 @@ wheels = [
 
 [[package]]
 name = "krx-quant-core"
-version = "0.1.0"
-source = { git = "https://github.com/younghwan91/krx-quant-core?rev=v0.1.0#69a9287166006f3e6e7ce88bba63ba6fdd8f6ec3" }
+version = "0.1.1"
+source = { git = "https://github.com/younghwan91/krx-quant-core?rev=v0.1.1#b2abece44883e55e1c1c318df4d74e77c2b23ba3" }
 dependencies = [
     { name = "kiwoom-client" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1065,7 +1065,7 @@ viz = [
 
 [package.metadata]
 requires-dist = [
-    { name = "krx-quant-core", git = "https://github.com/younghwan91/krx-quant-core?rev=v0.1.0" },
+    { name = "krx-quant-core", git = "https://github.com/younghwan91/krx-quant-core?rev=v0.1.1" },
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
     { name = "pandas", specifier = ">=2.0" },
