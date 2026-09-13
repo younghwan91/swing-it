@@ -1,7 +1,7 @@
 """swing_it.diagnostics — 백테스트 사후 진단: R-멀티플 분포·취약성·배포 준비도 신호.
 
-라이브러리 경계(leaf 패키지): numpy 만 import 하고, research/ 로부터는 아무것도
-import 하지 않는다. 렌즈는 오직 **개별 트레이드 R-멀티플 분포** — 평균-헤드라인·
+라이브러리 경계(leaf 패키지): numpy 와 공유 코어 krx-quant-core(fragility·trials·Sharpe
+보정의 정본)만 import 하고, research/ 로부터는 아무것도 import 하지 않는다. 렌즈는 오직 **개별 트레이드 R-멀티플 분포** — 평균-헤드라인·
 복리 자본곡선·포트폴리오 프레이밍(슬롯·동시보유·연환산-슬롯당)은 담지 않는다.
 
 - r_distribution: 분포 모양(왼꼬리 절단·오른꼬리 두께), 선별 곡선, 확신 분위 분석, 보유상한 스윕.

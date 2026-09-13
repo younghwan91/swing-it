@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "코스피·코스닥 알파 리서치 라이브러리 — 개별 트레이드 분포·walk-forward·음성대조를 강제하는 검증 가드레일과 정직한 부정 결과 (데이터 수집은 quant-airflow)"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = [
     "quant", "퀀트", "alpha-research", "backtesting", "walk-forward",
     "overfitting", "pead", "supply-demand", "수급", "kospi", "kosdaq", "kiwoom", "키움",
@@ -16,6 +16,9 @@ keywords = [
 authors = [{ name = "Younghwan Chae", email = "chyohw97@gmail.com" }]
 dependencies = [
     "pandas>=2.0",
+    # 검증 통계·성과지표·횡단면 루프·가격제한폭의 정본. 세 레포(scalp-it·daytrade-it·
+    # swing-it)가 같은 수익열에서 같은 숫자를 내게 하려고 공유한다. 태그로 고정.
+    "krx-quant-core @ git+https://github.com/younghwan91/krx-quant-core@v0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +41,10 @@ sw-ledger = "swing_it.tui.ledger_app:main"
 
 [project.urls]
 Repository = "https://github.com/younghwan91/swing-it"
+
+[tool.hatch.metadata]
+# krx-quant-core 를 git 태그로 직접 참조한다(PyPI 미배포).
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swing_it"]

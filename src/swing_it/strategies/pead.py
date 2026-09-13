@@ -47,6 +47,8 @@ def pead_backtest(
     horizon: int = 40,
     adv_floor: float = 5000.0,
     adv_window: int = 20,
+    # 기본값은 발표 수치에 묶여 있어 그대로 둔다. 일자별 거래세를 반영한 왕복 비용은
+    # krx_quant_core.costs.round_trip_cost(on, market) 참고.
     cost_one_way: float = 0.0023,
     min_names: int = 30,
     start_index: int = 130,

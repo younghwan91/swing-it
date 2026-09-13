@@ -38,6 +38,8 @@ HOLD_DAYS = 21              # monthly rebalance
 N_DECILES = 10
 MIN_NAMES = 30             # skip a rebalance below this many eligible names
 COST_ONE_WAY = 0.0034      # 34bp one-way (68bp round-trip, note #31)
+# ↑ 값은 발표 수치에 묶여 있어 바꾸지 않는다. 일자별 거래세 기반 왕복 비용은
+#   krx_quant_core.costs.round_trip_cost(on, market) 참고.
 BORROW_ANNUAL = 0.03       # short-leg stock-borrow, 3%/yr
 
 

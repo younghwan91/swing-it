@@ -33,8 +33,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from krx_quant_core.market.limits import LIMIT_RATE
 
-LIMIT = 0.30  # 한국 일일 가격제한 ±30% — 이를 넘는 종가변동은 데이터 아티팩트
+LIMIT = LIMIT_RATE  # 한국 일일 가격제한 ±30%(정본: krx_quant_core) — 넘는 종가변동은 데이터 아티팩트
 DOWN = 1 - LIMIT  # 0.70
 UP = 1 / DOWN  # ≈1.4286 (역분할/기준상향)
 PERSIST_DAYS = 3  # 새 레벨이 유지되어야 분할로 인정(일시 스파이크 배제)

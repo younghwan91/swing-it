@@ -5,12 +5,11 @@ same way everywhere so no experiment re-derives the abs/reindex conventions.
 A content-keyed session cache lets a parameter sweep pivot the same DB-loaded
 frame once instead of on every run.
 
-Provenance (Step 0 of the backtest-engine migration — copied, signatures
-preserved):
-    panel_pivot    <- pead._panel
-    yoy_panels     <- pead._yoy_panels
-    resolve_signal <- pead._resolve_signal
-    forward_returns <- backtest.forward_returns
+The market-generic pivots (``panel_pivot`` · ``forward_returns`` · ``lookup_panel``
+· ``adv_panel``) live in ``krx_quant_core.backtest.panels`` and are re-exported
+here. PEAD-specific panels (``yoy_panels``/``resolve_signal``) and the session
+cache (``PanelCache``/``price_arrays``) stay in swing-it — the consumer process
+owns cache state.
 """
 
 from __future__ import annotations
@@ -21,39 +20,26 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from krx_quant_core.backtest.panels import (
+    adv_panel,
+    forward_returns,
+    lookup_panel,
+    panel_pivot,
+)
 
-
-def panel_pivot(prices: pd.DataFrame, value: str) -> pd.DataFrame:
-    """Pivot a long price frame to a code × date panel (abs — close is signed)."""
-    return prices.pivot_table(index="code", columns="date", values=value, aggfunc="first").abs()
-
-
-def forward_returns(df: pd.DataFrame, base_date: str, eval_date: str) -> pd.Series:
-    """Per-code return from ``base_date``'s close to ``eval_date``'s close.
-
-    Kiwoom stores a signed close (the sign marks the day's direction), so we
-    take the absolute value to recover the price level.
-    """
-    piv = df.pivot_table(index="code", columns="date", values="close", aggfunc="first").abs()
-    return (piv[eval_date] / piv[base_date] - 1.0).rename("fwd_ret")
-
-
-def lookup_panel(panel: pd.DataFrame, value: str, codes, dates) -> np.ndarray:
-    """Reindex a long code/date/value panel to a codes×dates numpy array."""
-    return (
-        panel.pivot_table(index="code", columns="date", values=value, aggfunc="first")
-        .reindex(index=codes, columns=dates).to_numpy(float)
-    )
-
-
-def adv_panel(prices: pd.DataFrame, *, window: int = 20) -> pd.DataFrame:
-    """Trailing ``window``-day average trade value → long code/date/adv (as-of)."""
-    tv = prices[["code", "date", "trade_value"]].copy()
-    tv["trade_value"] = tv["trade_value"].abs()
-    tv = tv.sort_values(["code", "date"])
-    tv["adv"] = tv.groupby("code")["trade_value"].transform(
-        lambda s: s.rolling(window, min_periods=window).mean())
-    return tv.dropna(subset=["adv"])[["code", "date", "adv"]].reset_index(drop=True)
+__all__ = [
+    "PANEL_CACHE",
+    "PanelCache",
+    "PriceArrays",
+    "adv_panel",
+    "cached_panel_pivot",
+    "forward_returns",
+    "lookup_panel",
+    "panel_pivot",
+    "price_arrays",
+    "resolve_signal",
+    "yoy_panels",
+]
 
 
 def yoy_panels(earnings_panel, codes, dates):
