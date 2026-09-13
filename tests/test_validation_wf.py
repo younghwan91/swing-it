@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from kr_quant.validation import (
+from swing_it.validation import (
     FOLDS,
     _boot_lower,
     entry_mask,

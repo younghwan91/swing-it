@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.strategies.combo import (
+from swing_it.strategies.combo import (
     combine_inverse_vol,
     expanding_inverse_vol,
     inverse_vol_weights,

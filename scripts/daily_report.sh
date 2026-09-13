@@ -27,7 +27,7 @@ set -a; . ./.env; set +a
 
 ASOF="$("${UVR[@]}" python - <<'PY' 2>/dev/null
 import os
-from kr_quant.storage import connect, db_default
+from swing_it.storage import connect, db_default
 con = connect(os.environ.get("KR_QUANT_DB") or db_default())
 cur = con.cursor(); cur.execute("SELECT max(date) FROM supply_demand")
 print(cur.fetchone()[0]); con.close()
@@ -52,7 +52,7 @@ if [ -d "$DEST" ] && [ -f "$DEST/numbers.html" ] && [ -z "${KR_QUANT_FORCE:-}" ]
 fi
 
 # 강제 재생성은 **옆에 짓고 마지막에 바꿔 끼운다.** 제자리에 덮어쓰면 5분 남짓
-# 동안 폴더 안에 새 payload 와 옛 numbers.html 이 섞여 있고, 그 사이에 kq-flow 를
+# 동안 폴더 안에 새 payload 와 옛 numbers.html 이 섞여 있고, 그 사이에 sw-flow 를
 # 띄운 사람은 어느 쪽도 아닌 화면을 본다. 실패하면 옛 리포트가 그대로 남는다.
 BUILD="$DEST"
 SWAP=""

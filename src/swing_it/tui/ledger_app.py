@@ -1,9 +1,9 @@
 """자금 원장 TUI — SSH 에서 바로 보는 화면.
 
-렌더 로직은 :mod:`kr_quant.tui.ledger_view` 에 있고 여기는 **화면 그리기와 키 입력만**
+렌더 로직은 :mod:`swing_it.tui.ledger_view` 에 있고 여기는 **화면 그리기와 키 입력만**
 한다. 설계 근거·한계는 ``docs/superpowers/specs/2026-08-29-money-flow-ledger.md``.
 
-``kq-flow`` 와 나란히 산다. 다른 점은 하나다 — ``kq-flow`` 는 섹터의 **동역학**(임펄스·
+``sw-flow`` 와 나란히 산다. 다른 점은 하나다 — ``sw-flow`` 는 섹터의 **동역학**(임펄스·
 가속·포텐셜)을 보여주고, 여기는 **회계**를 보여준다. 누가 얼마를 넘겼고 얼마가 미분류로
 남았나. 그래서 이 화면에는 파생 지표가 없고 원 금액과 잔여만 있다.
 
@@ -14,9 +14,9 @@
 기존 TUI 는 8색만 썼다. 여기는 상관 히트맵 때문에 **256색 발산 팔레트**를 쓰되,
 색이 없어도 그림이 남도록 부호를 글자에 박아 뒀다(``ledger_view.heat_cell``).
 
-Run:  kq-ledger                     # <repo>/reports/latest
-      kq-ledger --dir <리포트 폴더>
-      kq-ledger --dump              # 색 없는 평문, 파이프·리다이렉트용
+Run:  sw-ledger                     # <repo>/reports/latest
+      sw-ledger --dir <리포트 폴더>
+      sw-ledger --dump              # 색 없는 평문, 파이프·리다이렉트용
 """
 
 from __future__ import annotations
@@ -26,16 +26,16 @@ import curses
 import locale
 import os
 
-from kr_quant.tui.flow_app import (
+from swing_it.tui.flow_app import (
     DEFAULT_DIR, JAMO_TO_ASCII, RICH_AMBER, RICH_BG, RICH_BODY, RICH_DIM,
     RICH_DOWN, RICH_SEL_BG, RICH_SEL_FG, RICH_UP, normalize_key)
-from kr_quant.tui.flow_view import color_spans, is_section
-from kr_quant.tui.ledger_view import (
+from swing_it.tui.flow_view import color_spans, is_section
+from swing_it.tui.ledger_view import (
     Model, help_total, load, render_text, screen, status_title_span)
 
 # 기본 리포트 경로 판정은 `flow_app` **한 곳**에 둔다 — 두 앱이 각자 저장소 루트를
 # 계산하면(예전엔 둘 다 홈 경로를 박아 뒀다) 저장소를 옮겼을 때 한쪽만 고칠 위험이
-# 생긴다. `kq-flow` 와 나란히 사는 앱이니 나란히 어긋나지 않아야 한다.
+# 생긴다. `sw-flow` 와 나란히 사는 앱이니 나란히 어긋나지 않아야 한다.
 
 # --- 색 -------------------------------------------------------------------
 #
@@ -168,7 +168,7 @@ def _hl_span(scr, y: int, span, attr) -> None:
 def _colorize_amounts(scr, y: int, line: str) -> None:
     """숫자 구간을 부호색으로 덧칠한다 — 어디를 칠할지는 ``flow_view.color_spans``.
 
-    ⚠️ 원장은 이 판정을 **따로 한 벌** 갖고 있었다. 그래서 ``kq-flow`` 가 고친
+    ⚠️ 원장은 이 판정을 **따로 한 벌** 갖고 있었다. 그래서 ``sw-flow`` 가 고친
     회귀가 여기만 살아 있었다 — 한계 화면 §5 의 ``2026-04-07`` 이 ``-04-07`` 로
     잡혀 하락색으로 칠해졌다(실측). 값이 아닌 것이 값처럼 보이는 건 배색 취향
     문제가 아니다. 같은 질문("이 줄에서 어디가 부호값인가")에 두 곳이 답하면
@@ -309,7 +309,7 @@ def _key(mo: Model, ch: int, page: int) -> bool:
     elif ch in (ord("G"), curses.KEY_END):
         # 끝으로. 행 수는 **그리는 쪽만** 안다(폭·높이에 따라 다르다) — 큰 값을
         # 넣고 `ledger_view.screen` 이 잘라 되돌려 적게 한다. 예전엔 이 키가
-        # 통째로 없어서 ``kq-flow`` 에서는 G 로 가던 목록 끝이 원장에서는 갈
+        # 통째로 없어서 ``sw-flow`` 에서는 G 로 가던 목록 끝이 원장에서는 갈
         # 길이 없었다. 두 앱이 다른 손버릇을 가르치면 안 된다.
         setattr(mo, scroll, 10 ** 6)
     elif ch == ord("v"):
@@ -326,7 +326,7 @@ def _key(mo: Model, ch: int, page: int) -> bool:
         # 동시성·한계에서는 **아무 일도 안 한다.** 예전엔 `si` 가 돌아서, 그
         # 화면에서는 아무 것도 안 바뀌는데 돌아오면 정렬이 바뀌어 있었다.
         # 판정은 `Model.sortable` 한 곳이고, 헤더가 그 사실을 적는다
-        # (`순서[평균상관]`) — ``kq-flow`` 가 종합 화면에서 밟은 그 자리다.
+        # (`순서[평균상관]`) — ``sw-flow`` 가 종합 화면에서 밟은 그 자리다.
         mo.cycle("s", 1 if ch == ord("s") else -1)
     elif ch == ord("d"):
         mo.detrend = not mo.detrend

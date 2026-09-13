@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.metrics import (
+from swing_it.engine.metrics import (
     ann_sharpe,
     cagr,
     max_drawdown,

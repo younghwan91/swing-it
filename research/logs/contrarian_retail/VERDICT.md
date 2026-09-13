@@ -42,8 +42,8 @@ _sim_core 선택/청산에 영향 없이 각 트레이드 수익에서 상수 �
 2. **sim 추출(Phase 3) 취소.** 게이트가 부정이므로 `_sim_core`를 `engine/sim_tradeflow.py`로
    승격하지 않는다. numba 시뮬은 신호 파일(`research/signals/contrarian_retail.py`)에 그대로 둔다.
    죽을지 모르는 전략을 gold-plating하지 않는다(FINAL SEQUENCING의 결정).
-3. **살아남은 것:** Phase 1이 추출한 재사용 라이브러리(`kr_quant.validation`,
-   `kr_quant.diagnostics`)는 유효하다 — 이 부정 결과 자체가 그 파이프라인의 정직한 산출물이다.
+3. **살아남은 것:** Phase 1이 추출한 재사용 라이브러리(`swing_it.validation`,
+   `swing_it.diagnostics`)는 유효하다 — 이 부정 결과 자체가 그 파이프라인의 정직한 산출물이다.
 
 ## 생존편향 보정 후 재측정 (2026-08-15)
 
@@ -80,5 +80,5 @@ purge 는 **TRAIN 의 8.7%(3,121건 중 270건)를 실제로 걷어낸다** — 
 uv run python research/experiments/slippage_check.py   # 비용 스윕 + 폴드일관 + monster-share
 ```
 
-폴드는 `kr_quant.validation.walkforward.FOLDS`(frozen 6-fold, fold-shopping 방지),
+폴드는 `swing_it.validation.walkforward.FOLDS`(frozen 6-fold, fold-shopping 방지),
 선별 θ는 `fold_slices`가 TRAIN에서만 학습해 TEST에 적용(no-lookahead).

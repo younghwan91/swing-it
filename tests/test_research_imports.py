@@ -1,6 +1,6 @@
 """research/·scripts/·examples/ 의 모든 모듈이 import 되는지.
 
-이 스위트는 `src/kr_quant` 라이브러리만 덮고 있어서, 라이브러리에서 심볼을 지워도
+이 스위트는 `src/swing_it` 라이브러리만 덮고 있어서, 라이브러리에서 심볼을 지워도
 그걸 import 하던 리서치 러너는 아무도 안 깨뜨렸다 — ruff 는 크로스모듈 심볼을 풀지
 않으므로 린트도 통과한다. 실제로 미너비니 제거 때 `fundamentals._yoy_vec` 이 이 경로로
 사라져 pead_gate·pead_concentrated_gate·pead_refinement·prop_feasibility 4개가

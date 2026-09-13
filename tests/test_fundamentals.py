@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.features.fundamentals import (
+from swing_it.features.fundamentals import (
     available_date,
     blend_rank,
     combined_signal,

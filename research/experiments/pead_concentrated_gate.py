@@ -32,7 +32,7 @@ _context 는 종가(C)만 노출하므로 손절/청산은 **종가 기준**(장
 그대로 호출한다. 결과는 research/logs/pead_concentrated/VERDICT.md 로(사람이 읽는 리포트,
 코딩된 판정 없음 — R3).
 
-라이브러리 경계: src/kr_quant 를 수정하지 않고 research 형제 모듈만 재사용한다.
+라이브러리 경계: src/swing_it 를 수정하지 않고 research 형제 모듈만 재사용한다.
 
 실행(DB 필요): docker start quant-airflow-timescaledb-1 후
     uv run python research/experiments/pead_concentrated_gate.py
@@ -58,9 +58,9 @@ from prop_swing_common import (
     render_untouched,
 )
 
-from kr_quant.diagnostics.fragility import monster_share
-from kr_quant.diagnostics.r_distribution import dist_shape
-from kr_quant.validation.optimization import TRAIN_HI
+from swing_it.diagnostics.fragility import monster_share
+from swing_it.diagnostics.r_distribution import dist_shape
+from swing_it.validation.optimization import TRAIN_HI
 
 # ===========================================================================
 # 사전등록 1차 CONFIG (R1) — 게이트 출력을 보기 전에 못박음. 이것이 THE 테스트.

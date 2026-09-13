@@ -4,8 +4,8 @@
 **go/no-go는 리포터의 숫자를 읽고 사람이 내린다 — 하드코딩된 verdict가 아니다.**
 
 ```
-가설 → 신호(research/signals/) → 백테스트 → 검증(kr_quant.validation)
-      → 진단(kr_quant.diagnostics) → go/no-go(리포트를 읽고 판단) → 로그(research/logs/)
+가설 → 신호(research/signals/) → 백테스트 → 검증(swing_it.validation)
+      → 진단(swing_it.diagnostics) → go/no-go(리포트를 읽고 판단) → 로그(research/logs/)
 ```
 
 ## 5원칙 (비협상)
@@ -24,7 +24,7 @@
 ## 1단계 — 신호 (research/signals/)
 
 `build_*_signal` / `load_data` / (신호 특정이면) 시뮬레이터. 진입시점에 알 수 있는 값만 쓴다.
-경계: `src/kr_quant/`는 `research/`를 import하지 않는다 — 반대만 허용.
+경계: `src/swing_it/`는 `research/`를 import하지 않는다 — 반대만 허용.
 
 ## 2단계 — 백테스트
 
@@ -38,12 +38,12 @@ def make_sim(prices, flow, cache):
     return simulate
 ```
 
-## 3단계 — 검증 (kr_quant.validation)
+## 3단계 — 검증 (swing_it.validation)
 
 ```python
-from kr_quant.validation.walkforward import FOLDS, oos_fixed, walk_forward, fold_consistency
-from kr_quant.validation.sensitivity import sensitivity_table, oos_sensitivity
-from kr_quant.validation.optimization import make_objective, mini_bo, TRAIN_HI, TRADE_FLOOR
+from swing_it.validation.walkforward import FOLDS, oos_fixed, walk_forward, fold_consistency
+from swing_it.validation.sensitivity import sensitivity_table, oos_sensitivity
+from swing_it.validation.optimization import make_objective, mini_bo, TRAIN_HI, TRADE_FLOOR
 ```
 
 - `FOLDS` — frozen 롤링 6-fold(`rolling_folds()`). **실험마다 새로 만들지 말 것**(fold-shopping).
@@ -52,14 +52,14 @@ from kr_quant.validation.optimization import make_objective, mini_bo, TRAIN_HI, 
 - `walk_forward(FOLDS, simulate, fit)` — fold TRAIN서 fit → TEST 평가. IS≫OOS면 과최적.
 - `sensitivity_table` / `oos_sensitivity` — 1개씩 흔들어 플래토(강건) vs 스파이크(과최적).
 
-## 4단계 — 진단 (kr_quant.diagnostics)
+## 4단계 — 진단 (swing_it.diagnostics)
 
 ```python
-from kr_quant.diagnostics.r_distribution import (
+from swing_it.diagnostics.r_distribution import (
     r_multiples, dist_shape, selection_curve, conviction_analysis, hold_curve)
-from kr_quant.diagnostics.fragility import (
+from swing_it.diagnostics.fragility import (
     monster_share, max_loss_streak, tail_removal, fragility_report)
-from kr_quant.diagnostics.gate_report import gate_report
+from swing_it.diagnostics.gate_report import gate_report
 ```
 
 - `dist_shape(R)` — 왼꼬리 절단·오른꼬리 두께·왜도. `r_multiples(ret, stop)`으로 R 생성.
@@ -105,7 +105,7 @@ from kr_quant.diagnostics.gate_report import gate_report
 > (f)가 이 5단계를 **부탁이 아니라 규약으로** 만든다 — 자체 배터리를 새로 짜면
 > 음성대조·비용2배·손안댄창·R분포·fragility 중 무엇이 빠졌는지 아무도 모른다.
 > 실제로 `pead_gate.py` 가 그 상태로 오래 있었다(2026-08-15 하버스로 이전).
-> 유니버스는 PIT·상장폐지 포함이어야 한다 — `kr_quant.validation.survivorship_report`
+> 유니버스는 PIT·상장폐지 포함이어야 한다 — `swing_it.validation.survivorship_report`
 > 로 생존편향 스멜을 리포트하고, 명백한 생존필터는 `assert_point_in_time`이 잡는다
 > (스멜테스트지 보증 아님 — 폐지수익 정합성은 별도).
 

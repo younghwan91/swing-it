@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.recipe import ArmSpec, ExperimentConfig, run_recipe
+from swing_it.engine.recipe import ArmSpec, ExperimentConfig, run_recipe
 
 
 def _synthetic_pead_panels():

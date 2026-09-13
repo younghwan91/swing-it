@@ -1,7 +1,7 @@
 """BO 최적화 유닛테스트 (합성, DB 불요) — 목적함수 부호·train/test 격리·부트스트랩 하단.
 
 핵심 과최적 방지 장치인 (1) train/test 분리 무누출, (2) 거래수 페널티, (3) 보수적 목적함수를 검증.
-로직은 ``kr_quant.validation.optimization`` (라이브러리)에 있고, 신호 배선(simulate_fast·SPACE)은
+로직은 ``swing_it.validation.optimization`` (라이브러리)에 있고, 신호 배선(simulate_fast·SPACE)은
 research 실험에서 온다 — 테스트는 그 둘을 이어 목적함수 계약을 확인한다.
 """
 
@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from kr_quant.validation.optimization import _boot_lower, make_objective, split_stats
+from swing_it.validation.optimization import _boot_lower, make_objective, split_stats
 
 
 def test_split_stats_train_test_isolation():

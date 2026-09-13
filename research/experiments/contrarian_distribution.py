@@ -2,7 +2,7 @@
 """분포 관점 분석 — 복리 자본곡선이 아니라 **개별 트레이드 = 표본**의 R-멀티플 분포.
 
 **얇은 러너**: 분포 모양·선별 곡선·확신 분위·보유상한 스윕의 계산은 전부
-``kr_quant.diagnostics.r_distribution`` 한 곳에서 온다(단일 소스, dict 반환). 여기선
+``swing_it.diagnostics.r_distribution`` 한 곳에서 온다(단일 소스, dict 반환). 여기선
 신호 배선(simulate_detailed)과 print 표만 한다.
 
 성공한 트레이더와 평균-백테스트의 차이:
@@ -21,14 +21,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from kr_quant.diagnostics.r_distribution import (
+from swing_it.diagnostics.r_distribution import (
     conviction_analysis,
     dist_shape,
     hold_curve,
     r_multiples,
     selection_curve,
 )
-from kr_quant.validation.optimization import TRAIN_HI
+from swing_it.validation.optimization import TRAIN_HI
 from research.signals.contrarian_retail import _load_env_db, load_data, simulate_detailed
 
 # 5차/탐색의 플래토 라운드 고정값(경계 아님)

@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from kr_quant import storage
-from kr_quant.price_adjust import adjust_prices, diagnose, rebuild_adjusted_table
+from swing_it import storage
+from swing_it.price_adjust import adjust_prices, diagnose, rebuild_adjusted_table
 
 
 def _series(closes, code="A"):
@@ -106,8 +106,8 @@ def test_rebuild_propagates_source_to_adjusted_table():
     실측치처럼 보인다 — ADV 문턱이 전적으로 trade_value 로 돌기 때문에 유니버스
     편입까지 영향이 가는데 되짚을 단서가 사라진다.
     """
-    from kr_quant.price_adjust import rebuild_adjusted_table
-    from kr_quant.storage import DAILY_BAR_COLUMNS, connect
+    from swing_it.price_adjust import rebuild_adjusted_table
+    from swing_it.storage import DAILY_BAR_COLUMNS, connect
 
     con = connect(":memory:")
     cols = [*DAILY_BAR_COLUMNS, "source"]

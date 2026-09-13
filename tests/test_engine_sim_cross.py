@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.sim_crosssectional import (
+from swing_it.engine.sim_crosssectional import (
     rank_ic,
     rank_tilt_backtest,
     staggered_tranche_backtest,

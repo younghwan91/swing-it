@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """섹터 자금흐름 — 어느 시점부터 어느 장에서 어느 섹터로 돈이 흘러갔나.
 
-DB 읽기 전용. 수급 정문(:func:`kr_quant.storage.read_supply_demand`)으로 순매매
+DB 읽기 전용. 수급 정문(:func:`swing_it.storage.read_supply_demand`)으로 순매매
 **수량**을 읽어 그날 종가를 곱해 금액으로 환산하고, `stocks` 의 섹터·시장으로 묶어
 **일별 시계열**을 낸다. 하루치만 보면 블록딜 한 건이 섹터를 통째로 흔들어 보이므로,
 임의 구간 누적이 기본 단위다.
@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from kr_quant.storage import (
+from swing_it.storage import (
     connect, db_default, market_cap_asof_bulk, read_supply_demand)
 
 EOK = 1e8                 # 원 → 억원

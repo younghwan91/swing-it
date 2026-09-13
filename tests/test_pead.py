@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.strategies.pead import pead_backtest, pead_rank_ic, staggered_backtest
+from swing_it.strategies.pead import pead_backtest, pead_rank_ic, staggered_backtest
 
 
 def _synthetic(n_days=400, n_codes=60, drift=0.002, seed=0):
@@ -30,7 +30,7 @@ def _synthetic(n_days=400, n_codes=60, drift=0.002, seed=0):
 
 
 def test_pead_is_net_positive_when_earnings_predict_drift():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     periods, summary = pead_backtest(
@@ -43,7 +43,7 @@ def test_pead_is_net_positive_when_earnings_predict_drift():
 
 
 def test_cost_reduces_net_below_gross():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     periods, _ = pead_backtest(prices, panel, horizon=20, adv_floor=0,
@@ -54,7 +54,7 @@ def test_cost_reduces_net_below_gross():
 
 
 def test_rank_ic_confirms_positive_predictive_signal():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     res = pead_rank_ic(prices, panel, horizon=20, adv_floor=0, start_index=40, n_regimes=4)
@@ -66,7 +66,7 @@ def test_rank_ic_confirms_positive_predictive_signal():
 
 
 def test_fresh_days_gate_limits_universe():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     # Earnings became available before the window -> age grows large; a tight
     # fresh_days gate should drop everything and yield no tradeable periods.
@@ -77,7 +77,7 @@ def test_fresh_days_gate_limits_universe():
 
 
 def test_backtest_accepts_precomputed_signal_panel():
-    from kr_quant.features.fundamentals import blend_rank, earnings_yoy_panel
+    from swing_it.features.fundamentals import blend_rank, earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     # Blend YoY with itself -> identical ranking -> same result as the raw path.
@@ -91,7 +91,7 @@ def test_backtest_accepts_precomputed_signal_panel():
 
 
 def test_long_only_reports_excess_and_charges_no_borrow():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     periods, summary = pead_backtest(prices, panel, horizon=20, adv_floor=0,
@@ -104,7 +104,7 @@ def test_long_only_reports_excess_and_charges_no_borrow():
 
 
 def test_staggered_backtest_runs_and_reports_payoff():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     periods, summary = staggered_backtest(prices, panel, horizon=60, step=20,
@@ -117,8 +117,8 @@ def test_staggered_backtest_runs_and_reports_payoff():
 
 
 def test_recommend_holdings_returns_top_mid_large_names():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
-    from kr_quant.strategies.pead import recommend_holdings
+    from swing_it.features.fundamentals import earnings_yoy_panel
+    from swing_it.strategies.pead import recommend_holdings
     prices, earnings, dates = _synthetic(n_codes=60)
     panel = earnings_yoy_panel(earnings, dates)
     shares = pd.DataFrame([
@@ -134,7 +134,7 @@ def test_recommend_holdings_returns_top_mid_large_names():
 
 
 def test_staggered_cap_tier_restricts_universe():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic(n_codes=60)
     panel = earnings_yoy_panel(earnings, dates)
     # Give each code a distinct, constant market cap (code index scales it).
@@ -150,7 +150,7 @@ def test_staggered_cap_tier_restricts_universe():
 
 
 def test_top_n_concentrates_and_reports_payoff_ratio():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     _, summary = pead_backtest(prices, panel, horizon=20, adv_floor=0,
@@ -163,7 +163,7 @@ def test_top_n_concentrates_and_reports_payoff_ratio():
 
 
 def test_borrow_cost_reduces_long_short_net():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
     panel = earnings_yoy_panel(earnings, dates)
     _, s0 = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0,
@@ -174,7 +174,7 @@ def test_borrow_cost_reduces_long_short_net():
 
 
 def test_liquidity_floor_excludes_illiquid_names():
-    from kr_quant.features.fundamentals import earnings_yoy_panel
+    from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic(n_codes=40)
     # Make half the names illiquid (trade_value below the floor).
     prices.loc[prices["code"] >= "000020", "trade_value"] = 10.0

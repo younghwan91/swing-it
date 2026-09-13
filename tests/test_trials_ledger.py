@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from kr_quant.diagnostics.trials import (
+from swing_it.diagnostics.trials import (
     config_fingerprint,
     count_trials,
     ledger_path,

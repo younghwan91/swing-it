@@ -7,7 +7,7 @@
 
 Three sequential refinements to the validated PEAD alpha — (1) earnings-surprise
 magnitude filter, (2) holding-horizon sweep, (3) per-position trailing stop —
-each built with `staggered_backtest` from `kr_quant.strategies.pead` so all
+each built with `staggered_backtest` from `swing_it.strategies.pead` so all
 results share identical return / benchmark / annualization conventions
 (Accounting Harmonization). Data is loaded **from TimescaleDB** (not CSV), full
 expanded universe (2,629 DART codes, 2016Q1-2026). YoY is computed from

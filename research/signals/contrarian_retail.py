@@ -11,7 +11,7 @@
 핵심 사실 (DB 실측): 개인 순매수는 (외국인+기관)과 94.6%가 반대 부호. 즉 "개미 반대"는
 구조적으로 "스마트머니(외국인+기관) 편승"과 거의 같다.
 
-Scratch research. src/kr_quant/는 건드리지 않는다. engine 회계(staggered_backtest)를
+Scratch research. src/swing_it/는 건드리지 않는다. engine 회계(staggered_backtest)를
 **재사용**한다 — 진입가·벤치마크·연율화를 새로 구현하지 않는다(docs/backtest-engine.md 규칙).
 
 신호 설계
@@ -41,9 +41,9 @@ import pandas as pd
 def _load_env_db() -> str:
     """``.env``의 KR_QUANT_DB를 로드해 반환(셸에 export 안 돼 있어도 동작).
 
-    파싱 본체는 kr_quant.storage.load_env_db 하나뿐이다.
+    파싱 본체는 swing_it.storage.load_env_db 하나뿐이다.
     """
-    from kr_quant.storage import load_env_db
+    from swing_it.storage import load_env_db
 
     return load_env_db()
 
@@ -62,7 +62,7 @@ def load_data(db: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
       - ``prices``: long ``code``/``date``/``close``/``trade_value`` (분할조정)
       - ``flow``:   long ``code``/``date``/``individual``/``volume``
     """
-    from kr_quant.storage import connect, db_default, read_prices
+    from swing_it.storage import connect, db_default, read_prices
     con = connect(db or db_default())
     prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
     # individual IS NOT NULL 을 명시하는 이유: 폐지 종목 수급은 네이버에서 부분만
@@ -165,7 +165,7 @@ def run_arm(
     회계(진입가 close[t]·벤치마크 유니버스평균·연율화·excess)는 전부 engine 소유.
     여기선 신호만 주입한다.
     """
-    from kr_quant.strategies.pead import staggered_backtest
+    from swing_it.strategies.pead import staggered_backtest
     p = {**BASELINE, **params}
     periods, summary = staggered_backtest(prices, earnings_panel=None, signal_panel=signal_panel, **p)
     if cost_one_way and not periods.empty:
@@ -196,7 +196,7 @@ def _mdd(period_net: np.ndarray) -> float:
 
 def _panels(prices: pd.DataFrame, signal_panel: pd.DataFrame):
     """close·trade_value·signal을 동일 (code×date) 그리드로 정렬해 반환."""
-    from kr_quant.engine.panels import panel_pivot
+    from swing_it.engine.panels import panel_pivot
     close = panel_pivot(prices, "close")
     tval = panel_pivot(prices, "trade_value")
     codes, dates = list(close.index), list(close.columns)
@@ -467,7 +467,7 @@ def _run_behavior(prices: pd.DataFrame, flow: pd.DataFrame) -> int:
 
 def _signal_panels(prices, flow, window, lag):
     """close·trade_value·ri(개미강도)·pr(과거수익)을 동일 code×date 그리드로 (모두 lag 적용)."""
-    from kr_quant.engine.panels import panel_pivot
+    from swing_it.engine.panels import panel_pivot
     close = panel_pivot(prices, "close")
     tval = panel_pivot(prices, "trade_value")
     codes, dates = list(close.index), list(close.columns)

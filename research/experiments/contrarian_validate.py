@@ -2,7 +2,7 @@
 """BO 결과 일반화 검증 — 파라미터 민감도(US-B3) + walk-forward(US-B4).
 
 **얇은 러너**: 롤링 fold 정의·no-lookahead OOS 슬라이스·민감도 스윕 기계는 전부
-``kr_quant.validation`` 한 곳에서 온다(단일 소스). 여기선 신호 배선(시뮬레이터·탐색공간·
+``swing_it.validation`` 한 곳에서 온다(단일 소스). 여기선 신호 배선(시뮬레이터·탐색공간·
 리포팅)만 한다. FOLDS 는 라이브러리의 frozen 기본값 — 실험마다 새로 만들지 않는다(fold-shopping 방지).
 
 과최적을 잡아낸다:
@@ -20,9 +20,9 @@ import json
 
 import numpy as np
 
-from kr_quant.validation.optimization import TRAIN_HI, mini_bo
-from kr_quant.validation.sensitivity import oos_sensitivity, sensitivity_table
-from kr_quant.validation.walkforward import FOLDS
+from swing_it.validation.optimization import TRAIN_HI, mini_bo
+from swing_it.validation.sensitivity import oos_sensitivity, sensitivity_table
+from swing_it.validation.walkforward import FOLDS
 from research.experiments.contrarian_bo import SPACE, make_sim
 from research.signals.contrarian_retail import (
     _load_env_db,

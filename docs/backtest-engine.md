@@ -1,11 +1,11 @@
-# 백테스팅 엔진 (`kr_quant.engine`) — 설계 결정 기록
+# 백테스팅 엔진 (`swing_it.engine`) — 설계 결정 기록
 
 성과지표와 시뮬레이션 루프의 유일 구현. 이 문서는 **왜 이렇게 만들었는지**와 **확정된 설계 결정**을
 남긴다. 실행 이력은 git log 에 있다.
 
 ## ⚠️ 사용 규칙 (필독)
 
-**새 백테스트 실험은 반드시 `kr_quant.engine`의 지표·시뮬레이션 함수를 재사용하고, 회계 로직
+**새 백테스트 실험은 반드시 `swing_it.engine`의 지표·시뮬레이션 함수를 재사용하고, 회계 로직
 (진입가·벤치마크·비용·연율화)을 새로 구현하지 않는다.** 새 실험은 `examples/pead_sweep_via_recipe.py`
 처럼 `engine.recipe.ExperimentConfig` + `run_recipe()`로 파라미터만 정의하는 걸 먼저 시도할 것.
 전략 파일을 통째로 읽고 회계 로직을 손으로 베끼는 건 이 엔진을 만든 이유 자체를 무시하는 것이다.
@@ -13,7 +13,7 @@
 ## 패키지 구조
 
 ```
-src/kr_quant/engine/
+src/swing_it/engine/
     __init__.py            # 공개 API 재export
     metrics.py             # ann_sharpe, cagr, max_drawdown, newey_west_t,
                            # summarize_periods, spearman, quantile_summary,

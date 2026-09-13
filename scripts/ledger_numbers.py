@@ -20,7 +20,7 @@ import statistics as st
 # 주장이 다른 수가 된다. 여기 있던 `_corr` 은 분산 0 에서 `0.0`(=무상관)을
 # 돌려줬는데 화면은 `nan`(=**잴 수 없음**)을 돌려준다 — `nan < 0` 은 False 라
 # 그냥 세면 잴 수 없는 쌍이 "음수가 아닌 쌍" 으로 들어가 비율이 조용히 낮아진다.
-from kr_quant.tui.ledger_view import ACTOR_KEYS, _corr, load, neg_frac
+from swing_it.tui.ledger_view import ACTOR_KEYS, _corr, load, neg_frac
 
 NULL_SHIFTS = 20
 SEED = 11
@@ -136,7 +136,7 @@ def spikes(d, sector: str = "전기/전자", win: int = 20) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default="~/Documents/kr-quant-reports/latest")
+    ap.add_argument("--dir", default="~/Documents/swing-it-reports/latest")
     a = ap.parse_args()
     d = load(a.dir)
     print(f"# 자금 원장 실측 — {d['dates'][0]} ~ {d['dates'][-1]} "

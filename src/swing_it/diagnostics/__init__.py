@@ -1,4 +1,4 @@
-"""kr_quant.diagnostics — 백테스트 사후 진단: R-멀티플 분포·취약성·배포 준비도 신호.
+"""swing_it.diagnostics — 백테스트 사후 진단: R-멀티플 분포·취약성·배포 준비도 신호.
 
 라이브러리 경계(leaf 패키지): numpy 만 import 하고, research/ 로부터는 아무것도
 import 하지 않는다. 렌즈는 오직 **개별 트레이드 R-멀티플 분포** — 평균-헤드라인·

@@ -11,15 +11,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kr_quant.storage import connect, market_cap_asof
+from swing_it.storage import connect, market_cap_asof
 
 
 def test_connect_dispatches_postgres_dsn_to_psycopg2():
     """A postgresql:// path opens Postgres instead of sqlite — no real connection made."""
     fake_module = MagicMock()
     with patch.dict("sys.modules", {"psycopg2": fake_module}):
-        connect("postgresql://user:pw@localhost:5432/kr_quant")
-    fake_module.connect.assert_called_once_with("postgresql://user:pw@localhost:5432/kr_quant")
+        connect("postgresql://user:pw@localhost:5432/swing_it")
+    fake_module.connect.assert_called_once_with("postgresql://user:pw@localhost:5432/swing_it")
 
 
 def _insert_bar(con, code, date, close):
@@ -87,7 +87,7 @@ def test_market_cap_asof_bulk_matches_per_row_on_zero_shares(tmp_path):
     """벌크도 같은 semantics — 더 오래된 유효 행으로 조용히 대체하지 않는다."""
     import pandas as pd
 
-    from kr_quant.storage import market_cap_asof_bulk
+    from swing_it.storage import market_cap_asof_bulk
 
     con = connect(tmp_path / "t.db")
     _insert_shares(con, "005930", "2026-01-01", 1000000)
@@ -123,7 +123,7 @@ def _insert_supply(con, code, date, individual, foreign_, institution, source):
 
 def test_read_supply_demand_blocks_silent_individual_survivorship(tmp_path):
     """개인 수급 + 폐지 커버리지는 현 데이터로 양립 불가 — 조용히 넘기지 않는다."""
-    from kr_quant.storage import read_supply_demand
+    from swing_it.storage import read_supply_demand
 
     con = connect(tmp_path / "t.db")
     _supply_schema(con)
@@ -133,7 +133,7 @@ def test_read_supply_demand_blocks_silent_individual_survivorship(tmp_path):
 
 
 def test_read_supply_demand_allows_individual_when_declared(tmp_path):
-    from kr_quant.storage import read_supply_demand
+    from swing_it.storage import read_supply_demand
 
     con = connect(tmp_path / "t.db")
     _supply_schema(con)
@@ -146,7 +146,7 @@ def test_read_supply_demand_allows_individual_when_declared(tmp_path):
 
 def test_read_supply_demand_catches_missing_delisted(tmp_path):
     """폐지 종목 수급이 구간에 있는데 결과에 없으면 터진다."""
-    from kr_quant.storage import _assert_supply_has_delisted
+    from swing_it.storage import _assert_supply_has_delisted
 
     con = connect(tmp_path / "t.db")
     _supply_schema(con)
@@ -162,7 +162,7 @@ def test_read_supply_demand_catches_missing_delisted(tmp_path):
 
 def test_read_supply_demand_window_scopes_the_delisted_expectation(tmp_path):
     """'오늘 하루' 시점 조회는 그 구간에 폐지분이 없으므로 헛되이 터지지 않는다."""
-    from kr_quant.storage import read_supply_demand
+    from swing_it.storage import read_supply_demand
 
     con = connect(tmp_path / "t.db")
     _supply_schema(con)

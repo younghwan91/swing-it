@@ -1,6 +1,6 @@
 """섹터 자금흐름 TUI — SSH 에서 바로 보는 화면.
 
-렌더 로직은 :mod:`kr_quant.tui.flow_view` 에 있고 여기는 **화면 그리기와 키 입력만**
+렌더 로직은 :mod:`swing_it.tui.flow_view` 에 있고 여기는 **화면 그리기와 키 입력만**
 한다. 표준 라이브러리 curses 만 쓰므로 새 의존성이 없다.
 
 데이터는 일일 리포트가 이미 만들어 둔 ``numbers.html`` 안의 JSON 을 읽는다 —
@@ -10,8 +10,8 @@ DB 에 접속하지 않으므로 즉시 뜨고, 화면과 표가 **같은 숫자
 pty 검사만으로는 "통과했는데 아무것도 안 한" 검사가 반복해서 나왔다 — 키 하나가
 무엇을 했는지는 상태를 직접 보고 판정하는 게 정직하다.
 
-Run:  kq-flow                       # <repo>/reports/latest
-      kq-flow --dir <리포트 폴더>
+Run:  sw-flow                       # <repo>/reports/latest
+      sw-flow --dir <리포트 폴더>
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import re
 from collections import namedtuple
 from pathlib import Path
 
-from kr_quant.tui.flow_view import (
+from swing_it.tui.flow_view import (
     HELP_FOOT_TIERS, NAME_SORT_COL, all_lines, NAME_SORTS, SORT_COL, SORTS,
     State, banner_lines, cell_len as view_cell_len, color_spans,
     detail_lines, detail_title_span, footer_line, header_lines, help_lines,
@@ -35,7 +35,7 @@ from kr_quant.tui.flow_view import (
 
 # `scripts/daily_report.sh` 가 `<repo>/reports/<기준일>` 에 쓰고 `latest` 를 그리로
 # 심볼릭링크한다(생성물이지만 접근 편의상 저장소 **안**, `.gitignore` 로 git 추적
-# 제외). 이 파일은 `src/kr_quant/tui/flow_app.py` 이므로 3단계 위가 저장소 루트다 —
+# 제외). 이 파일은 `src/swing_it/tui/flow_app.py` 이므로 3단계 위가 저장소 루트다 —
 # 사용자 홈 경로를 박아두면 저장소를 옮기거나 다른 사용자가 설치했을 때 어긋난다.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIR = str(_REPO_ROOT / "reports" / "latest")
@@ -239,7 +239,7 @@ DETAIL_MIN_H = 10
 DETAIL_GAP = 1
 
 #: 여백을 넣고도 표에 남아야 할 최소 행 수. 여백은 **가장 먼저 포기하는** 것이다 —
-#: 폭에서 :func:`~kr_quant.tui.flow_view.tier_for` 가 문구를 단계적으로 줄이듯,
+#: 폭에서 :func:`~swing_it.tui.flow_view.tier_for` 가 문구를 단계적으로 줄이듯,
 #: 높이에서도 없어도 되는 것부터 뺀다. 빈 줄 하나 때문에 패널 줄이나 표가 잘리면
 #: 읽기 좋아지려던 것이 읽을 것을 없앤 셈이다.
 GAP_MIN_ROWS = 3
@@ -509,7 +509,7 @@ def _draw_hint_and_footer(scr, st: State, w: int, hint_y: int, foot_y: int,
 
 def pad_footer(text: str, width: int) -> str:
     """푸터를 폭에 맞춘다 — 반전 배경이 줄 끝까지 이어지게."""
-    from kr_quant.tui.flow_view import pad
+    from swing_it.tui.flow_view import pad
     return pad(text, width)
 
 

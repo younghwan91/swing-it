@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.panels import (
+from swing_it.engine.panels import (
     PanelCache,
     adv_panel,
     lookup_panel,
@@ -18,7 +18,7 @@ from kr_quant.engine.panels import (
 # ``_lookup`` (Step 4) and ``_adv_panel`` (Step 5) bodies were migrated onto the
 # engine and deleted; their equivalence is now pinned inline against the
 # canonical transforms reproduced below.
-from kr_quant.strategies.pead import _panel as _src_panel
+from swing_it.strategies.pead import _panel as _src_panel
 
 
 def _src_adv_panel(prices: pd.DataFrame, *, window: int = 20) -> pd.DataFrame:

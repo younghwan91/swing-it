@@ -12,9 +12,9 @@
 계산은 전부 기존 코드 재사용:
   - 볼록형: research.signals.contrarian_retail.simulate_detailed (default PARAMS)
   - 확산형: research.experiments.pead_gate.extract_trades (PEAD BASELINE)
-  - 분위:   kr_quant.diagnostics.r_distribution.conviction_analysis
+  - 분위:   swing_it.diagnostics.r_distribution.conviction_analysis
 
-src/kr_quant/는 건드리지 않는다(읽기 전용 import만).
+src/swing_it/는 건드리지 않는다(읽기 전용 import만).
 
 실행: uv run python scripts/make_research_figures.py
 """
@@ -38,7 +38,7 @@ matplotlib.use("Agg")
 import matplotlib.font_manager as fm  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
-from kr_quant.validation.optimization import TRAIN_HI  # noqa: E402 — sys.path 부트스트랩 뒤
+from swing_it.validation.optimization import TRAIN_HI  # noqa: E402 — sys.path 부트스트랩 뒤
 
 # --- Korean font (repo 관례: NanumGothic 우선, 없으면 Noto Sans CJK KR 폴백) -----
 _FONT_CANDS = [
@@ -199,7 +199,7 @@ def figure_edge_taxonomy(convex: np.ndarray, diffuse: np.ndarray, out: Path) -> 
 # ---------------------------------------------------------------------------
 def figure_apriori_momentum(d: dict, out: Path) -> dict:
     """진입 모멘텀 강도 5분위 → 건당 기대수익(R), TRAIN·OOS 그룹 막대."""
-    from kr_quant.diagnostics.r_distribution import conviction_analysis
+    from swing_it.diagnostics.r_distribution import conviction_analysis
 
     R_all = d["ret"] / STOP
     res = conviction_analysis(d["mom"], R_all, d["entry"], train_hi=TRAIN_HI)

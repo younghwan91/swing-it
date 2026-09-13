@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from prop_swing_common import load_env_db  # noqa: E402 — sys.path 부트스트랩 뒤
 
-from kr_quant.validation.walkforward import FOLDS  # noqa: E402
+from swing_it.validation.walkforward import FOLDS  # noqa: E402
 from prop_gate import prop_gate, random_entry_control  # noqa: E402 — 형제 모듈
 
 OUT_DIR = "research/logs/pead_concentrated"   # check_guardrails 의 GATE_LOG_OVERRIDE 와 일치

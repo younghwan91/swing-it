@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.features.volatility import lowvol_signal_panel, realized_vol_panel
+from swing_it.features.volatility import lowvol_signal_panel, realized_vol_panel
 
 
 def _prices(n_days=80, seed=0):

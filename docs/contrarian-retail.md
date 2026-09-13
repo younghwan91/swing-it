@@ -210,8 +210,8 @@ clean 데이터 bit-parity).
 
 > 당시 스크립트 `research/bo_optimize.py`·`research/bo_validate.py` 는 신호에 무관한
 > 부분이 라이브러리로 추출되면서 삭제됐다(git 이력에 있다). 지금 같은 일을 하는 코드는
-> `kr_quant.validation.optimization`(BO 목적함수)·`kr_quant.validation.sensitivity`
-> (민감도 스윕)·`kr_quant.validation.walkforward`(폴드·일관성)이고, 역발상 알파에
+> `swing_it.validation.optimization`(BO 목적함수)·`swing_it.validation.sensitivity`
+> (민감도 스윕)·`swing_it.validation.walkforward`(폴드·일관성)이고, 역발상 알파에
 > 물린 러너는 `research/experiments/contrarian_bo.py`·`contrarian_validate.py` 다.
 
 ### 함정: 단일 홀드아웃은 BO를 과대평가한다

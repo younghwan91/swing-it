@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from kr_quant.validation.universe_hygiene import (
+from swing_it.validation.universe_hygiene import (
     assert_point_in_time,
     survivorship_report,
 )

@@ -22,8 +22,8 @@ bool 도, "monster<50%" 같은 하드코딩 임계값도 두지 않는다. 숫�
   - no-lookahead: TRAIN = 진입 < train_hi(=2022-01-01), OOS = 그 이후. FOLDS 는 frozen.
   - 비용은 각 트레이드 수익에서 상수 차감(선택·손절에 영향 없다고 가정) — gross 1회 → 사후 차감.
 
-라이브러리 경계: kr_quant.validation.* · kr_quant.diagnostics.* 만 import 한다.
-research/ 로부터 아무것도 import 하지 않고 src/kr_quant 를 수정하지 않는다.
+라이브러리 경계: swing_it.validation.* · swing_it.diagnostics.* 만 import 한다.
+research/ 로부터 아무것도 import 하지 않고 src/swing_it 를 수정하지 않는다.
 
 실행(합성 스모크): uv run python research/experiments/prop_gate.py
 """
@@ -34,12 +34,12 @@ from pathlib import Path
 
 import numpy as np
 
-from kr_quant.diagnostics.fragility import fragility_report, monster_share
-from kr_quant.diagnostics.trials import count_trials, record_trial
-from kr_quant.diagnostics.gate_report import gate_report
-from kr_quant.diagnostics.r_distribution import dist_shape, r_multiples
-from kr_quant.validation.optimization import TRAIN_HI
-from kr_quant.validation.walkforward import FOLDS, _expectancy, entry_mask
+from swing_it.diagnostics.fragility import fragility_report, monster_share
+from swing_it.diagnostics.trials import count_trials, record_trial
+from swing_it.diagnostics.gate_report import gate_report
+from swing_it.diagnostics.r_distribution import dist_shape, r_multiples
+from swing_it.validation.optimization import TRAIN_HI
+from swing_it.validation.walkforward import FOLDS, _expectancy, entry_mask
 
 COSTS = (0.0046, 0.008, 0.010, 0.015)   # 왕복비용 스윕: 46 / 80 / 100 / 150 bp
 UNTOUCHED_LO = "2025-07-01"              # R1 held-out 최종창 하한 (탐색 중 미접촉)

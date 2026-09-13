@@ -26,7 +26,7 @@ class ArmSpec:
     """One arm of an experiment — how to turn panels into a return series/summary.
 
     ``backtest_kwargs`` →
-    :func:`kr_quant.engine.sim_crosssectional.rank_tilt_backtest`. The paradigm
+    :func:`swing_it.engine.sim_crosssectional.rank_tilt_backtest`. The paradigm
     lives on :class:`ExperimentConfig.experiment_type`, not here — a per-arm
     ``kind`` field survived the event-driven removal with a single legal value
     and no reader, which is dead state that silently accepts any string.

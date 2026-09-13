@@ -28,8 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from prop_gate import prop_gate, random_entry_control  # noqa: E402
 
-from kr_quant.engine.panels import panel_pivot  # noqa: E402
-from kr_quant.storage import (  # noqa: E402
+from swing_it.engine.panels import panel_pivot  # noqa: E402
+from swing_it.storage import (  # noqa: E402
     SHARES_RESIDUAL_OK, connect, db_default, market_cap_asof_bulk, read_prices,
     read_supply_demand, shares_backfill_pending)
 

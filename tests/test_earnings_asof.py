@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from kr_quant.storage import connect, read_earnings
+from swing_it.storage import connect, read_earnings
 
 FIRST = ("000020", "2026Q1", "2026-05-15", "2026-05-15", 100.0, 90.0, 1.0, 1.0, 1.0, 1.0)
 RESTATED = ("000020", "2026Q1", "2026-05-15", "2026-08-13", 111.0, 90.0, 1.0, 1.0, 1.0, 1.0)

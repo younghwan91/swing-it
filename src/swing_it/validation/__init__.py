@@ -1,4 +1,4 @@
-"""kr_quant.validation — signal-agnostic out-of-sample validation primitives.
+"""swing_it.validation — signal-agnostic out-of-sample validation primitives.
 
 Walk-forward folds, one-at-a-time sensitivity sweeps, and robust Bayesian
 optimization, extracted from one-off research scripts so every alpha reuses the

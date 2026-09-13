@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from kr_quant.features.fundamentals import earnings_yoy_panel
+from swing_it.features.fundamentals import earnings_yoy_panel
 
 KN = "knowledge_date"
 

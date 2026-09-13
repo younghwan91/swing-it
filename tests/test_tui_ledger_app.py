@@ -20,9 +20,9 @@ import os
 
 import pytest
 
-from kr_quant.tui import ledger_app as app
-from kr_quant.tui.flow_view import cell_width
-from kr_quant.tui.ledger_view import (
+from swing_it.tui import ledger_app as app
+from swing_it.tui.flow_view import cell_width
+from swing_it.tui.ledger_view import (
     HEAT_RAMP, VIEWS, Model, heat_cell, screen)
 
 _COMOVE_VI = [v for v, _ in VIEWS].index("comove")
@@ -227,7 +227,7 @@ def test_dump_honours_the_width_flag(tmp_path, capsys, monkeypatch):
     seen = []
     for width in (72, 140):
         monkeypatch.setattr("sys.argv",
-                            ["kq-ledger", "--dir", str(tmp_path), "--dump",
+                            ["sw-ledger", "--dir", str(tmp_path), "--dump",
                              "--width", str(width)])
         app.main()
         out = capsys.readouterr().out
@@ -242,7 +242,7 @@ def test_dump_carries_the_key_and_column_help():
 
     주입: `render_text` 의 도움말 절을 빼면 실패한다.
     """
-    from kr_quant.tui.ledger_view import render_text
+    from swing_it.tui.ledger_view import render_text
 
     text = render_text(Model(_payload()), 100)
     assert "── 키 ──" in text and "최대일몫[%]" in text
@@ -264,7 +264,7 @@ def test_draw_survives_any_terminal_size(h, w):
             _draw(mo, h=h, w=w)
 
 
-# ------------------------------------------- kq-flow 와 같은 규율(패리티)
+# ------------------------------------------- sw-flow 와 같은 규율(패리티)
 
 def test_hangul_jamo_keys_do_what_their_latin_twins_do():
     """한영을 켜 두면 `v` 가 `ㅍ` 로, `s` 가 `ㄴ` 으로 도착해 아무 일도 안 했다.
@@ -274,7 +274,7 @@ def test_hangul_jamo_keys_do_what_their_latin_twins_do():
 
     주입: `_read_key`/`normalize_key` 경로를 걷어내고 `getch` 로 되돌리면 실패한다.
     """
-    from kr_quant.tui.flow_app import JAMO_TO_ASCII
+    from swing_it.tui.flow_app import JAMO_TO_ASCII
 
     # `v`(화면)·`d`(β제거)는 **원장에만 있는 키**다 — 공용 표에 없으므로 여기서
     # 더한다. 그 둘이 빠지면 한글 상태에서 화면조차 못 바꾼다.
@@ -315,7 +315,7 @@ def test_hangul_jamo_keys_do_what_their_latin_twins_do():
 
 def test_no_color_env_turns_the_colours_off(monkeypatch):
     """`NO_COLOR` 표준(no-color.org)을 원장만 안 보고 있었다 — 리다이렉트·로그
-    캡처에 색이 그대로 나갔다. `kq-flow` 는 이미 본다.
+    캡처에 색이 그대로 나갔다. `sw-flow` 는 이미 본다.
 
     주입: `_init_colors` 에서 그 검사를 빼면 `curses.has_colors()` 가
     initscr 없이 불려 예외로 실패한다(= 검사가 살아 있다).
@@ -328,7 +328,7 @@ def test_no_color_env_turns_the_colours_off(monkeypatch):
 def test_dates_in_the_body_are_not_painted_as_negative_numbers(monkeypatch):
     """한계 화면 §5 의 `2026-04-07` 이 `-04-07` 로 잡혀 하락색으로 칠해졌다.
 
-    원장이 부호 구간 찾기를 **따로 한 벌** 갖고 있어서, `kq-flow` 가 고친 날짜
+    원장이 부호 구간 찾기를 **따로 한 벌** 갖고 있어서, `sw-flow` 가 고친 날짜
     회귀가 여기만 남았다. 이제 두 앱이 `flow_view.color_spans` 하나를 쓴다.
 
     주입: `_colorize_amounts` 를 되살리거나 `color_spans` 의 앞 제한을 지우면
@@ -360,7 +360,7 @@ def test_the_app_paints_the_sector_name_using_the_coordinates_the_view_gives(
 
     주입: `_draw` 에서 `status_title_span` 덧칠을 빼면 실패한다.
     """
-    from kr_quant.tui.ledger_view import status_title_span
+    from swing_it.tui.ledger_view import status_title_span
 
     monkeypatch.setattr(curses, "color_pair", lambda n: n * 256)
     mo = Model(_payload())

@@ -9,7 +9,7 @@
   D. 부류   — 계산에 들어가는 두 값이 같은 집합·시점·파라미터에서 나오는가
   E. 화면   — **그려진 글자**가 열 정의가 내는 값과 같은가(폭 80·120·200)
   F. 독립   — **DB 원자료에서 처음부터 다시 만든 값**과 페이로드가 같은가
-  G. 원장   — ``kq-ledger`` 화면의 값·그림, 그리고 flow 와 같은 수를 말하는가
+  G. 원장   — ``sw-ledger`` 화면의 값·그림, 그리고 flow 와 같은 수를 말하는가
   H. 화면·키 — **듣는 키와 화면에 적힌 키**가 같은가(값이 아니라 조작을 본다)
 
 A~D 는 전부 *파일 안의 값끼리* 정합한지만 본다. 그래서 producer 가 임펄스를
@@ -28,7 +28,7 @@ U=½kx² 를 검산하면 1e-3 오차가 나서 멀쩡한 수식이 FAIL 로 뜬
 +2.0억)에서 상대오차는 무의미하게 커진다. 허용오차는 페이로드가 반올림하는
 자릿수에서 유도한 **절대값**이다(`TOL_FLOW`·`TOL_CAP`·`TOL_RET`).
 
-Run:  python scripts/verify_report.py --dir ~/Documents/kr-quant-reports/2026-08-27
+Run:  python scripts/verify_report.py --dir ~/Documents/swing-it-reports/2026-08-27
       python scripts/verify_report.py --dir <폴더> --db-check     # B·F 층까지
 """
 
@@ -370,7 +370,7 @@ def layer_b(payload: dict, db: str | None) -> None:
         print("       (--db-check 없음 — DB 대조는 건너뛴다)")
         return
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-    from kr_quant.storage import connect  # noqa: PLC0415
+    from swing_it.storage import connect  # noqa: PLC0415
     con = connect(db)
     cur = con.cursor()
     cur.execute("SELECT max(date) FROM supply_demand")
@@ -550,7 +550,7 @@ def layer_e(D: dict) -> None:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", "src"))
     try:
-        from kr_quant.tui import flow_view as FV  # noqa: PLC0415
+        from swing_it.tui import flow_view as FV  # noqa: PLC0415
     except ImportError as e:                      # pragma: no cover
         chk("E", "flow_view 를 읽을 수 있는가", False, str(e))
         return
@@ -709,9 +709,9 @@ LEDGER_WIDTHS = (48, 51, 71, 79, 80, 119, 120, 199)
 
 
 def layer_g(P: dict, D: dict) -> None:
-    """G. **자금 원장 화면**(``kq-ledger``) — 값·그림·두 앱의 대조.
+    """G. **자금 원장 화면**(``sw-ledger``) — 값·그림·두 앱의 대조.
 
-    A~F 는 ``kq-flow`` 의 표(``numbers.html`` 의 ``D``)만 본다. 원장은 같은
+    A~F 는 ``sw-flow`` 의 표(``numbers.html`` 의 ``D``)만 본다. 원장은 같은
     페이로드를 **다른 함수로** 읽어 다른 화면을 그리므로, flow 가 초록이어도
     원장이 틀릴 수 있다. 실제로 그랬다 — ``downsample`` 이 부동소수 반올림으로
     구간의 마지막 날을 버렸고(폭 51·60일), ``종목[수]`` 가 flow 와 다른 수를
@@ -722,12 +722,12 @@ def layer_g(P: dict, D: dict) -> None:
     문자열을 다시 파싱해** 꺼낸다. 같은 함수를 두 번 부르면 같은 버그를 두 번
     통과시킨다.
     """
-    print("\nG. 원장 화면 — 값·그림·kq-flow 와의 대조")
+    print("\nG. 원장 화면 — 값·그림·sw-flow 와의 대조")
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", "src"))
     try:
-        from kr_quant.tui import flow_view as FV  # noqa: PLC0415
-        from kr_quant.tui import ledger_view as LV  # noqa: PLC0415
+        from swing_it.tui import flow_view as FV  # noqa: PLC0415
+        from swing_it.tui import ledger_view as LV  # noqa: PLC0415
     except ImportError as e:                      # pragma: no cover
         chk("G", "ledger_view 를 읽을 수 있는가", False, str(e))
         return
@@ -928,7 +928,7 @@ def layer_g(P: dict, D: dict) -> None:
         f"{len(bad_sc)}건  " + "; ".join(bad_sc[:2]))
     chk("G", "검사한 (폭,시장,구간,주체) 조합", seen >= 200, f"{seen}개")
 
-    # ── ③ 원장 ↔ kq-flow: 같은 것을 같은 수로 말하는가 ──
+    # ── ③ 원장 ↔ sw-flow: 같은 것을 같은 수로 말하는가 ──
     npair, nbad, fbad, fworst = 0, [], [], 0.0
     for key, B in D["blocks"].items():
         win, mk = key.split("|")
@@ -954,7 +954,7 @@ def layer_g(P: dict, D: dict) -> None:
 
     # ── ④ 화면이 인용하는 실측 주장이 오늘 데이터 안에 있는가 ──
     #
-    # ``kq-flow`` 가 밟은 자리다 — "4개 구간 전부 Spearman 1.0000" 이 시장=전체
+    # ``sw-flow`` 가 밟은 자리다 — "4개 구간 전부 Spearman 1.0000" 이 시장=전체
     # 에서만 잰 값이었다. 원장의 도움말·한계도 범위를 적어 두고 있으므로,
     # 그 범위를 **오늘 데이터로 다시 재서** 벗어나면 말한다.
     obs = {}
@@ -1087,7 +1087,7 @@ def layer_f(P: dict, db: str | None) -> None:
         return
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", "src"))
-    from kr_quant.storage import connect  # noqa: PLC0415
+    from swing_it.storage import connect  # noqa: PLC0415
     con = connect(db)
     pg = con.__class__.__module__.startswith("psycopg2")
     ph = "%s" if pg else "?"
@@ -1281,7 +1281,7 @@ def layer_f(P: dict, db: str | None) -> None:
     # 시장 '전체' 도 화면과 같은 방식(두 시장의 합)으로 만들어 대조한다.
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", "src"))
-    from kr_quant.tui import ledger_view as LV  # noqa: PLC0415
+    from swing_it.tui import ledger_view as LV  # noqa: PLC0415
     mo = LV.Model(P)
     for W in LV.WINDOWS:
         if W > n:
@@ -1538,10 +1538,10 @@ def layer_h(D: dict, P: dict) -> None:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "..", "src"))
     try:
-        from kr_quant.tui import flow_app as FA  # noqa: PLC0415
-        from kr_quant.tui import flow_view as FV  # noqa: PLC0415
-        from kr_quant.tui import ledger_app as LA  # noqa: PLC0415
-        from kr_quant.tui import ledger_view as LV  # noqa: PLC0415
+        from swing_it.tui import flow_app as FA  # noqa: PLC0415
+        from swing_it.tui import flow_view as FV  # noqa: PLC0415
+        from swing_it.tui import ledger_app as LA  # noqa: PLC0415
+        from swing_it.tui import ledger_view as LV  # noqa: PLC0415
     except ImportError as e:                      # pragma: no cover
         chk("H", "TUI 모듈을 읽을 수 있는가", False, str(e))
         return

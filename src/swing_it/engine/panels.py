@@ -75,7 +75,7 @@ def yoy_panels(earnings_panel, codes, dates):
 def resolve_signal(earnings_panel, signal_panel, codes, dates):
     """Return ``(sig, age)`` code×date arrays from the YoY panel or a precomputed
     ``signal_panel`` (long ``code``/``date``/``signal`` — e.g. a PEAD+value blend
-    from :func:`kr_quant.features.fundamentals.blend_rank`). Freshness (``age``)
+    from :func:`swing_it.features.fundamentals.blend_rank`). Freshness (``age``)
     only applies to the raw YoY path; it is ``NaN`` for a precomputed signal.
     """
     if signal_panel is not None:

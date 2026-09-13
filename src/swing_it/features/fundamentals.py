@@ -2,7 +2,7 @@
 
 The one validated alpha in this project is post-earnings-announcement drift
 (PEAD): rank stocks by year-over-year net-income growth and hold a low-turnover
-dollar-neutral book. See :mod:`kr_quant.strategies.pead`.
+dollar-neutral book. See :mod:`swing_it.strategies.pead`.
 
 The critical correctness property here is **no look-ahead**: a quarter's YoY
 figure may only be used on/after its ``avail_date`` (the day the filing became
@@ -13,7 +13,7 @@ on or before that date.
 
 Pure DataFrame in → DataFrame out, consistent with the rest of this package —
 no DB connection, no network. Callers load the raw DART rows (see
-``kr_quant.collectors.dart_earnings``) and the trading calendar.
+``swing_it.collectors.dart_earnings``) and the trading calendar.
 """
 
 from __future__ import annotations
@@ -258,7 +258,7 @@ def combined_signal(
 
     Convenience wrapper over :func:`earnings_yoy_panel`, :func:`earnings_yield_panel`
     and :func:`blend_rank` encoding the validated recipe. Feed the result to
-    :func:`kr_quant.strategies.pead.pead_backtest` as ``signal_panel``. The
+    :func:`swing_it.strategies.pead.pead_backtest` as ``signal_panel``. The
     validated **tradeable** configuration is a long-only, large-cap book
     (``adv_floor≈20000`` 백만원, ``long_only=True``, ``horizon=40``): IR ≈ 1.0,
     4/4 regime buckets positive, no shorting required.

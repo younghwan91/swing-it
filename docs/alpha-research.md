@@ -86,11 +86,11 @@ uv run python research/experiments/prop_gate.py     # 심사 배터리 전체 + 
 
 | 관문 | 질문 | 라이브러리 |
 |---|---|---|
-| Walk-forward 재현성 | 여러 시기에서 반복되는가 (clean-OOS 폴드 부호) | `kr_quant.validation.walkforward` |
+| Walk-forward 재현성 | 여러 시기에서 반복되는가 (clean-OOS 폴드 부호) | `swing_it.validation.walkforward` |
 | 랜덤 음성대조 | 신호를 파괴한 널(null)을 이기는가 | `prop_gate.random_entry_control` |
 | 손 안 댄 최종 구간 | 탐색에 한 번도 쓰지 않은 구간에서 사는가 | `prop_gate` (untouched window) |
 | 비용·슬리피지 | 현실 비용의 2배에도 사는가 | `prop_gate` (cost sweep) |
-| 취약성 | 상위 몇 건을 제거해도 사는가 | `kr_quant.diagnostics.fragility` |
+| 취약성 | 상위 몇 건을 제거해도 사는가 | `swing_it.diagnostics.fragility` |
 | 다중검정 보정 | 시도한 config 수를 반영한 Deflated Sharpe·t-haircut | `diagnostics.gate_report` + `diagnostics.trials`(원장) |
 | 라벨 누출 차단 | 보유기간이 TEST로 넘어간 표본을 TRAIN에서 걷어냈나 | `validation.walkforward.purge_embargo` |
 | 유니버스 무결성 | 상장폐지 종목이 유니버스에 들어있나 | `storage.read_prices`(로딩 시점 assert) |
@@ -151,7 +151,7 @@ LightGBM 강화판도 표본을 확장하면 plain PEAD와 동급으로 수렴�
 인정하지 않는다. 다수 슬리브 결합 북의 기록은
 [`research/logs/MULTI_ALPHA.md`](../research/logs/MULTI_ALPHA.md)에 있다.
 
-재현: `kq-pead` · 전략 문서: [`docs/pead-strategy.md`](pead-strategy.md)
+재현: `sw-pead` · 전략 문서: [`docs/pead-strategy.md`](pead-strategy.md)
 
 ### 3.2 기각 — 알파 가설 5건
 
@@ -212,7 +212,7 @@ LightGBM 강화판도 표본을 확장하면 plain PEAD와 동급으로 수렴�
 같이 남긴다 — 격자만 봤으면 "3단이 답"이라고 썼을 것이다.
 
 기록: [VERDICT](../research/logs/regime_switch/VERDICT.md) · 재사용 가능한 널:
-`kr_quant.strategies.regime.rotation_null`
+`swing_it.strategies.regime.rotation_null`
 
 ## 4. 심사에서 드러난 구조 — 엣지의 해부
 
@@ -251,15 +251,15 @@ PEAD가 트레이더 엣지가 아니라 **기관 엣지**인 이유다.
 *진입 시점 모멘텀 강도로 나눈 5분위별 사후 기대수익. Q5가 Q1을 크게 상회하는 우상향 관계가 TRAIN·OOS 둘 다에서 성립한다(개별 분위는 노이즈로 다소 비단조적이다).*
 
 분석 코드: [`research/experiments/contrarian_distribution.py`](../research/experiments/contrarian_distribution.py)
-(계산은 `kr_quant.diagnostics.r_distribution.conviction_analysis`), 그림 생성:
+(계산은 `swing_it.diagnostics.r_distribution.conviction_analysis`), 그림 생성:
 [`scripts/make_research_figures.py`](../scripts/make_research_figures.py).
 
 ## 5. 아키텍처와 가드레일 린트
 
-**재사용되는 라이브러리 (src/kr_quant) — 특정 알파와 무관하다.**
+**재사용되는 라이브러리 (src/swing_it) — 특정 알파와 무관하다.**
 
 ```
-src/kr_quant/
+src/swing_it/
 ├── storage.py           # 읽기 전용 DB 접근. read_prices/read_earnings/read_supply_demand 가
 │                        #   유일한 정문 — 폐지종목 포함·정정공시 버전을 로딩 시점에 검사한다
 ├── price_adjust.py      # 기업행동 백조정 (airflow DAG 가 in-place 실행)
@@ -271,7 +271,7 @@ src/kr_quant/
 │                        #   volatility(직전 60일 실현변동성)
 ├── strategies/          # pead(게이트를 통과한 유일한 알파) · regime(회전 널) ·
 │                        #   lowvol·combo·hedge 는 정식 배터리로 아직 재심사되지 않은 **후보**
-└── tui/                 # kq-flow·kq-ledger — 렌더(순수함수·단위테스트)와 curses 를 분리한다
+└── tui/                 # sw-flow·sw-ledger — 렌더(순수함수·단위테스트)와 curses 를 분리한다
 ```
 
 **심사 대상과 판정 기록 (research/)**
@@ -283,7 +283,7 @@ research/
 └── logs/                # VERDICT · SUMMARY · TRIALS.jsonl (판정·분석·시행 원장)
 ```
 
-설계 원칙: `src/kr_quant`는 순수 라이브러리(numpy/pandas)로 `research/`를 import하지 않는다.
+설계 원칙: `src/swing_it`는 순수 라이브러리(numpy/pandas)로 `research/`를 import하지 않는다.
 새 알파의 표준 흐름은 [`research/TEMPLATE.md`](../research/TEMPLATE.md).
 
 문서: [`GUARDRAILS.md`](GUARDRAILS.md)(규칙 원본) ·
@@ -295,7 +295,7 @@ research/
 
 | 규칙 | 막는 것 |
 |---|---|
-| (a) | `src/kr_quant` → `research/` import (경계 역전) |
+| (a) | `src/swing_it` → `research/` import (경계 역전) |
 | (b) | VERDICT 없는 `*_gate.py` (판정 유실) |
 | (c) | 하드코딩 "PASS"/"FAIL" 판정 문자열 (리포터-not-판정기) |
 | (d) | `storage` 밖에서 raw `SELECT ... FROM earnings` (정정공시 버전이 중복 행으로 샌다) |
@@ -323,7 +323,7 @@ CI 가 깨진다.
 
 알파 탐색은 대부분 부정으로 끝난다. 그래서 오래 남는 것은 특정 전략이 아니라 아래다.
 
-- **재사용 가능한 검증 프레임워크.** walk-forward·음성대조·손 안 댄 구간·취약성·Deflated Sharpe·purge/embargo를 하나의 게이트로 묶은 `kr_quant.validation`·`kr_quant.diagnostics`. 어떤 새 가설이든 동일한 잣대로 몇 시간 만에 심사한다.
+- **재사용 가능한 검증 프레임워크.** walk-forward·음성대조·손 안 댄 구간·취약성·Deflated Sharpe·purge/embargo를 하나의 게이트로 묶은 `swing_it.validation`·`swing_it.diagnostics`. 어떤 새 가설이든 동일한 잣대로 몇 시간 만에 심사한다.
 - **만드는 것과 연결하는 것은 다른 일이다.** 반복된 실패 모드는 기능 부재가 아니라 배선 누락이었다. 그래서 지금은 배선이 빠지면 CI가 실패한다(§5).
 - **분포적 사고.** 평균이나 자본곡선이 아니라 개별 트레이드 분포로 보면 같은 데이터가 다르게 읽힌다. 볼록형/확산형 구분, 꼬리 집중도, 선험적 예측력은 이 렌즈에서만 드러난다.
 - **음성대조라는 규율.** "내 전략이 랜덤보다 나은가"는 단순하지만 대부분의 자기기만을 잡아낸다(순수 노이즈가 폴드 기준을 46% 통과한다).

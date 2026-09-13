@@ -1,4 +1,4 @@
-"""kr_quant.engine — shared backtest primitives (metrics, panels, simulations).
+"""swing_it.engine — shared backtest primitives (metrics, panels, simulations).
 
 A leaf package: imports numpy/pandas only and is imported *by* strategies, never
 the reverse. Centralizes performance metrics and panel-construction conventions

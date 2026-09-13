@@ -11,7 +11,7 @@
 
 각 리밸일에 종목을 **직전 60거래일 일수익 표준편차**로 줄세워, 가장 잔잔한 종목(저변동)을
 롱, 가장 요동치는 종목(고변동 = 복권주)을 숏하는 월 리밸 랭크틸트 북. 신호 =
-`-std(60d)` (`kr_quant.features.volatility.lowvol_signal_panel`), 회계는 PEAD 와 **같은**
+`-std(60d)` (`swing_it.features.volatility.lowvol_signal_panel`), 회계는 PEAD 와 **같은**
 엔진(`engine.sim_crosssectional.rank_tilt_backtest`)을 재사용한다 — 진입 t+1, 측정 회전율
 비용, 숏 차입.
 
@@ -43,31 +43,31 @@
 - 엣지 원천: **저변동 롱 + 고변동(복권주) 숏.** 고변동 소형주 월평균 −2.7%.
 - 연율 샤프 ≈ 1.2. 500억(대형)에서도 살아남아 소형주 착시가 아니다.
 - 유보: 2017년 −9.3% 꼬리; 고변동 소형주 숏의 차입 가능성 미검증(→ 인버스 헤지 버전,
-  `kr_quant.strategies.hedge`).
+  `swing_it.strategies.hedge`).
 - 기각된 팩터: 사이즈(소형주 프리미엄 소멸·역전, t−3.17), 거래량쇼크·수급지속(널).
   단기반전은 채택(t+4.49)됐으나 net +0.13%/주로 마진이 얇다(회전율·시장충격 리스크).
 
 ## 코드
 
-- `kr_quant.features.volatility.realized_vol_panel(prices, window=60)` — 룩어헤드 없는
+- `swing_it.features.volatility.realized_vol_panel(prices, window=60)` — 룩어헤드 없는
   (code,date,vol) 패널.
-- `kr_quant.strategies.lowvol.lowvol_backtest(prices, ...)` — 랭크틸트 롱숏(또는 롱온리
+- `swing_it.strategies.lowvol.lowvol_backtest(prices, ...)` — 랭크틸트 롱숏(또는 롱온리
   초과) net, PEAD 엔진 재사용.
-- `kr_quant.strategies.lowvol.lowvol_rank_ic(prices, ...)` — 일별 횡단면 rank-IC(NW-t·
+- `swing_it.strategies.lowvol.lowvol_rank_ic(prices, ...)` — 일별 횡단면 rank-IC(NW-t·
   레짐 지속성), 고파워 확인.
-- `kr_quant.strategies.lowvol.select_lowvol_portfolio(prices, meta, ...)` — 현재 배포 북
+- `swing_it.strategies.lowvol.select_lowvol_portfolio(prices, meta, ...)` — 현재 배포 북
   (Q10 롱/Q1 숏 데실), `pead.recommend_holdings` 와 대칭.
 
 ## 실전 배포 주의 (개별주 숏 제약)
 
 이 계정은 **개별 종목 공매도가 불가**하다. 따라서 배포 가능한 형태는 롱온리(Q10 저변동주)
-+ 지수 인버스 ETF 헤지다(`kr_quant.strategies.hedge`). 저변동은 원래 롱 다리가 저변동주라
++ 지수 인버스 ETF 헤지다(`swing_it.strategies.hedge`). 저변동은 원래 롱 다리가 저변동주라
 헤지 후에도 PEAD 보다 손실이 작지만, 고변동 숏 알파는 포기된다.
 
 ## 배포북은 비공개
 
 결합(PEAD ⊕ 저변동) + 인버스헤지의 **재현 성적표와 적합된 역변동성 비중**은 판정문이
 아니라 따라 할 수 있는 배포 레시피다. 이 저장소는 공개라, 그 북과 재현 스크립트는
-비공개 `scalp-it` (`docs/archive/pead-migrated-to-kr-quant/`)에 둔다. 여기에는
-재현 가능한 **라이브러리와 테스트**만 남는다 — `kr_quant.strategies.{lowvol,combo,hedge}`,
-`kr_quant.features.volatility`.
+비공개 `scalp-it` (`docs/archive/pead-migrated-to-swing-it/`)에 둔다. 여기에는
+재현 가능한 **라이브러리와 테스트**만 남는다 — `swing_it.strategies.{lowvol,combo,hedge}`,
+`swing_it.features.volatility`.

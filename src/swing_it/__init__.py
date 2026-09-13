@@ -1,4 +1,4 @@
-"""kr-quant — Korean equity strategy/feature analysis library.
+"""swing-it — Korean equity strategy/feature analysis library.
 
 Data collection lives in the quant-airflow repo (collectors/), not here.
 Layers:

@@ -163,7 +163,7 @@ def test_prop_gate_records_config_and_derives_n_trials(tmp_path, monkeypatch):
     """config 를 주면 원장에 적히고 N 이 거기서 나온다 — 손으로 세지 않는다."""
     import numpy as np
 
-    from kr_quant.diagnostics import trials
+    from swing_it.diagnostics import trials
     from research.experiments.prop_gate import prop_gate
 
     monkeypatch.setattr(trials, "_repo_root", lambda: tmp_path)
@@ -188,7 +188,7 @@ def test_prop_gate_without_config_is_unchanged(tmp_path, monkeypatch):
     """config 미지정이면 원장을 만들지도, deflation 을 보고하지도 않는다."""
     import numpy as np
 
-    from kr_quant.diagnostics import trials
+    from swing_it.diagnostics import trials
     from research.experiments.prop_gate import prop_gate
 
     monkeypatch.setattr(trials, "_repo_root", lambda: tmp_path)

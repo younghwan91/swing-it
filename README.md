@@ -1,6 +1,6 @@
-# kr-quant
+# swing-it
 
-[![CI](https://github.com/younghwan91/kr-quant/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/kr-quant/actions/workflows/ci.yml)
+[![CI](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
@@ -24,7 +24,7 @@
    · [아키텍처 한눈에](#24-아키텍처-한눈에) — quant-airflow ↔ DB ↔ 리포트 ↔ 화면
 3. [화면 읽는 법](#3-화면-읽는-법)
    · [종목 선정 가이드](docs/trading-guide.md) — 섹터에서 종목까지 3단계, 실제 예제
-4. [자금 원장 — `kq-ledger`](#4-자금-원장--kq-ledger)
+4. [자금 원장 — `sw-ledger`](#4-자금-원장--sw-ledger)
 5. [숫자의 정의](#5-숫자의-정의)
 6. [주의 — 이 숫자들은 예측이 아니다](#6-주의--이-숫자들은-예측이-아니다)
 7. [리포트를 스스로 검증한다](#7-리포트를-스스로-검증한다)
@@ -36,7 +36,7 @@
 
 ## 1. kqflow — 무엇을 보여주나
 
-`kq-flow` 는 오늘 어느 섹터에 돈이 들어오고 나갔는지를 한 화면에 놓는다. 27개 벤더
+`sw-flow` 는 오늘 어느 섹터에 돈이 들어오고 나갔는지를 한 화면에 놓는다. 27개 벤더
 섹터 × 4개 구간(5·20·60·120거래일)과 이를 요약하는 `종합` × 3개 시장(전체·거래소·코스닥)
 × 4개 주체(기관·외국인·개인·기타법인)를 키 하나로 갈아 끼운다.
 
@@ -73,8 +73,8 @@ DB 에 접속하지 않는다. 일일 배치가 만들어 둔 리포트 JSON 만
 추가로 필요하다.
 
 ```bash
-git clone https://github.com/younghwan91/kr-quant
-cd kr-quant
+git clone https://github.com/younghwan91/swing-it
+cd swing-it
 uv venv && uv pip install -e ".[viz,dev]"     # TimescaleDB 를 쓰면 pg extra 를 더한다
 cp .env.example .env                          # KR_QUANT_DB 접속정보 (비우면 로컬 SQLite)
 ```
@@ -119,10 +119,10 @@ uv run python scripts/verify_report.py  --dir <리포트폴더> --db-check
 ### 2.2 화면 띄우기 (DB 불요)
 
 ```bash
-kq-flow                          # <저장소>/reports/latest 를 연다
-kq-flow --dir <리포트 폴더>       # 특정 날짜의 리포트
-kq-ledger                        # 자금 원장 (§4)
-kq-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉트용
+sw-flow                          # <저장소>/reports/latest 를 연다
+sw-flow --dir <리포트 폴더>       # 특정 날짜의 리포트
+sw-ledger                        # 자금 원장 (§4)
+sw-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉트용
 ```
 
 표준 라이브러리 `curses` 만 쓴다. 새 의존성이 없고 40×10 짜리 창에서도 산다. 폭이
@@ -140,20 +140,20 @@ kq-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉
 
 ```bash
 # 보내는 쪽 — 폴더째 압축 (2026-09-01 기준 약 1.9 MB)
-tar czf kr-quant-2026-09-01.tar.gz -C <저장소>/reports 2026-09-01
+tar czf swing-it-2026-09-01.tar.gz -C <저장소>/reports 2026-09-01
 
 # 받는 쪽 — 풀고 --dir 로 연다. 설치는 clone + uv pip install -e . 까지만 하면 된다
-tar xzf kr-quant-2026-09-01.tar.gz -C ~/reports
-kq-flow   --dir ~/reports/2026-09-01
-kq-ledger --dir ~/reports/2026-09-01
+tar xzf swing-it-2026-09-01.tar.gz -C ~/reports
+sw-flow   --dir ~/reports/2026-09-01
+sw-ledger --dir ~/reports/2026-09-01
 ```
 
 어떤 화면이 어떤 파일을 읽는지는 다르다. 하나만 보내면 다른 하나가 안 뜬다.
 
 | 파일 | 크기 | 없으면 |
 |---|---|---|
-| `numbers.html` | 2.0 MB | `kq-flow` 가 안 뜬다 (`리포트를 찾을 수 없다`). 브라우저로 열면 수치표 자체가 된다 |
-| `payload.json` | 2.9 MB | `kq-ledger` 가 안 뜬다 (`페이로드를 찾을 수 없다`) |
+| `numbers.html` | 2.0 MB | `sw-flow` 가 안 뜬다 (`리포트를 찾을 수 없다`). 브라우저로 열면 수치표 자체가 된다 |
+| `payload.json` | 2.9 MB | `sw-ledger` 가 안 뜬다 (`페이로드를 찾을 수 없다`) |
 | `viewer.html` | 2.9 MB | 브라우저용 차트 뷰어. 터미널 화면 둘은 이것 없이도 뜬다 |
 | `VERIFY.txt` | 11 KB | 검증 결과(§7). 없어도 화면은 뜨지만 받은 숫자가 검사를 통과했는지 알 길이 없다 |
 
@@ -163,7 +163,7 @@ kq-ledger --dir ~/reports/2026-09-01
 받는 쪽을 `latest` 손버릇에 맞추려면 심볼릭 링크를 하나 걸거나 환경변수를 쓴다.
 
 ```bash
-ln -sfn ~/reports/2026-09-01 <저장소>/reports/latest                # 이제 kq-flow 만 쳐도 된다
+ln -sfn ~/reports/2026-09-01 <저장소>/reports/latest                # 이제 sw-flow 만 쳐도 된다
 export KR_QUANT_REPORTS=~/reports                                   # 만드는 쪽의 출력 위치도 이것으로 바꾼다
 ```
 
@@ -174,7 +174,7 @@ TimescaleDB 적재). 접속정보는 `.env` 의 `KR_QUANT_DB` 하나다. 이 저
 
 **받은 폴더는 그날의 사진이다.** 그 기준일에 멈춘 값이고 화면 제목의
 날짜(`2026-09-01 확정`)가 그 사실을 늘 적는다. 저절로 갱신되지는 않으니, 매일 보려면
-매일 받거나 만드는 쪽 서버에 SSH 로 들어가 거기서 `kq-flow` 를 띄우는 편이 낫다.
+매일 받거나 만드는 쪽 서버에 SSH 로 들어가 거기서 `sw-flow` 를 띄우는 편이 낫다.
 두 화면이 `curses` 만 쓰는 이유가 그것이다.
 
 ### 2.4 아키텍처 한눈에
@@ -200,14 +200,14 @@ flowchart TD
     VW --> REP
     VR --> REP
 
-    REP --> FLOW["kq-flow\n(tui/flow_app·flow_view)"]
-    REP --> LEDGER["kq-ledger\n(tui/ledger_app·ledger_view)"]
+    REP --> FLOW["sw-flow\n(tui/flow_app·flow_view)"]
+    REP --> LEDGER["sw-ledger\n(tui/ledger_app·ledger_view)"]
 
     ST --> ALPHA["research/ +\nengine·validation·diagnostics·features"]
-    ALPHA --> PEAD["kq-pead\n(strategies/pead.py)\n게이트 통과 알파 재현 백테스트"]
+    ALPHA --> PEAD["sw-pead\n(strategies/pead.py)\n게이트 통과 알파 재현 백테스트"]
 ```
 
-`kq-flow`·`kq-ledger`는 리포트 JSON/HTML만 읽어 DB에 접속하지 않고, `kq-pead`만 `storage.py`를
+`sw-flow`·`sw-ledger`는 리포트 JSON/HTML만 읽어 DB에 접속하지 않고, `sw-pead`만 `storage.py`를
 거쳐 DB를 읽기 전용으로 사용한다. 저장소 폴더 구조와 개발용 명령은 [§9](#9-저장소-구조와-개발)에 있다.
 
 ## 3. 화면 읽는 법
@@ -233,7 +233,7 @@ flowchart TD
 한영 상태에서도 위 키가 그대로 듣는다(두벌식 자리를 그대로 대응시킨다: `ㅈ`→`w`,
 `ㅡ`→`m`, `ㅁ`→`a`, `ㄴ`→`s`, `ㄱ`→`r`). 다만 두벌식은 이 자리들에서 Shift 를 구분하지
 않으므로 대문자 역방향은 `W`·`R` 만 되고 `A`·`S`·`G`·`M` 은 원리적으로 못 받는다
-(끝으로 가려면 End). `kq-ledger` 도 같다.
+(끝으로 가려면 End). `sw-ledger` 도 같다.
 
 화면 맨 아래 푸터는 폭에 맞춰 단계별로 줄어든다. 대문자 역방향은 안 적는다. 한 키의
 두 방향을 다 적으니 푸터가 길어져 정작 무슨 키가 있는지가 안 읽혔다. `g/G:처음/끝`
@@ -242,7 +242,7 @@ flowchart TD
 
 도움말(`?`)이 원본이고 이 README 가 그 축약본이다. 열 하나하나의 정의와 한계가
 화면 안에 있어서, 리포트를 보다가 이 숫자가 뭐냐고 물을 자리에 답이 있다.
-`kq-ledger` 도 같은 렌더러로 자기 도움말을 그린다.
+`sw-ledger` 도 같은 렌더러로 자기 도움말을 그린다.
 
 ### 3.2 섹터 표의 열
 
@@ -273,7 +273,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 - **제목** — `부동산 · 종목 3개 · Enter 로 전체`.
 - **4주체 순매수** — `개인 -116 · 외국인 -80 · 기관 +214 · 기타법인 -21 [억]`. 화면은
   한 번에 한 주체만 보여주지만 4주체 합이 0 에 닫히므로, 지금 고른 주체가 판(또는 산)
-  돈을 누가 받았는지가 이 줄에 다 있다. 잔여(= −Σ4주체)는 여기 안 적고 `kq-ledger` 가
+  돈을 누가 받았는지가 이 줄에 다 있다. 잔여(= −Σ4주체)는 여기 안 적고 `sw-ledger` 가
   별도 열로 맡는다. 종합 구간에서는 줄 끝에 `· 20일 기준` 이 붙는다.
 - **순매수 상위 / 순매도 상위** — 각각 3개씩. 표의 같은 열이 1개씩만 보여주던 목록의
   위·아래 끝이다.
@@ -361,9 +361,9 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 정렬·역순이 없다` 가 뜬다. 창마다 정렬 축이 달라지면 세 창을 나란히 본다는 이 화면의
 용도가 무너지기 때문이다. 금액·수익률로 줄을 세우려면 `w` 로 개별 구간에 들어가라.
 
-## 4. 자금 원장 — `kq-ledger`
+## 4. 자금 원장 — `sw-ledger`
 
-`kq-flow` 가 섹터의 동역학(임펄스·가속·포텐셜)을 보여준다면, `kq-ledger` 는 회계를
+`sw-flow` 가 섹터의 동역학(임펄스·가속·포텐셜)을 보여준다면, `sw-ledger` 는 회계를
 보여준다. 누가 얼마를 넘겼고 얼마가 미분류로 남았나. 파생 지표 없이 원 금액과 잔여만 있다.
 
 관측되는 것은 (날짜, 시장, 섹터, 주체)의 순매수 금액뿐이다. 4주체 합이 0 이라는 회계
@@ -399,16 +399,16 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 재현한다. 숫자가 바뀌면 설계도 다시 봐야 하기 때문이다. 한계는 각주로 밀지 않고 모든
 화면 최하단에 상주하는 한 줄로 둔다.
 
-<!-- SCREENSHOT: kq-ledger 원장 화면 (120×30) -->
-![kq-ledger 원장 화면. 섹터마다 개인·외국인·기관·기타법인 순매수와 잔여·잔여몫·최대일몫·
+<!-- SCREENSHOT: sw-ledger 원장 화면 (120×30) -->
+![sw-ledger 원장 화면. 섹터마다 개인·외국인·기관·기타법인 순매수와 잔여·잔여몫·최대일몫·
 종목수, 오른쪽 끝에 선택 주체의 발산 막대. 최대일몫이 균등의 3배를 넘으면 ! 가 붙는다.
 맨 아래 줄에 관측·미관측이 상주한다.](docs/images/kqledger-table.png)
 
-*`kq-ledger` 원장 화면(20거래일·전체 시장·개인, 120×30). `kq-flow` 와 배색·여백·푸터·
+*`sw-ledger` 원장 화면(20거래일·전체 시장·개인, 120×30). `sw-flow` 와 배색·여백·푸터·
 힌트바·제목 강조를 공유하고, 도움말도 같은 렌더러가 그린다. `잔여몫`·`최대일몫` 은
 분모(구간 gross)가 1억 미만이면 값을 안 낸다. 4주체가 서로 상쇄돼 분모가 0 근처로
 내려가면 비율이 폭발해 `최대일몫 33.3!` 같은 뜻 없는 값이 뜬다. `종목[수]` 는
-`kq-flow` 와 같은 정의(그 구간에 거래된 종목 수)다. `v` 로 원장 · 전개 · 동시성 ·
+`sw-flow` 와 같은 정의(그 구간에 거래된 종목 수)다. `v` 로 원장 · 전개 · 동시성 ·
 한계 네 화면을 돈다. 위 상관표는 `동시성` 화면이고, `d` 가 거기서 β제거를 켠다.*
 
 ## 5. 숫자의 정의
@@ -510,17 +510,17 @@ Deflated Sharpe(시행 원장 자동 집계) · purge/embargo · 유니버스 �
 > [`docs/alpha-research.md`](docs/alpha-research.md)**
 >
 > 규칙 원본은 [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md), 통과한 유일한 알파는
-> [`docs/pead-strategy.md`](docs/pead-strategy.md)(재현 CLI `kq-pead`).
+> [`docs/pead-strategy.md`](docs/pead-strategy.md)(재현 CLI `sw-pead`).
 
 ## 9. 저장소 구조와 개발
 
 아키텍처 다이어그램은 [§2.4](#24-아키텍처-한눈에)에 있다. 폴더 구조는 다음과 같다.
 
 ```
-src/kr_quant/
+src/swing_it/
 ├── storage.py           # 읽기 전용 DB 접근 — 유일한 정문
 ├── engine/ validation/ diagnostics/ features/ strategies/   # 알파 심사 라이브러리
-└── tui/                 # kq-flow · kq-ledger
+└── tui/                 # sw-flow · sw-ledger
     ├── flow_view.py     #   렌더는 순수함수 — curses 없이 단위테스트한다
     ├── flow_app.py      #   curses 는 화면 그리기와 키 입력만
     ├── ledger_view.py   #   원장도 같은 규칙 — 폭 자르기·도움말 렌더러는 공용이다
@@ -534,8 +534,8 @@ docs/                    # kqflow-formulas.pdf · alpha-research.md · GUARDRAIL
 TUI 를 고친 뒤에는 [`scripts/verify_merge.py <워크트리>`](scripts/verify_merge.py) 를 돌린다.
 실데이터 렌더 스모크·pty 구동·변이 검사를 한 번에 태우는 머지 하네스다(수 분 걸린다).
 
-설치되는 CLI 는 셋이다. `kq-flow` 와 `kq-ledger` 는 리포트를 보는 터미널 뷰어(DB 미접속)
-이고, `kq-pead` 는 게이트를 통과한 유일한 알파의 재현용 백테스트(DB 읽기 전용)다.
+설치되는 CLI 는 셋이다. `sw-flow` 와 `sw-ledger` 는 리포트를 보는 터미널 뷰어(DB 미접속)
+이고, `sw-pead` 는 게이트를 통과한 유일한 알파의 재현용 백테스트(DB 읽기 전용)다.
 
 ```bash
 uv run --extra dev pytest            # 네트워크·DB 불요 — 530 통과 · 3 skip
@@ -565,5 +565,5 @@ MIT
 
 **채영환 (Younghwan Chae)** · [GitHub @younghwan91](https://github.com/younghwan91) · [LinkedIn](https://www.linkedin.com/in/younghwan-chae/)
 
-버그·질문은 [Issues](https://github.com/younghwan91/kr-quant/issues) 로. 전체 오픈소스 퀀트
+버그·질문은 [Issues](https://github.com/younghwan91/swing-it/issues) 로. 전체 오픈소스 퀀트
 스택은 [프로필](https://github.com/younghwan91)에서 볼 수 있습니다.

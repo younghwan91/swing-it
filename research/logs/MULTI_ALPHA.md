@@ -64,7 +64,7 @@ PEAD 룰 대비 **robust한 tradeable 이득은 주지 못한다**. 진짜 robus
 
 ## 반드시 지킬 전제 (아티팩트 교훈)
 
-1. **가격은 분할 조정 필수** — `kr_quant.price_adjust.adjust_prices()`. daily_bars는 기업행동
+1. **가격은 분할 조정 필수** — `swing_it.price_adjust.adjust_prices()`. daily_bars는 기업행동
    미조정(94%가 3개 수집경계일 2019-02-27/2021-07-29/2024-01-08에 군집). 미조정 시 미너비니
    CAGR이 +14%→+21%로 가짜 부풀림. PEAD은 rank·횡단면이라 견고하지만 원칙적으로 조정.
 2. **진입은 익일 시가** — 종가 진입은 룩어헤드(돌파 연속 갭 ~0.77%/트레이드).

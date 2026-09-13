@@ -35,8 +35,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from prop_swing_common import load_env_db  # noqa: E402
 
-from kr_quant.storage import connect, db_default  # noqa: E402
-from kr_quant.strategies.pead import staggered_backtest  # noqa: E402
+from swing_it.storage import connect, db_default  # noqa: E402
+from swing_it.strategies.pead import staggered_backtest  # noqa: E402
 from research.experiments.pead_refinement import (  # noqa: E402
     BASELINE,
     PRICE_TABLE,

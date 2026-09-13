@@ -7,7 +7,7 @@ Step 1(minervini) / Step 2(pullback) / Step 3(pead_concentrated) 러너와 Step 
 동일했다. 이 모듈이 그 공통분모다 — **동작·숫자는 그대로**, 중복만 제거한다.
 
 경계: research/experiments 계층에 산다(형제 prop_gate 를 import). research/signals 는
-이 모듈을 import 하지 않는다(신호→실험 역방향 의존 금지). kr_quant 는 수정하지 않는다.
+이 모듈을 import 하지 않는다(신호→실험 역방향 의존 금지). swing_it 는 수정하지 않는다.
 """
 
 from __future__ import annotations
@@ -19,13 +19,13 @@ import pandas as pd
 # 형제 모듈(같은 research/experiments) — 스크립트 실행시 그 디렉터리가 sys.path[0].
 from prop_gate import prop_gate
 
-from kr_quant.storage import load_env_db as _load_env_db
+from swing_it.storage import load_env_db as _load_env_db
 
 
 def load_env_db() -> None:
     """.env 의 KR_QUANT_DB 를 환경에 실어줌(셸에 export 안 돼 있어도 동작).
 
-    파싱 본체는 kr_quant.storage.load_env_db 하나뿐이다 — 러너마다 복붙돼 있던
+    파싱 본체는 swing_it.storage.load_env_db 하나뿐이다 — 러너마다 복붙돼 있던
     .env 파서를 라이브러리로 밀어넣은 결과(db_default 가 같은 경로를 쓴다).
     """
     _load_env_db()

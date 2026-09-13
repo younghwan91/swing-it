@@ -2,7 +2,7 @@
 
 The low-vol factor ranks stocks by *trailing* return volatility and holds a
 dollar-neutral book long the calmest names and short the most volatile
-("lottery") names. See :mod:`kr_quant.strategies.lowvol`.
+("lottery") names. See :mod:`swing_it.strategies.lowvol`.
 
 The one correctness property here is **no look-ahead**: the volatility attached
 to trading date ``d`` is the standard deviation of daily returns over the
@@ -11,7 +11,7 @@ layer enters at ``t+1``, so the signal is never used before it is observable.
 
 Pure DataFrame in -> DataFrame out (no DB), consistent with the rest of this
 package. Ported from scalp-it (``scalp_it.lowvol``, factor-batch note #31);
-re-expressed as a kr-quant feature panel so the engine's rank-tilt accounting is
+re-expressed as a swing-it feature panel so the engine's rank-tilt accounting is
 reused instead of a separate decile simulator.
 """
 
@@ -69,7 +69,7 @@ def lowvol_signal_panel(
 
     Thin wrapper over :func:`realized_vol_panel` that flips the sign so the
     ranking convention matches the engine's rank-tilt book (top rank = long).
-    Feed the result to :func:`kr_quant.strategies.lowvol.lowvol_backtest` (or, as
+    Feed the result to :func:`swing_it.strategies.lowvol.lowvol_backtest` (or, as
     a precomputed ``signal_panel``, to any cross-sectional wrapper).
 
     Returns:

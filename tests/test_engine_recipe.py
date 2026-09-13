@@ -10,13 +10,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.panels import panel_pivot, resolve_signal
-from kr_quant.engine.recipe import (
+from swing_it.engine.panels import panel_pivot, resolve_signal
+from swing_it.engine.recipe import (
     ArmSpec,
     ExperimentConfig,
     run_recipe,
 )
-from kr_quant.engine.sim_crosssectional import rank_tilt_backtest
+from swing_it.engine.sim_crosssectional import rank_tilt_backtest
 
 
 def _cross_synth():

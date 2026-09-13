@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from kr_quant.diagnostics import (
+from swing_it.diagnostics import (
     conviction_analysis,
     dist_shape,
     fragility_report,

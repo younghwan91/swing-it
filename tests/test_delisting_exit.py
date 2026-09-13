@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from kr_quant.engine.sim_crosssectional import staggered_tranche_backtest
+from swing_it.engine.sim_crosssectional import staggered_tranche_backtest
 
 STEP = 2
 KW = dict(horizon=2, step=STEP, top_n=1, adv_floor=0.0, adv_window=1,

@@ -3,7 +3,7 @@
 Rank stocks by *trailing* return volatility and hold a rank-weighted, dollar-
 neutral book long the calmest names (low realized vol) and short the most
 volatile "lottery" names, rebalanced monthly. The signal is
-:func:`kr_quant.features.volatility.lowvol_signal_panel` (``-vol``); the
+:func:`swing_it.features.volatility.lowvol_signal_panel` (``-vol``); the
 accounting is the shared engine's rank-tilt simulator — the same one PEAD uses —
 so nothing here re-derives entry/turnover/borrow logic.
 
@@ -11,14 +11,14 @@ Provenance: ported from scalp-it (``scalp_it.lowvol`` + factor-batch note #31).
 In scalp-it's own frame the low-vol L/S cleared the pre-registered bar — 50억
 universe net **+2.34%/month (t=3.66)**, 500억 net **+3.07% (t=2.77)**, driven by
 long-calm / short-lottery, and it is strongly *inverse* to PEAD there (that
-premise is re-examined in the combo work, :mod:`kr_quant.strategies.combo`).
+premise is re-examined in the combo work, :mod:`swing_it.strategies.combo`).
 
 ⚠️ **Status.** This is a *ported candidate*, not yet re-adjudicated under this
 repo's full pre-registration battery (``research/experiments/*_gate.py`` +
 ``prop_gate``). The project's standing claim — "the one alpha that cleared the
 gate is PEAD" — is unchanged until low-vol is run through that battery here. What
 this module gives you is the reusable, unit-tested backtest so that adjudication
-can happen on kr-quant data. See ``docs/lowvol-strategy.md``.
+can happen on swing-it data. See ``docs/lowvol-strategy.md``.
 
 Pure DataFrame in -> DataFrame out (no DB), so the backtest is unit-testable.
 """
@@ -66,7 +66,7 @@ def lowvol_backtest(
 ) -> tuple[pd.DataFrame, dict]:
     """Backtest the rank-weighted low-vol book, net of measured cost.
 
-    Delegates to :func:`kr_quant.engine.sim_crosssectional.rank_tilt_backtest`
+    Delegates to :func:`swing_it.engine.sim_crosssectional.rank_tilt_backtest`
     (entry at ``t+1``, ADV floor, cost on *measured* turnover, short-leg borrow)
     with the low-vol signal (``-vol``). Long-high-signal = long-low-vol; short-
     low-signal = short-high-vol, matching scalp-it's Q10-long / Q1-short spec in
@@ -80,7 +80,7 @@ def lowvol_backtest(
         adv_floor: Point-in-time trailing-ADV liquidity floor (백만원). ``0`` off.
         long_only: Hold a long-only low-vol tilt and report ``gross`` as EXCESS
             over the eligible universe mean — the market-hedged form implementable
-            without individual shorts (see :mod:`kr_quant.strategies.hedge`).
+            without individual shorts (see :mod:`swing_it.strategies.hedge`).
         borrow_cost_annual: Annual borrow on the short book (ignored if long_only).
         top_n: With ``long_only``, hold only the ``top_n`` calmest names EW.
         signal_panel: Optional precomputed long ``code``/``date``/``signal`` panel
@@ -88,7 +88,7 @@ def lowvol_backtest(
 
     Returns:
         ``(periods, summary)`` — same schema as
-        :func:`kr_quant.strategies.pead.pead_backtest`.
+        :func:`swing_it.strategies.pead.pead_backtest`.
     """
     pa = price_arrays(prices)
     C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
@@ -117,7 +117,7 @@ def lowvol_rank_ic(
     """High-power confirmation: daily cross-sectional rank-IC of ``-vol`` vs
     forward return, with a Newey-West t and a regime-persistence split.
 
-    Mirrors :func:`kr_quant.strategies.pead.pead_rank_ic`; see it for semantics.
+    Mirrors :func:`swing_it.strategies.pead.pead_rank_ic`; see it for semantics.
     """
     pa = price_arrays(prices)
     C, V, codes, dates = pa.C, pa.V, pa.codes, pa.dates
@@ -143,7 +143,7 @@ def select_lowvol_portfolio(
     """Current deployable book: decile Q10 (long, low-vol) / Q1 (short, high-vol).
 
     Turns the factor into an operable tool (mirroring
-    :func:`kr_quant.strategies.pead.recommend_holdings`) — as of ``asof`` (default:
+    :func:`swing_it.strategies.pead.recommend_holdings`) — as of ``asof`` (default:
     latest date), among names clearing the ADV floor, ranks the cross-section by
     ``-vol`` into ``n_deciles`` deciles and returns the extreme-decile book,
     equal-weight within each leg. Ported from scalp-it ``select_lowvol_portfolio``.

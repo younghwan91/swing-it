@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.strategies.hedge import (
+from swing_it.strategies.hedge import (
     inverse_hedged_return,
     rolling_beta,
     synth_inverse_return,

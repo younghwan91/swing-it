@@ -24,7 +24,7 @@
 거래량은 분할 시 역으로 스케일되지만(가격 1/4 → 거래량 ×4), 대부분의 신호는 가격
 기반이므로 여기서는 가격만 조정한다(거래량 조정이 필요하면 `adjust_volume=True`).
 
-CLI: `python -m kr_quant.price_adjust --db <DSN>` 로 진단 리포트 출력.
+CLI: `python -m swing_it.price_adjust --db <DSN>` 로 진단 리포트 출력.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def main() -> int:
     ap.add_argument("--rebuild-db", action="store_true",
                     help="진단만 하지 않고 daily_bars_adjusted 테이블을 전체 재계산해 upsert")
     args = ap.parse_args()
-    from kr_quant.storage import connect, db_default
+    from swing_it.storage import connect, db_default
     con = connect(args.db or db_default())
 
     if args.rebuild_db:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from kr_quant.storage import DAILY_BAR_COLUMNS, connect, read_prices
+from swing_it.storage import DAILY_BAR_COLUMNS, connect, read_prices
 
 COLS = [*DAILY_BAR_COLUMNS, "source"]
 
@@ -45,7 +45,7 @@ def test_missing_delisted_names_raises(tmp_path):
     import pandas as pd
     survivors = pd.read_sql_query(
         "SELECT code, date, close FROM daily_bars_adjusted WHERE source = 'kiwoom'", con)
-    from kr_quant.storage import _assert_universe_has_delisted
+    from swing_it.storage import _assert_universe_has_delisted
     with pytest.raises(AssertionError, match="생존편향"):
         _assert_universe_has_delisted(con, survivors, table="daily_bars_adjusted")
     con.close()
@@ -71,5 +71,5 @@ def test_opt_out_is_explicit(tmp_path):
 
 def test_default_table_is_split_adjusted():
     """백테스트가 원자료를 읽으면 액면분할이 수익률로 둔갑한다."""
-    from kr_quant.storage import PRICE_TABLE
+    from swing_it.storage import PRICE_TABLE
     assert PRICE_TABLE == "daily_bars_adjusted"

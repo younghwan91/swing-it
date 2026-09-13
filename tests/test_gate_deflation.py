@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from kr_quant.diagnostics.gate_report import deflated_sharpe, gate_report
+from swing_it.diagnostics.gate_report import deflated_sharpe, gate_report
 
 # --- 판정 키 부재(재귀) — test_prop_gate 와 동일 잣대 --------------------------------
 

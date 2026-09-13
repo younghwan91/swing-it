@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS shares_outstanding_history (
 CREATE INDEX IF NOT EXISTS idx_sh_date ON shares_outstanding_history(date);
 -- 정정공시는 기존 행을 덮어쓰지 않고 새 버전으로 쌓인다(PK에 knowledge_date 포함).
 -- 그래서 (code, period)당 행이 여럿일 수 있다 — 읽는 쪽은 반드시 as-of로 한 버전만
--- 골라야 하며, 그냥 SELECT 하면 패널이 조용히 중복된다. kr_quant.storage.read_earnings()
+-- 골라야 하며, 그냥 SELECT 하면 패널이 조용히 중복된다. swing_it.storage.read_earnings()
 -- 를 쓸 것.
 CREATE TABLE IF NOT EXISTS earnings (
     code            TEXT NOT NULL,
@@ -215,8 +215,8 @@ CREATE TABLE IF NOT EXISTS delisted_stocks (
 
 
 def default_db_path() -> Path:
-    """Default DB location: ``<repo>/data/kr_quant.db`` (gitignored)."""
-    return Path(__file__).resolve().parents[2] / "data" / "kr_quant.db"
+    """Default DB location: ``<repo>/data/swing_it.db`` (gitignored)."""
+    return Path(__file__).resolve().parents[2] / "data" / "swing_it.db"
 
 
 def connect(db_path: str | Path | None = None) -> Any:
@@ -224,7 +224,7 @@ def connect(db_path: str | Path | None = None) -> Any:
 
     ``db_path`` starting with ``postgresql://``/``postgres://`` opens Postgres
     (e.g. TimescaleDB) via psycopg2. Anything else is treated as a sqlite file
-    path (default: ``<repo>/data/kr_quant.db``, dirs created as needed).
+    path (default: ``<repo>/data/swing_it.db``, dirs created as needed).
     """
     if isinstance(db_path, str) and db_path.startswith(_PG_PREFIXES):
         import psycopg2  # noqa: PLC0415 — optional dep, only needed for this path
@@ -277,12 +277,12 @@ def _is_pg(con: Any) -> bool:
     return not isinstance(con, sqlite3.Connection)
 
 
-# kr_quant.price_adjust.rebuild_adjusted_table() writes daily_bars_adjusted —
+# swing_it.price_adjust.rebuild_adjusted_table() writes daily_bars_adjusted —
 # the one write path kept here (not moved to quant-airflow) because
 # price_adjust.py's split-detection logic is imported in-process by the backtest
-# strategies, so the module as a whole stays in kr-quant;
+# strategies, so the module as a whole stays in swing-it;
 # weekly_price_adjust.py's DAG task still invokes it via
-# `python -m kr_quant.price_adjust --rebuild-db` (PYTHONPATH-based, no pip
+# `python -m swing_it.price_adjust --rebuild-db` (PYTHONPATH-based, no pip
 # install needed) rather than through quant-airflow/collectors.
 DAILY_BAR_COLUMNS: list[str] = [
     "code", "date", "open", "high", "low", "close", "volume", "trade_value",
@@ -365,7 +365,7 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
             **백테스트는 이쪽을 써야 한다.** 스칼라 ``asof`` 는 "한 시점 기준"만
             표현할 수 있는데, 백테스트가 필요한 건 "각 바 t 시점 기준"이다. 버전
             선택은 날짜별로 달라져야 하므로 읽는 단계가 아니라
-            :func:`kr_quant.features.fundamentals.earnings_yoy_panel` 의
+            :func:`swing_it.features.fundamentals.earnings_yoy_panel` 의
             ``knowledge_col`` 로 넘겨 as-of 조인에 함께 태운다.
 
             ``asof`` 없이 접어서 쓰면(기본값) 최신 정정본이 과거 날짜 셀에 들어가

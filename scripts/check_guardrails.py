@@ -4,7 +4,7 @@
 GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구가 가드레일을
 '썼는지'는 못 막지만, 아래 세 가지 **구조적 경계**는 기계적으로 지킬 수 있다:
 
-  (a) 경계 위반 — ``src/kr_quant/`` 가 ``research/`` 를 import 하면 실패.
+  (a) 경계 위반 — ``src/swing_it/`` 가 ``research/`` 를 import 하면 실패.
       (TEMPLATE 1단계: src 는 research 를 import 하지 않는다. 반대만 허용.)
   (b) 판정 유실 — ``research/experiments/*_gate.py`` 에 대응 VERDICT.md 가 없으면 실패.
       (정직한 부정 결과도 산출물. 게이트만 돌리고 로깅 안 하면 기록이 사라진다.)
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src" / "kr_quant"
+SRC = REPO / "src" / "swing_it"
 EXPERIMENTS = REPO / "research" / "experiments"
 LOGS = REPO / "research" / "logs"
 
@@ -76,7 +76,7 @@ def _iter_py(root: Path):
 
 
 def check_src_no_research_import() -> list[str]:
-    """(a) src/kr_quant 가 research 를 import 하면 위반."""
+    """(a) src/swing_it 가 research 를 import 하면 위반."""
     out = []
     for p in _iter_py(SRC):
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
@@ -129,7 +129,7 @@ def check_no_literal_verdict() -> list[str]:
 # 걸리면 규칙이 소음이 되어 아무도 안 본다.
 _RAW_EARNINGS = re.compile(r"\bSELECT\b.*\bFROM\s+earnings\b", re.IGNORECASE)
 _EARNINGS_READ_EXEMPT = {
-    "src/kr_quant/storage.py",          # 정문 자신 + 스키마 문자열
+    "src/swing_it/storage.py",          # 정문 자신 + 스키마 문자열
     "tests/test_earnings_asof.py",      # 정문의 테스트 — 버전이 실제로 쌓이는지 직접 확인해야 한다
 }
 
@@ -147,7 +147,7 @@ def check_no_raw_earnings_select() -> list[str]:
             if _RAW_EARNINGS.search(line):
                 out.append(
                     f"[earnings] {rel}:{i} — earnings 를 직접 SELECT 했다. "
-                    f"kr_quant.storage.read_earnings(con, asof=...) 를 쓸 것 "
+                    f"swing_it.storage.read_earnings(con, asof=...) 를 쓸 것 "
                     f"(정정공시 버전이 중복 행으로 새어나온다)."
                 )
     return out
@@ -237,8 +237,8 @@ def check_gates_use_shared_harness() -> list[str]:
 # 음성대조·fragility 는 전부 넘겨받은 트레이드만 보기 때문이다(GUARDRAILS §4 공백 2).
 _RAW_PRICES = re.compile(r"\bSELECT\b.*\bFROM\s+(daily_bars_adjusted|daily_bars)\b", re.I)
 _PRICE_READ_EXEMPT = {
-    "src/kr_quant/storage.py",        # 정문 자신 + 스키마 문자열
-    "src/kr_quant/price_adjust.py",   # 조정가 테이블을 *만드는* 쪽 — 정문의 상류
+    "src/swing_it/storage.py",        # 정문 자신 + 스키마 문자열
+    "src/swing_it/price_adjust.py",   # 조정가 테이블을 *만드는* 쪽 — 정문의 상류
     # 2026-08-16: tests/ 디렉터리 일괄 면제를 파일 단위로 좁혔다. 일괄 면제는
     # 어떤 픽스처 빌더든 생존자 전용 유니버스를 무검사로 스위트에 들일 수 있게 했고,
     # 규칙 (d)가 테스트 파일을 하나씩 명시하는 것과도 비대칭이었다.
@@ -291,7 +291,7 @@ def check_no_raw_price_select() -> list[str]:
             if _RAW_PRICES.search(line):
                 out.append(
                     f"[universe] {rel}:{i} — 가격 테이블을 직접 SELECT 했다. "
-                    f"kr_quant.storage.read_prices() 를 쓸 것 (상장폐지 종목 포함을 "
+                    f"swing_it.storage.read_prices() 를 쓸 것 (상장폐지 종목 포함을 "
                     f"로딩 시점에 검사한다)."
                 )
     return out

@@ -6,7 +6,7 @@ import inspect
 
 import pandas as pd
 
-from kr_quant.features.universe import CAP_RANK, ADV_FLOOR, smallmid_universe
+from swing_it.features.universe import CAP_RANK, ADV_FLOOR, smallmid_universe
 
 
 def _panels():

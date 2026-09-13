@@ -34,7 +34,7 @@
     id      = "drop-accel-cell"
     why     = "가속 셀을 통째로 빼면 그 뒤 열이 한 칸씩 밀린다"
     guards  = ["tests/test_tui_flow_view.py::test_data_cells_sit_under_their_headers"]
-    file    = "src/kr_quant/tui/flow_view.py"
+    file    = "src/swing_it/tui/flow_view.py"
     find    = "pad(fmt_pct(r.get(\"accel\")), 9, True),"
     replace = ""
 
@@ -63,7 +63,7 @@ except ModuleNotFoundError:             # pragma: no cover — 인터프리터�
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 DEFAULT_BASE = "feat/sector-flow"
-DEFAULT_REPORT = "~/Documents/kr-quant-reports/latest"
+DEFAULT_REPORT = "~/Documents/swing-it-reports/latest"
 
 PASS, REJECT, WARN, SKIP = "PASS", "REJECT", "WARN", "SKIP"
 
@@ -172,11 +172,11 @@ def sec_worktree(wt: Path, base: str, py: str) -> tuple[Section, list[str]]:
     s.say(f"바뀐 파일 {len(set(changed))}개: " + ", ".join(sorted(set(changed))[:12]))
 
     # 임포트 출처 — 여기서 틀리면 아래 모든 초록이 거짓말이다.
-    p = run([py, "-c", "import kr_quant, sys; print(kr_quant.__file__)"],
+    p = run([py, "-c", "import swing_it, sys; print(swing_it.__file__)"],
             wt, py_env(wt), timeout=120)
     got = p.stdout.strip()
     if not got.startswith(str(wt.resolve())):
-        s.fail(f"kr_quant 가 워크트리 밖에서 임포트된다: {got or p.stderr.strip()}\n"
+        s.fail(f"swing_it 가 워크트리 밖에서 임포트된다: {got or p.stderr.strip()}\n"
                f"      (이 상태로 돌린 테스트는 워크트리가 아니라 다른 소스를 검사한다)")
     else:
         s.say(f"임포트 출처 확인: {got}")
@@ -477,8 +477,8 @@ def sec_mutations(wt: Path, py: str, base_sha: str, spec_path: Path | None) -> S
 RENDER_SMOKE = r'''
 """실데이터 렌더 스모크 — 예외·행폭·헤더정렬·숫자잘림."""
 import bisect, pathlib, sys
-from kr_quant.tui.flow_app import load
-from kr_quant.tui import flow_view as V
+from swing_it.tui.flow_app import load
+from swing_it.tui import flow_view as V
 
 report = sys.argv[1]
 d = load(report)
@@ -756,7 +756,7 @@ PTY_SMOKE = r'''
 import os, pty, subprocess, sys, threading, time
 
 report = sys.argv[1]
-LAUNCH = "from kr_quant.tui.flow_app import main; main()"
+LAUNCH = "from swing_it.tui.flow_app import main; main()"
 bad = []
 
 
@@ -995,7 +995,7 @@ def self_test(py: str, report: str) -> int:
     def blind_guard(wt: Path) -> None:
         (wt / "tests/test_zz_blind.py").write_text(
             '"""폭만 보는 검사 — 셀이 통째로 빠져도 초록이다."""\n'
-            "from kr_quant.tui.flow_view import cell_width\n\n\n"
+            "from swing_it.tui.flow_view import cell_width\n\n\n"
             "def test_blind():\n"
             "    assert cell_width('가') == 2\n", "utf-8")
         (wt / "tests/mutations.toml").write_text(
@@ -1003,7 +1003,7 @@ def self_test(py: str, report: str) -> int:
             'id = "drop-accel-cell"\n'
             'why = "가속 셀을 빼면 그 뒤 열이 밀린다"\n'
             'guards = ["tests/test_zz_blind.py::test_blind"]\n'
-            'file = "src/kr_quant/tui/flow_view.py"\n'
+            'file = "src/swing_it/tui/flow_view.py"\n'
             'find = "pad(fmt_pct(r.get(\\"accel\\")), 9, True),"\n'
             'replace = ""\n', "utf-8")
         commit(wt, "blind guard")
@@ -1018,7 +1018,7 @@ def self_test(py: str, report: str) -> int:
             'why = "가속 셀을 빼면 그 뒤 열이 밀린다"\n'
             'guards = ["tests/test_tui_flow_view.py::'
             'test_data_cells_sit_under_their_headers"]\n'
-            'file = "src/kr_quant/tui/flow_view.py"\n'
+            'file = "src/swing_it/tui/flow_view.py"\n'
             'find = "pad(fmt_pct(r.get(\\"accel\\")), 9, True),"\n'
             'replace = ""\n', "utf-8")
         commit(wt, "real guard")

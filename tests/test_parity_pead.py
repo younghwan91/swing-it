@@ -15,14 +15,14 @@ import math
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.panels import panel_pivot, resolve_signal
-from kr_quant.engine.sim_crosssectional import (
+from swing_it.engine.panels import panel_pivot, resolve_signal
+from swing_it.engine.sim_crosssectional import (
     rank_ic,
     rank_tilt_backtest,
     staggered_tranche_backtest,
 )
-from kr_quant.features.fundamentals import blend_rank, earnings_yoy_panel
-from kr_quant.strategies.pead import pead_backtest, pead_rank_ic, staggered_backtest
+from swing_it.features.fundamentals import blend_rank, earnings_yoy_panel
+from swing_it.strategies.pead import pead_backtest, pead_rank_ic, staggered_backtest
 
 
 def _synthetic(n_days=400, n_codes=60, drift=0.002, seed=0):

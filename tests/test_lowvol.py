@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from kr_quant.strategies.lowvol import (
+from swing_it.strategies.lowvol import (
     lowvol_backtest,
     lowvol_rank_ic,
     select_lowvol_portfolio,

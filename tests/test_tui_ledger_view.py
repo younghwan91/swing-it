@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from kr_quant.tui.flow_view import cell_width, span_at
-from kr_quant.tui.ledger_view import (
+from swing_it.tui.flow_view import cell_width, span_at
+from swing_it.tui.ledger_view import (
     ACTORS, ACTOR_KEYS, BANNER, LIMITS, SORTS, VIEWS, WINDOWS, Model,
     heat_cell, heat_level, ledger_cols, ledger_lines, comove_lines,
     residual,
@@ -150,8 +150,8 @@ def test_picture_glyphs_are_one_cell_even_when_ambiguous_is_wide(monkeypatch):
     주입: `SPARK_SIGNED`·`HEAT_RAMP`·`BLOCK_FULL` 중 아무거나 블록 문자로
     되돌리면 실패한다.
     """
-    from kr_quant.tui import flow_view
-    from kr_quant.tui.ledger_view import BLOCK_FULL, BLOCK_L, BLOCK_R, HEAT_RAMP, SPARK
+    from swing_it.tui import flow_view
+    from swing_it.tui.ledger_view import BLOCK_FULL, BLOCK_L, BLOCK_R, HEAT_RAMP, SPARK
 
     monkeypatch.setattr(flow_view, "AMBIGUOUS_WIDE", True)
     assert cell_width("█") == 2, "모드가 안 켜졌다 — 이 검사가 헛돈다"
@@ -172,7 +172,7 @@ def test_signed_bar_width_is_constant(half):
 
 def test_signed_bar_points_the_right_way():
     """양수는 오른쪽, 음수는 왼쪽. 반칸 꼬리도 바깥쪽을 향한다."""
-    from kr_quant.tui.ledger_view import BLOCK_FULL, BLOCK_L, BLOCK_R
+    from swing_it.tui.ledger_view import BLOCK_FULL, BLOCK_L, BLOCK_R
 
     pos = signed_bar(5.0, 5.0, 4)
     neg = signed_bar(-5.0, 5.0, 4)
@@ -484,7 +484,7 @@ def test_render_text_covers_every_view_and_restores_state(data):
 
 def _cw(text: str) -> int:
     """표시 칸 수. (이 파일의 `_cells` 는 이미 다른 뜻으로 쓰인다.)"""
-    from kr_quant.tui.flow_view import cell_width
+    from swing_it.tui.flow_view import cell_width
     return sum(cell_width(c) for c in text)
 
 
@@ -495,7 +495,7 @@ def test_dump_respects_the_requested_width(data):
     `--dump` 는 SSH 밖으로 내보내는 유일한 경로다. 그리고 그 검사는 `--dump`
     만 주고 **`--width` 를 한 번도 안 줬다** — 폭을 무시해도 초록이었다.
     """
-    from kr_quant.tui.ledger_view import render_text
+    from swing_it.tui.ledger_view import render_text
 
     mo = Model(data)
     for width in (40, 60, 80, 100, 132, 200):
@@ -510,7 +510,7 @@ def test_limits_prose_is_wrapped_not_dropped():
     curses 경로는 `pad` 로 잘라 문장을 버렸고 평문 경로는 넘쳤다 — 같은 글을
     두 경로가 다르게 다뤘다. 이제 둘 다 `limits_body` 를 쓴다.
     """
-    from kr_quant.tui.ledger_view import LIMITS, limits_body
+    from swing_it.tui.ledger_view import LIMITS, limits_body
 
     want = "".join(LIMITS).replace(" ", "").replace("**", "")
     for width in (40, 80, 120):
@@ -523,7 +523,7 @@ def test_limits_prose_is_wrapped_not_dropped():
 def test_banner_never_loses_the_unobserved_half():
     """회귀 — 배너를 잘라내면 '미관측' 이 사라져 **관측된 것만 남는다.**
     이 화면이 존재하는 이유가 그 경고라, 좁다고 없앨 수 없다."""
-    from kr_quant.tui.ledger_view import banner_for
+    from swing_it.tui.ledger_view import banner_for
 
     for width in range(20, 130, 2):
         got = banner_for(width)
@@ -535,7 +535,7 @@ def test_no_screen_shows_markdown_asterisks(data):
     """소스의 **강조** 는 읽는 사람 눈에 띄라고 쓴 표기지 화면에 나갈 글자가
     아니다. `--dump` 뿐 아니라 **모든 화면**을 본다 — 한 곳만 검사하면 다음
     문구가 다른 화면으로 새어 나온다(실제로 동시성 헤더에 남아 있었다)."""
-    from kr_quant.tui.ledger_view import LIMITS, render_text, screen
+    from swing_it.tui.ledger_view import LIMITS, render_text, screen
 
     assert any("**" in t for t in LIMITS), "소스에 강조가 없다 — 검사가 헛돈다"
     mo = Model(data)
@@ -562,8 +562,8 @@ def _help_raw(entry) -> str:
     모자라면 채워서 **모든 줄이 정확히 width 칸**이 되기 때문이다. flow 쪽
     `test_help_body_is_not_truncated_at_the_default_ssh_width` 와 같은 수법이다.
     """
-    from kr_quant.tui.flow_view import pad
-    from kr_quant.tui.ledger_view import HELP_LABEL_W
+    from swing_it.tui.flow_view import pad
+    from swing_it.tui.ledger_view import HELP_LABEL_W
 
     name, desc = entry
     body = desc.replace("**", "")               # 렌더가 떼는 강조 표기
@@ -578,7 +578,7 @@ def test_ledger_help_body_is_not_truncated_at_the_default_ssh_width():
     주입: LEDGER_HELP 의 아무 설명에나 몇 글자를 붙이거나 HELP_LABEL_W 를 키우면
     원문이 80칸을 넘어 실패한다.
     """
-    from kr_quant.tui.ledger_view import HELP_LABEL_W, LEDGER_HELP
+    from swing_it.tui.ledger_view import HELP_LABEL_W, LEDGER_HELP
 
     over = [(_cw(_help_raw(e)), _help_raw(e)) for e in LEDGER_HELP
             if _cw(_help_raw(e)) > 80]
@@ -598,7 +598,7 @@ def test_help_explains_every_column_the_screens_draw():
     주입: `LEDGER_HELP` 에서 `최대1일[%]` 항목을 지우면 실패한다. 열을 새로
     추가하고 설명을 안 써도 실패한다 — 그게 이 검사의 목적이다.
     """
-    from kr_quant.tui.ledger_view import _SORT_HELP, LEDGER_HELP
+    from swing_it.tui.ledger_view import _SORT_HELP, LEDGER_HELP
 
     named = {n for n, _ in LEDGER_HELP if n}
     cols = [c[0] for c in ledger_cols() if c[0]]
@@ -625,8 +625,8 @@ def test_help_documents_every_key_the_app_handles():
     import inspect
     import re
 
-    from kr_quant.tui import ledger_app
-    from kr_quant.tui.ledger_view import LEDGER_HELP
+    from swing_it.tui import ledger_app
+    from swing_it.tui.ledger_view import LEDGER_HELP
 
     src = inspect.getsource(ledger_app._key)
     keys = {m for m in re.findall(r'ord\("(.)"\)', src)} - {" "}
@@ -639,13 +639,13 @@ def test_help_documents_every_key_the_app_handles():
 def test_question_mark_opens_help_and_q_closes_it_without_quitting(data):
     """`?` 는 도움말이고, 거기서 `q` 는 **닫기**지 종료가 아니다.
 
-    키를 배우러 연 화면에서 확인 없이 앱이 끝나면 안 된다 — `kq-flow` 와 같은
+    키를 배우러 연 화면에서 확인 없이 앱이 끝나면 안 된다 — `sw-flow` 와 같은
     규칙이라야 두 앱에서 다른 손버릇을 안 배운다.
 
     주입: `_key` 의 `?` 를 예전처럼 `mo.vi = _LIMITS_VI` 로 되돌리면 첫 단언에서,
     도움말 안의 `q` 를 종료로 두면 둘째 단언에서 실패한다.
     """
-    from kr_quant.tui.ledger_app import _key
+    from swing_it.tui.ledger_app import _key
 
     mo = Model(data)
     assert _key(mo, ord("?"), 10) is True
@@ -680,8 +680,8 @@ def test_help_scrolls_and_never_runs_past_the_end(data):
     """
     import curses
 
-    from kr_quant.tui.ledger_app import _key
-    from kr_quant.tui.ledger_view import help_total
+    from swing_it.tui.ledger_app import _key
+    from swing_it.tui.ledger_view import help_total
 
     mo = Model(data)
     mo.help = True
@@ -717,7 +717,7 @@ def test_help_screen_fits_any_width_and_shows_the_closing_keys(data):
     assert "q·Esc·?·Enter" in wide[0] or "q·Esc·?·Enter" in wide[-1], wide[0]
     # 푸터도 **잘리면 안 된다.** 폭에 맞는 단계를 고르지 않고 한 줄로 고정하면
     # pad 가 잘라내는데, 모든 줄이 정확히 width 칸이라 폭 검사로는 안 잡힌다.
-    from kr_quant.tui.ledger_view import HELP_FOOT_TIERS
+    from swing_it.tui.ledger_view import HELP_FOOT_TIERS
 
     for width in (30, 40, 60, 80, 120, 200):
         foot = screen(mo, width, 24)["lines"][-1].rstrip()
@@ -732,7 +732,7 @@ def test_hint_bar_names_the_column_you_sorted_by(data):
 
     주입: `hint_text` 가 정렬과 무관하게 한 문장을 돌려주게 만들면 실패한다.
     """
-    from kr_quant.tui.ledger_view import hint_text
+    from swing_it.tui.ledger_view import hint_text
 
     mo = Model(data)
     seen = set()
@@ -745,7 +745,7 @@ def test_hint_bar_names_the_column_you_sorted_by(data):
     line = hint_text(mo, 200)
     # 문장을 여기 박으면 힌트바 전용 짧은 설명(`LEDGER_HINT_DESC`)을 고칠 때마다
     # 무관한 이유로 깨진다. 열 이름과 **그 열의 설명**이 같이 있는지만 본다.
-    from kr_quant.tui.ledger_view import hint_desc
+    from swing_it.tui.ledger_view import hint_desc
     assert "최대일몫[%]" in line and hint_desc("최대일몫[%]")[:14] in line, line
     # 주체를 바꾸면 그 주체의 열을 가리킨다.
     mo.si = [k for k, _ in SORTS].index("actor")
@@ -762,8 +762,8 @@ def test_hint_bar_is_on_every_screen_and_fits_the_width(data):
 
     주입: `screen()` 에서 힌트 줄을 빼면 `hint_y` 자리에 상태줄이 와 실패한다.
     """
-    from kr_quant.tui.flow_view import pad
-    from kr_quant.tui.ledger_view import hint_text
+    from swing_it.tui.flow_view import pad
+    from swing_it.tui.ledger_view import hint_text
 
     mo = Model(data)
     for vi in range(len(VIEWS)):
@@ -788,7 +788,7 @@ def test_bottom_line_keeps_both_the_banner_and_the_keys():
     주입: `banner_footer` 를 `" " + BANNER + "   " + FOOTER` 로 되돌리면 폭 80
     에서 `?` 가 없어 실패한다.
     """
-    from kr_quant.tui.ledger_view import banner_footer
+    from swing_it.tui.ledger_view import banner_footer
 
     # 폭 34 미만에서는 가장 짧은 배너와 가장 짧은 푸터가 같이 못 들어간다.
     # 그때는 배너가 이긴다(이 화면이 존재하는 이유가 그 경고다).
@@ -809,7 +809,7 @@ def test_the_app_does_not_rebuild_the_bottom_lines(data):
     """
     import inspect
 
-    from kr_quant.tui import ledger_app
+    from swing_it.tui import ledger_app
 
     src = inspect.getsource(ledger_app._draw)
     assert "screen(mo, w, h)" in src, "앱이 화면 높이를 줄여 넘긴다"
@@ -824,7 +824,7 @@ def test_help_and_hint_never_show_markdown_asterisks(data):
 
     주입: `help_lines` 의 `desc.replace("**", "")` 를 지우면 실패한다.
     """
-    from kr_quant.tui.ledger_view import LEDGER_HELP
+    from swing_it.tui.ledger_view import LEDGER_HELP
 
     assert any("**" in d for _n, d in LEDGER_HELP), "소스에 강조가 없다 — 검사가 헛돈다"
     mo = Model(data)
@@ -850,7 +850,7 @@ def test_narrow_notices_are_never_truncated(data):
     주입: `_too_narrow`·`tier_for` 를 예전 f-string 한 줄로 되돌리면, 잘린 줄이
     문장 끝 글자로 안 끝나 실패한다.
     """
-    from kr_quant.tui.ledger_view import (
+    from swing_it.tui.ledger_view import (
         LEDGER_NARROW_TIERS, TIMELINE_NARROW_TIERS, timeline_lines)
 
     mo = Model(data)
@@ -877,7 +877,7 @@ def test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide(data, mo
     """
     import unicodedata
 
-    from kr_quant.tui import flow_view
+    from swing_it.tui import flow_view
 
     def wide_w(text: str) -> int:
         return sum(2 if unicodedata.east_asian_width(c) in ("W", "F", "A") else 1
@@ -952,7 +952,7 @@ def test_comove_rows_are_ordered_by_mean_correlation_not_by_name():
     주입: ``_corr_ordered`` 의 ``keys.sort(...)`` 를 지우면(= 페이로드 순서)
     ``병`` 이 가운데로 오지 않고 맨 뒤로도 안 가서 실패한다.
     """
-    from kr_quant.tui.ledger_view import Model
+    from swing_it.tui.ledger_view import Model
 
     mo = Model(_corr_payload())
     mo.wi = WINDOWS.index(20)
@@ -975,7 +975,7 @@ def test_comove_prints_the_mean_column_and_names_the_outliers():
     주입: ``평균`` 열을 빼거나(라벨 뒤 ``pad(f"{mv*100:+.0f}")`` 삭제)
     ``comove_outliers`` 줄을 안 넣으면 실패한다.
     """
-    from kr_quant.tui.ledger_view import Model
+    from swing_it.tui.ledger_view import Model
 
     mo = Model(_corr_payload())
     mo.wi = WINDOWS.index(20)
@@ -995,7 +995,7 @@ def test_comove_diagonal_is_blank_so_the_eye_has_a_baseline():
     주입: ``heat_diag()`` 대신 ``heat_cell(m[i][j])`` 를 쓰면 대각선이
     ``+█`` 로 차서 실패한다.
     """
-    from kr_quant.tui.ledger_view import Model
+    from swing_it.tui.ledger_view import Model
 
     mo = Model(_corr_payload())
     mo.wi = WINDOWS.index(20)
@@ -1021,7 +1021,7 @@ def test_comove_verdict_is_never_truncated_into_its_opposite():
     주입: ``tier_for(comove_verdict_tiers(obs, nul), width)`` 를
     ``comove_verdict_tiers(obs, nul)[0]`` 로 되돌리면 폭 80 에서 실패한다.
     """
-    from kr_quant.tui.ledger_view import Model, comove_verdict_tiers
+    from swing_it.tui.ledger_view import Model, comove_verdict_tiers
 
     mo = Model(_corr_payload())
     mo.wi = WINDOWS.index(20)
@@ -1042,7 +1042,7 @@ def test_comove_header_does_not_advertise_a_sort_that_does_nothing(data):
 
     주입: ``header_lines`` 의 ``order`` 를 늘 ``정렬[...]`` 로 되돌리면 실패한다.
     """
-    from kr_quant.tui.ledger_view import header_lines
+    from swing_it.tui.ledger_view import header_lines
 
     mo = Model(data)
     mo.vi = [v for v, _ in VIEWS].index("comove")
@@ -1065,7 +1065,7 @@ def test_undefined_correlation_is_not_the_same_glyph_as_no_correlation():
     주입: ``_corr`` 이 분산 0 에서 ``0.0`` 을 돌려주게 되돌리면 두 칸이 같아져
     실패한다.
     """
-    from kr_quant.tui.ledger_view import HEAT_UNDEF, _corr
+    from swing_it.tui.ledger_view import HEAT_UNDEF, _corr
 
     flat, moving = [1.0] * 10, [float(i) for i in range(10)]
     c = _corr(flat, moving)
@@ -1082,13 +1082,13 @@ def test_spark_glyphs_are_one_cell_in_every_locale():
 
     20점이 40칸이 되면 ``pad`` 가 뒤를 잘라내고 구간의 절반만 그린 채 전부인
     척한다. ``cell_width`` 로는 못 잡는다 — 그 함수는 'A' 를 1 로 센다.
-    ``kq-flow`` 가 같은 이유로 브라유(EAW 'N')로 옮겼고, 원장만 안 옮겨져 있었다.
+    ``sw-flow`` 가 같은 이유로 브라유(EAW 'N')로 옮겼고, 원장만 안 옮겨져 있었다.
 
     주입: ``SPARK_SIGNED`` 를 ``▁▂▃▄▅▆▇█`` 계열로 되돌리면 실패한다.
     """
     import unicodedata
 
-    from kr_quant.tui.ledger_view import SPARK, SPARK_SIGNED
+    from swing_it.tui.ledger_view import SPARK, SPARK_SIGNED
 
     assert len(SPARK_SIGNED) == 5 and set(SPARK) == set(SPARK_SIGNED.values())
     for ch in SPARK:
@@ -1104,13 +1104,13 @@ def test_spark_puts_zero_at_the_same_height_in_every_row():
     내려가기만 한 누적 경로가 ``████████…▁▁`` 로 나왔다. 실측(20일 기관)에서
     운송장비/부품이 정확히 그랬다.
 
-    ⚠️ ``kq-flow`` 처방(0 을 범위에 접어 넣기)만으로는 **안 고쳐진다.** hi=0 이
+    ⚠️ ``sw-flow`` 처방(0 을 범위에 접어 넣기)만으로는 **안 고쳐진다.** hi=0 이
     되어 경로가 맨 위에서 시작할 뿐이다. 0 을 세로 한가운데 **고정**해야 한다.
 
     주입: ``spark`` 을 ``lo,hi = min(v),max(v)`` 든 ``min(0,*v),max(0,*v)`` 든
     범위 정규화로 되돌리면 아래 단언이 깨진다.
     """
-    from kr_quant.tui.ledger_view import SPARK_SIGNED, spark
+    from swing_it.tui.ledger_view import SPARK_SIGNED, spark
 
     up = {SPARK_SIGNED[1], SPARK_SIGNED[2]}
     down = {SPARK_SIGNED[-1], SPARK_SIGNED[-2]}
@@ -1136,13 +1136,13 @@ def test_timeline_scale_column_matches_the_points_actually_drawn(data):
     주입: ``spark_scale(show)`` 를 ``max(cum) - min(cum)`` 이나
     ``spark_scale(cum)`` 으로 되돌리면 구간 > 칸 인 폭에서 실패한다.
     """
-    from kr_quant.tui.ledger_view import downsample
+    from swing_it.tui.ledger_view import downsample
 
     mo = Model(data)
     mo.wi = WINDOWS.index(60)          # 구간(40일) > 스파크라인 칸
     width = 60
     lines, _t, nh = timeline_lines(mo, width)
-    from kr_quant.tui.ledger_view import _col
+    from swing_it.tui.ledger_view import _col
 
     cols = _fit([_col("섹터", 13, False), _col("", 1, False),
                  _col("누적[억]", 11), _col("눈금[억]", 11)], width)
@@ -1241,7 +1241,7 @@ def test_spike_column_marks_what_beats_the_even_anchor(data):
     주입: ``mark`` 을 늘 ``" "`` 로 두면 실패한다. ``SPIKE_MARK_MULT`` 를 크게
     키워도(예: 100) 아무 행에도 안 붙어 실패한다.
     """
-    from kr_quant.tui.ledger_view import SPIKE_MARK_MULT
+    from swing_it.tui.ledger_view import SPIKE_MARK_MULT
 
     mo = Model(_spiky_payload())
     assert mo.uniform_spike() == pytest.approx(100.0 / mo.window)
@@ -1297,7 +1297,7 @@ def test_narrow_notice_names_a_screen_that_works_at_this_width(data):
     주입: 셋째 줄을 지우면 첫 단언에서, ``narrow_also`` 가 폭과 무관하게
     ``NARROW_ALSO_TIERS`` 만 쓰게 하면 둘째 단언에서 실패한다.
     """
-    from kr_quant.tui.ledger_view import (
+    from swing_it.tui.ledger_view import (
         NARROW_ALSO_NO_TIMELINE_TIERS, NARROW_ALSO_TIERS, narrow_also)
 
     mo = Model(data)
@@ -1326,7 +1326,7 @@ def test_rows_are_cached_on_everything_that_changes_them(data):
     """``rows()`` 는 한 번 그릴 때 세 곳에서 불린다(1회 23ms). 캐시한다.
 
     ⚠️ 캐시 키에 **주체**가 있어야 한다 — 정렬(선택주체)도 ``최대일몫`` 도
-    고른 주체의 값이다. ``kq-flow`` 가 바로 이 자리에서 물렸다(역순이 키에
+    고른 주체의 값이다. ``sw-flow`` 가 바로 이 자리에서 물렸다(역순이 키에
     빠져 ``r`` 이 안 먹었다).
 
     주입: ``self._rows_cache`` 를 안 쓰면 첫 단언(동일 객체)에서, 키에서
@@ -1377,9 +1377,9 @@ def test_screens_do_not_compute_what_they_throw_away(data):
     assert marks == [] and "상관을 내지 않는다" in lines[0]
 
 
-# --------------------------------------------- 6. kq-flow 와 같은 규율(패리티)
+# --------------------------------------------- 6. sw-flow 와 같은 규율(패리티)
 #
-# 아래 검사들은 `kq-flow` 에서 고친 **부류**를 원장에서 다시 본다. 두 앱은 같은
+# 아래 검사들은 `sw-flow` 에서 고친 **부류**를 원장에서 다시 본다. 두 앱은 같은
 # 제품이고 같은 손이 쓴다 — 한쪽에서만 고친 규율은 다른 쪽에서 조용히 살아난다.
 
 def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
@@ -1390,7 +1390,7 @@ def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
     주입: 푸터 단계에 ``w/W`` 를 되살리면 앞 절반이, 도움말에서 "역방향" 을 빼면
     뒷 절반이 실패한다.
     """
-    from kr_quant.tui.ledger_view import FOOTER_TIERS, LEDGER_HELP, help_desc
+    from swing_it.tui.ledger_view import FOOTER_TIERS, LEDGER_HELP, help_desc
 
     for t in FOOTER_TIERS:
         for pair in ("v/V", "w/W", "m/M", "a/A", "s/S"):
@@ -1412,7 +1412,7 @@ def test_hint_bar_has_its_own_short_lines_and_never_gets_cut_at_80(data):
     주입: `hint_desc` 가 `LEDGER_HINT_DESC` 를 안 보고 `help_desc` 만 내면(예전
     동작) 폭 80 에서 잘리는 정렬이 나와 실패한다.
     """
-    from kr_quant.tui.ledger_view import (
+    from swing_it.tui.ledger_view import (
         LEDGER_HINT_DESC, _SORT_HELP, hint_desc, hint_text)
 
     mo = Model(data)
@@ -1439,7 +1439,7 @@ def test_the_long_explanations_stay_in_the_help():
 
     주입: `LEDGER_HELP` 의 `최대일몫[%]` 설명을 힌트바 문장으로 갈아치우면 실패한다.
     """
-    from kr_quant.tui.ledger_view import LEDGER_HELP, LEDGER_HINT_DESC
+    from swing_it.tui.ledger_view import LEDGER_HELP, LEDGER_HINT_DESC
 
     said = " ".join(d for _n, d in LEDGER_HELP)
     assert "블록딜" in said, "도움말에서 실측·유래가 사라졌다"
@@ -1477,7 +1477,7 @@ def test_status_line_does_not_repeat_what_the_table_already_shows(data):
     주입: 상태줄이 늘 4주체를 붙이게 되돌리면 첫 단언이, 전개에서 빼면 둘째가
     실패한다.
     """
-    from kr_quant.tui.ledger_view import visible_columns
+    from swing_it.tui.ledger_view import visible_columns
 
     mo = Model(data)
     seen_dropped = False
@@ -1514,12 +1514,12 @@ def test_status_line_marks_the_sector_name_and_the_view_gives_the_coordinates(da
     조각(섹터 이름)이 부속 정보에 묻혔다.
 
     좌표는 **뷰가 낸다** — 앱이 문자열을 다시 뜯어 이름 길이를 추측하면 문구를
-    고칠 때 색이 조용히 어긋난다(`kq-flow` 의 `detail_title_span` 과 같은 관용구).
+    고칠 때 색이 조용히 어긋난다(`sw-flow` 의 `detail_title_span` 과 같은 관용구).
 
     주입: `status_title_span` 이 문자 수(`len`)로 폭을 내면 한글 섹터에서 칠하는
     칸이 절반으로 어긋나 실패한다.
     """
-    from kr_quant.tui.ledger_view import status_title_span
+    from swing_it.tui.ledger_view import status_title_span
 
     def cell_width_sum(t: str) -> int:
         return sum(cell_width(c) for c in t)
@@ -1587,8 +1587,8 @@ def test_the_comove_screen_neither_sorts_nor_claims_to(data):
 
     주입: `_key` 의 `and mo.sortable` 을 지우면 실패한다.
     """
-    from kr_quant.tui import ledger_app
-    from kr_quant.tui.ledger_view import header_lines
+    from swing_it.tui import ledger_app
+    from swing_it.tui.ledger_view import header_lines
 
     mo = Model(data)
     for v in ("comove", "limits"):
@@ -1614,7 +1614,7 @@ def test_the_table_is_set_off_from_the_bottom_lines_by_a_blank_line(data):
     주입: `bottom_gap` 이 늘 1 을 내면 낮은 화면에서 본문이 한 줄만 남아 실패하고,
     늘 0 을 내면 첫 단언이 실패한다.
     """
-    from kr_quant.tui.ledger_view import bottom_gap
+    from swing_it.tui.ledger_view import bottom_gap
 
     mo = Model(data)
     for h in (20, 24, 30, 50):
@@ -1638,7 +1638,7 @@ def test_the_help_does_not_claim_a_stale_sentence_that_is_no_longer_there(data):
 
     주입: 그 문장을 되살리면 첫 단언이, 한계 §7 에서 실측치를 지우면 둘째가 실패한다.
     """
-    from kr_quant.tui.ledger_view import LEDGER_HELP
+    from swing_it.tui.ledger_view import LEDGER_HELP
 
     said = " ".join(f"{n} {d}" for n, d in LEDGER_HELP)
     assert "옛 문장" not in said, "도움말이 사실이 아닌 상태 보고를 남겼다"
@@ -1649,7 +1649,7 @@ def test_the_help_does_not_claim_a_stale_sentence_that_is_no_longer_there(data):
 
 def test_the_screen_never_prints_the_hangul_keys():
     """한글 상태에서도 키가 듣지만 자모를 **적지는** 않는다 — 표기는 영문 한 벌이다."""
-    from kr_quant.tui.ledger_view import (
+    from swing_it.tui.ledger_view import (
         BANNER_TIERS, FOOTER_TIERS, LEDGER_HELP, LIMITS)
 
     text = " ".join(FOOTER_TIERS + BANNER_TIERS + tuple(LIMITS)
@@ -1696,7 +1696,7 @@ def test_the_evidence_script_measures_the_same_way_the_screen_does():
     안 빼면 둘째가 실패한다.
     """
     import scripts.ledger_numbers as ln
-    from kr_quant.tui.ledger_view import _corr, neg_frac
+    from swing_it.tui.ledger_view import _corr, neg_frac
 
     assert ln._corr is _corr, "스크립트가 상관을 자기 식으로 다시 잰다"
     assert ln.neg_frac is neg_frac, "음수쌍 비율을 두 곳이 각자 센다"
@@ -1741,7 +1741,7 @@ def test_the_scale_column_is_never_smaller_than_the_cumulative_beside_it():
 
     주입: ``downsample`` 의 정수 산술을 부동소수로 되돌리면 폭 51 에서 실패한다.
     """
-    from kr_quant.tui.ledger_view import timeline_cols
+    from swing_it.tui.ledger_view import timeline_cols
 
     n = 60
     cell = {k: ([100.0] * (n - 1) + [9000.0] if k == "indiv" else [0.0] * n)
@@ -1797,7 +1797,7 @@ def _named_payload(win_of_last: bool) -> dict:
 
 
 def test_stock_count_is_what_the_window_traded_not_the_vendor_master():
-    """``종목[수]`` 는 **이 구간에 거래된** 종목 수다 — kq-flow 와 같은 집합.
+    """``종목[수]`` 는 **이 구간에 거래된** 종목 수다 — sw-flow 와 같은 집합.
 
     옛 정의(``n_by_sector``)는 벤더 마스터에 남은 죽은 이름까지 세어서, 같은
     (시장,섹터)를 두 앱이 다른 수로 말했다(실측 324칸 중 49칸). 나쁜 쪽은 세는
@@ -1885,7 +1885,7 @@ def test_each_screen_keeps_its_own_place_so_v_does_not_lose_the_selection(data):
     """
     import curses
 
-    from kr_quant.tui.ledger_app import _key
+    from swing_it.tui.ledger_app import _key
 
     names = [v for v, _ in VIEWS]
     mo = Model(data)

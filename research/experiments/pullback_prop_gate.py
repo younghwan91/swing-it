@@ -52,7 +52,7 @@ from research.signals.pullback_swing import (  # noqa: E402 — sys.path 부트�
     simulate_pullback_trades,
 )
 
-from kr_quant.storage import connect, db_default, read_prices  # noqa: E402 — sys.path 부트스트랩 뒤
+from swing_it.storage import connect, db_default, read_prices  # noqa: E402 — sys.path 부트스트랩 뒤
 
 # ===========================================================================
 # 사전등록 1차 CONFIG (R1) — 게이트 출력을 보기 전에 못박음. 이것이 THE 테스트.

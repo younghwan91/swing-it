@@ -63,13 +63,13 @@ def _drain(fd: list[str]):
 
 def _spawn(d: str, app: str, lines: str, cols: str, stderr=subprocess.PIPE,
            env: dict | None = None):
-    """pty 를 열고 TUI 앱을 띄운다 — 두 앱(kq-flow·kq-ledger)이 같은 경로를 쓴다."""
+    """pty 를 열고 TUI 앱을 띄운다 — 두 앱(sw-flow·sw-ledger)이 같은 경로를 쓴다."""
     primary, replica = pty.openpty()
     env = {**(env or os.environ), "TERM": "xterm-256color",
            "LINES": lines, "COLUMNS": cols}
     proc = subprocess.Popen(
         [sys.executable, "-c",
-         f"from kr_quant.tui.{app} import main; main()", "--dir", d],
+         f"from swing_it.tui.{app} import main; main()", "--dir", d],
         stdin=replica, stdout=replica, stderr=stderr, env=env)
     os.close(replica)
     return primary, proc
@@ -188,7 +188,7 @@ def test_app_exits_when_the_terminal_disappears():
         env = {**os.environ, "TERM": "xterm-256color", "LINES": "24", "COLUMNS": "100"}
         proc = subprocess.Popen(
             [sys.executable, "-c",
-             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+             "from swing_it.tui.flow_app import main; main()", "--dir", d],
             stdin=replica, stdout=replica, stderr=subprocess.DEVNULL, env=env)
         os.close(replica)
         # 배수 스레드를 쓰지 않는다 — 읽는 중에 같은 fd 를 닫으면 경합이라
@@ -237,7 +237,7 @@ def test_broken_report_says_what_is_wrong(payload, expect):
             f.write("<script>\nconst D = " + payload + ";\n</script>")
         proc = subprocess.run(
             [sys.executable, "-c",
-             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+             "from swing_it.tui.flow_app import main; main()", "--dir", d],
             capture_output=True, text=True)
         assert proc.returncode != 0
         msg = proc.stdout + proc.stderr
@@ -266,7 +266,7 @@ def test_resize_does_not_silently_close_the_help_screen():
         env = {**os.environ, "TERM": "xterm-256color"}
         proc = subprocess.Popen(
             [sys.executable, "-c",
-             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+             "from swing_it.tui.flow_app import main; main()", "--dir", d],
             stdin=replica, stdout=replica, stderr=subprocess.PIPE, env=env)
         os.close(replica)
         screen: list[str] = []
@@ -286,7 +286,7 @@ def test_resize_does_not_silently_close_the_help_screen():
             # 도움말이 살아 있어야만 닿는 지점으로 판별한다 — 끝까지 스크롤하면
             # 마지막 줄이 나온다. 닫혔다면 j 는 섹터 행을 움직일 뿐이다.
             # 스크롤 횟수를 상수로 박으면 HELP 가 길어질 때 무관한 이유로 깨진다.
-            from kr_quant.tui.flow_view import help_lines
+            from swing_it.tui.flow_view import help_lines
             os.write(primary, b"j" * (help_lines(80, 0, 10**6)[1] + 5))
             time.sleep(0.6)
             os.write(primary, b"q")                      # 도움말 닫기
@@ -324,7 +324,7 @@ def test_no_color_and_dumb_terminal():
 
         proc = subprocess.run(
             [sys.executable, "-c",
-             "from kr_quant.tui.flow_app import main; main()", "--dir", d],
+             "from swing_it.tui.flow_app import main; main()", "--dir", d],
             capture_output=True, text=True, env={**os.environ, "TERM": "dumb"})
         msg = proc.stdout + proc.stderr
         assert proc.returncode != 0, "TERM=dumb 인데 그냥 떴다"
@@ -340,8 +340,8 @@ def test_no_color_and_dumb_terminal():
 
 import curses  # noqa: E402
 
-from kr_quant.tui.flow_app import handle_key, layout  # noqa: E402
-from kr_quant.tui.flow_view import SORTS, State  # noqa: E402
+from swing_it.tui.flow_app import handle_key, layout  # noqa: E402
+from swing_it.tui.flow_view import SORTS, State  # noqa: E402
 
 MANY = json.loads(json.dumps(MINIMAL))
 for _i, (_code, _sec) in enumerate([("000010", "전기/전자"), ("000020", "화학"),
@@ -398,7 +398,7 @@ def test_help_opens_with_question_and_f1():
 
 def test_q_in_help_closes_and_only_the_next_q_quits():
     """도움말의 q 는 닫기다 — 그리고 그 사실이 화면에 적혀 있어야 한다."""
-    from kr_quant.tui.flow_view import HELP, help_lines
+    from swing_it.tui.flow_view import HELP, help_lines
     st = _st()
     handle_key(st, ord("?"))
     assert handle_key(st, ord("q")) is True, "도움말의 q 가 앱을 끝냈다"
@@ -411,7 +411,7 @@ def test_q_in_help_closes_and_only_the_next_q_quits():
 
 def test_help_lists_every_key_the_app_handles():
     """회귀 — 대문자 역방향·g/G·PgUp/PgDn·l/← 이 푸터에도 도움말에도 없었다."""
-    from kr_quant.tui.flow_view import HELP, footer_line
+    from swing_it.tui.flow_view import HELP, footer_line
     text = " ".join(n + " " + d for n, d in HELP) + footer_line(200)
     for token in ("g", "G", "Home", "End", "PgUp", "PgDn", "W", "M", "A", "S",
                   "r", "h", "l", "Enter", "Esc", "F1", "?", "q"):
@@ -490,8 +490,8 @@ def test_hint_bar_explains_the_column_being_sorted():
 
     푸터 위 한 줄은 늘 떠 있고, s 로 정렬을 바꾸면 같이 바뀐다.
     """
-    from kr_quant.tui.flow_app import hint_text
-    from kr_quant.tui.flow_view import SORTS, hint_desc
+    from swing_it.tui.flow_app import hint_text
+    from swing_it.tui.flow_view import SORTS, hint_desc
 
     st = _st()
     seen = set()
@@ -528,7 +528,7 @@ def test_hangul_jamo_keys_do_what_their_latin_twins_do():
 
     주입: `normalize_key` 가 자모를 그대로 `ord` 하면 전부 실패한다.
     """
-    from kr_quant.tui.flow_app import normalize_key
+    from swing_it.tui.flow_app import normalize_key
 
     pairs = [("ㅂ", "q"), ("ㅈ", "w"), ("ㅉ", "W"), ("ㄱ", "r"), ("ㄲ", "R"),
              ("ㅁ", "a"), ("ㄴ", "s"), ("ㅎ", "g"), ("ㅡ", "m"),
@@ -555,8 +555,8 @@ def test_hangul_cannot_tell_some_capitals_apart_so_they_fall_back():
     구분할 정보가 **이미 없다.** 앱이 할 수 있는 일은 소문자 동작으로 떨어뜨리는
     것뿐이고, 그 사실은 주석과 도움말에 적혀 있어야 한다.
     """
-    from kr_quant.tui.flow_app import normalize_key
-    from kr_quant.tui.flow_view import HELP
+    from swing_it.tui.flow_app import normalize_key
+    from swing_it.tui.flow_view import HELP
 
     for jamo, latin in (("ㅁ", "a"), ("ㄴ", "s"), ("ㅎ", "g"), ("ㅡ", "m")):
         assert normalize_key(jamo) == ord(latin), f"{jamo!r} 가 소문자로 안 떨어진다"
@@ -572,7 +572,7 @@ def test_hangul_cannot_tell_some_capitals_apart_so_they_fall_back():
 
 def test_the_screen_never_prints_the_hangul_keys():
     """한글 키를 **적지는** 않는다 — 사용자가 병기를 원하지 않았다."""
-    from kr_quant.tui.flow_view import FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP
+    from swing_it.tui.flow_view import FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP
 
     text = " ".join(FOOTER_TIERS + FOOTER_DRILL_TIERS
                     + tuple(n + " " + d for n, d in HELP))
@@ -592,7 +592,7 @@ def test_normal_windows_still_sort():
 
 def test_footer_grows_and_shrinks_with_the_width():
     """푸터가 한 줄 고정이라 넓은 화면에서 절반이 비고 좁은 화면에서 잘렸다."""
-    from kr_quant.tui.flow_view import cell_len as _w, footer_line
+    from swing_it.tui.flow_view import cell_len as _w, footer_line
     for drill in (False, True):
         wide, narrow = footer_line(200, drill), footer_line(40, drill)
         assert _w(wide) > _w(narrow), "폭이 넓어도 푸터가 안 늘어난다"
@@ -625,7 +625,7 @@ def test_home_and_end_move_like_g_and_G():
 
 def test_help_scroll_stops_where_the_last_line_is_at_the_bottom():
     """하한이 total-5 이던 시절엔 끝까지 내리면 화면 아래가 비었다."""
-    from kr_quant.tui.flow_view import help_lines
+    from swing_it.tui.flow_view import help_lines
     total = help_lines(80, 0, 10**6)[1]
     st = _st()
     handle_key(st, ord("?"))
@@ -693,7 +693,7 @@ def test_the_blank_line_is_the_first_thing_given_up_when_the_screen_is_short():
 
 # --------------------------------------------------------------- 자금 원장
 #
-# `kq-ledger` 는 `kq-flow` 와 같은 curses 골격 위에 있으므로, flow 가 밟은 지뢰를
+# `sw-ledger` 는 `sw-flow` 와 같은 curses 골격 위에 있으므로, flow 가 밟은 지뢰를
 # 그대로 밟는다. 아래 셋은 flow 쪽 회귀(CPU 좀비 · ESC 종료 · 깨진 리포트)를
 # **같은 잣대로** 원장에도 태운다 — 한쪽만 고치면 다른 쪽이 조용히 남는다.
 
@@ -822,7 +822,7 @@ def test_ledger_broken_payload_says_what_is_wrong(payload, expect):
             f.write(payload)
         proc = subprocess.run(
             [sys.executable, "-c",
-             "from kr_quant.tui.ledger_app import main; main()", "--dir", d],
+             "from swing_it.tui.ledger_app import main; main()", "--dir", d],
             capture_output=True, text=True)
         assert proc.returncode != 0
         msg = proc.stdout + proc.stderr
@@ -836,7 +836,7 @@ def test_ledger_dump_is_pipeable():
     with tempfile.TemporaryDirectory() as d:
         r = subprocess.run(
             [sys.executable, "-c",
-             "from kr_quant.tui.ledger_app import main; main()",
+             "from swing_it.tui.ledger_app import main; main()",
              "--dir", _ledger_dir(d), "--dump"],
             capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr[-1500:]
@@ -890,7 +890,7 @@ def test_every_letter_key_the_app_listens_for_has_a_jamo_route():
     """
     import re
 
-    from kr_quant.tui import flow_app as A
+    from swing_it.tui import flow_app as A
 
     src = inspect.getsource(A.handle_key)
     letters = {m.group(1) for m in re.finditer(r'ord\("([a-zA-Z])"\)', src)}
@@ -910,8 +910,8 @@ def test_the_all_stocks_screen_still_listens_to_window_market_actor():
     구간을 바꾸려면 나갔다 다시 들어와야 했다. 드릴다운이 같은 이유로 이미
     세 키를 듣는다("예전엔 조용히 무시돼서 나갔다 들어오는 동안 커서를 잃었다").
     """
-    from kr_quant.tui.flow_app import handle_key
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_app import handle_key
+    from swing_it.tui.flow_view import State
 
     st = State(MINIMAL)
     st.allv = True

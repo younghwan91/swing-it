@@ -15,7 +15,7 @@ lottery-stock short in low-vol, the negative-surprise short in PEAD) is left on
 the table. This is why the hedged form is the honest *deployable* spec while the
 individual-short L/S is the theoretical *ceiling*.
 
-⚠️ **Synthetic inverse.** kr-quant's ``daily_bars_adjusted`` holds individual
+⚠️ **Synthetic inverse.** swing-it's ``daily_bars_adjusted`` holds individual
 stocks only — no ETF bars over 2016–2026. So the inverse leg is *synthesized*
 from the market proxy: ``r_inverse = −leverage × r_market − fee``. A real KODEX
 인버스 also carries futures-roll and tracking drag beyond its ~0.64%/yr TER, so

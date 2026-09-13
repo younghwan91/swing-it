@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from kr_quant.validation.walkforward import FOLDS, fold_slices
+from swing_it.validation.walkforward import FOLDS, fold_slices
 from research.experiments.contrarian_selective import (
     MIN_SEL,
     PARAMS,

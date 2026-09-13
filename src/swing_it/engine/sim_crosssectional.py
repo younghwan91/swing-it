@@ -52,7 +52,7 @@ def rank_tilt_backtest(
         age: ``code × date`` filing-age panel; only consulted when ``fresh_days>0``.
             ``None`` → all-NaN (no fresh gate applies).
 
-    See :func:`kr_quant.strategies.pead.pead_backtest` for the parameter semantics.
+    See :func:`swing_it.strategies.pead.pead_backtest` for the parameter semantics.
     """
     C = close
     V = trade_value
@@ -157,7 +157,7 @@ def staggered_tranche_backtest(
             기존 동작에 고정돼 있다. 조용한 드리프트를 만들지 않고, 켠 값과 끈 값을
             나란히 보고하는 게 이 레포의 규율이다(GUARDRAILS §8).
 
-    See :func:`kr_quant.strategies.pead.staggered_backtest` for the semantics.
+    See :func:`swing_it.strategies.pead.staggered_backtest` for the semantics.
     """
     C = close
     V = trade_value
@@ -260,7 +260,7 @@ def rank_ic(
         dates: date labels aligned to the panels' columns (for regime start/end).
         age: ``code × date`` filing-age panel; only consulted when ``fresh_days>0``.
 
-    See :func:`kr_quant.strategies.pead.pead_rank_ic` for the semantics.
+    See :func:`swing_it.strategies.pead.pead_rank_ic` for the semantics.
     """
     C = close
     V = trade_value

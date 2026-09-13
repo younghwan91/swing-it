@@ -11,15 +11,15 @@ import unicodedata
 
 import pytest
 
-from kr_quant.tui.flow_view import (
+from swing_it.tui.flow_view import (
     NAME_SORTS,
     ACTORS, SORTS, WINDOWS, State, banner_lines, detail_lines, fmt_amt, fmt_pct,
     header_lines, pad, reversal_flags, table_lines,
 )
 
 
-from kr_quant.tui.flow_view import TREND_ACTORS  # noqa: E402
-from kr_quant.tui.flow_view import (  # noqa: E402  대체안이 쓰는 이름
+from swing_it.tui.flow_view import TREND_ACTORS  # noqa: E402
+from swing_it.tui.flow_view import (  # noqa: E402  대체안이 쓰는 이름
     SORT_COL, _fit, cell_width, sort_span, table_cols,
 )
 
@@ -162,7 +162,7 @@ def test_numeric_columns_align_across_rows(data):
         """소수점의 **표시 칸** 위치. 문자 인덱스로 재면 안 된다 — 한글은 1자가
         2칸이라 섹터명 길이에 따라 인덱스가 달라진다(이 테스트가 처음에 그렇게
         틀렸다). 화면에서 어긋나는지는 표시 칸으로만 판정된다."""
-        from kr_quant.tui.flow_view import cell_width
+        from swing_it.tui.flow_view import cell_width
         out, cell = set(), 0
         for c in line:
             if c == ".":
@@ -221,7 +221,7 @@ def test_minus_sign_is_one_cell():
     U+2212(−) 는 ord 가 0x1100 보다 커서 어림 규칙에서 2칸으로 잡혔다.
     TUI 는 ASCII '-' 를 쓰고, 폭 계산은 East Asian Width 표준을 따른다.
     """
-    from kr_quant.tui.flow_view import cell_width
+    from swing_it.tui.flow_view import cell_width
     assert cell_width("-") == 1
     assert cell_width("\u2212") == 1      # − 도 1칸이어야 한다
     assert cell_width("가") == 2
@@ -235,7 +235,7 @@ def test_color_spans_use_display_cells_not_char_index():
     한글이 섞인 줄에서 문자 인덱스를 쓰면 색이 엉뚱한 칸에 칠해진다.
     이 저장소는 같은 함정(문자 인덱스 vs 표시 칸)을 이미 두 번 밟았다.
     """
-    from kr_quant.tui.flow_view import cell_width, color_spans
+    from swing_it.tui.flow_view import cell_width, color_spans
 
     line = "건설   +1,234  -5.67%p"          # 한글 2자 = 4칸
     spans = color_spans(line)
@@ -249,14 +249,14 @@ def test_color_spans_use_display_cells_not_char_index():
 
 
 def test_color_spans_marks_pass_flag():
-    from kr_quant.tui.flow_view import color_spans
+    from swing_it.tui.flow_view import color_spans
     spans = color_spans("IT 서비스   0.62 *   +100")
     assert any(r == "mark" for _, _, r in spans)
 
 
 def test_color_spans_on_real_rows(data):
     """실제 렌더 결과에 색 구간이 붙고, 줄 밖으로 안 넘어간다."""
-    from kr_quant.tui.flow_view import color_spans
+    from swing_it.tui.flow_view import color_spans
     st = State(data)
     lines, _thin, _nh = table_lines(st, 100, 20)
     for line in lines:
@@ -271,7 +271,7 @@ def test_help_covers_every_rendered_column(data):
 
     열을 추가하면서 도움말을 안 고치면 설명 없는 열이 생긴다 — 그 부류를 막는다.
     """
-    from kr_quant.tui.flow_view import HELP, table_lines
+    from swing_it.tui.flow_view import HELP, table_lines
 
     import re as _re
 
@@ -308,7 +308,7 @@ def test_headers_are_not_truncated_by_their_column_width(data):
     실제로 "종목수" 가 폭 5칸에서 "종목" 으로 잘렸고, 도움말 대조 테스트가
     엉뚱하게 실패해서야 드러났다. 잘린 헤더는 뜻이 바뀐다.
     """
-    from kr_quant.tui.flow_view import names_cols, table_cols
+    from swing_it.tui.flow_view import names_cols, table_cols
 
     st = State(data)
     bad = []
@@ -334,7 +334,7 @@ def test_help_labels_align_in_display_cells():
     **한 줄에 라벨과 설명이 같이 있는** 항목만 본다. 긴 라벨이 온전한지는
     `test_help_labels_are_never_truncated` 가 따로 본다.
     """
-    from kr_quant.tui.flow_view import HELP, cell_len, help_lines
+    from swing_it.tui.flow_view import HELP, cell_len, help_lines
 
     lines = [ln.rstrip() for ln in help_lines(120, 0, 10 ** 6)[0]]
     starts, checked = set(), 0
@@ -351,7 +351,7 @@ def test_help_labels_align_in_display_cells():
     assert len(starts) == 1, f"설명문 시작 칸이 섞였다: {sorted(starts)}"
 
 def test_help_lines_fit_width_and_scroll():
-    from kr_quant.tui.flow_view import help_lines
+    from swing_it.tui.flow_view import help_lines
     for width in (80, 120):
         lines, total = help_lines(width, 0, 20)
         assert total > 10
@@ -374,7 +374,7 @@ def test_help_body_is_not_truncated_at_the_default_ssh_width():
     그건 `pad` 가 일을 했다는 뜻일 뿐 글이 온전하다는 뜻이 아니다. 그래서
     여기서는 **자르기 전 원문**을 렌더와 같은 방식으로 조립해 잰다.
     """
-    from kr_quant.tui.flow_view import HELP
+    from swing_it.tui.flow_view import HELP
 
     over = []
     for name, desc in HELP:
@@ -391,7 +391,7 @@ def test_help_section_headers_are_named_by_the_view_not_guessed_by_the_app():
     주입: `is_section` 이 늘 False 를 내면 첫 단언이, 아무 줄에나 True 를 내면
     둘째 단언이 실패한다.
     """
-    from kr_quant.tui.flow_view import HELP, help_lines, is_section
+    from swing_it.tui.flow_view import HELP, help_lines, is_section
 
     heads = [d for n, d in HELP if not n and d.strip().startswith("──")]
     assert heads, "도움말에 구역 제목이 없다 — 검사가 헛돈다"
@@ -412,7 +412,7 @@ def test_footer_shows_one_key_per_action_and_help_keeps_the_reverse_ones():
     주입: 푸터 단계에 `w/W` 를 되살리면 앞 절반이, 도움말에서 대문자 설명을
     빼면 뒷 절반이 실패한다.
     """
-    from kr_quant.tui.flow_view import (
+    from swing_it.tui.flow_view import (
         FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP, help_desc)
 
     for ts in (FOOTER_TIERS, FOOTER_DRILL_TIERS):
@@ -437,12 +437,12 @@ def test_width_tiers_all_go_through_one_helper():
     푸터는 못 맞으면 마지막 단계로 내려갔는데 도움말 제목은 `next()` 를 기본값
     없이 써서 **폭 6 이하에서 StopIteration 으로 TUI 를 통째로 죽였다.**
     """
-    from kr_quant.tui.flow_app import HINT_COMBINED_TIERS
-    from kr_quant.tui.flow_view import (
+    from swing_it.tui.flow_app import HINT_COMBINED_TIERS
+    from swing_it.tui.flow_view import (
         FOOTER_DRILL_TIERS, FOOTER_TIERS, HELP_TITLE_TIERS, footer_line,
         help_lines, tier_for,
     )
-    from kr_quant.tui.ledger_view import BANNER_TIERS, TIMELINE_NOTE_TIERS, banner_for
+    from swing_it.tui.ledger_view import BANNER_TIERS, TIMELINE_NOTE_TIERS, banner_for
 
     tiers = (FOOTER_TIERS, FOOTER_DRILL_TIERS, HELP_TITLE_TIERS,
              HINT_COMBINED_TIERS, BANNER_TIERS, TIMELINE_NOTE_TIERS)
@@ -575,7 +575,7 @@ def test_sort_highlight_points_at_the_right_header(data):
     assert checked > 50, f"실제로 확인한 조합이 {checked}개뿐 — 검사가 헛돈다"
 
 def test_name_sort_highlight_matches_columns():
-    from kr_quant.tui.flow_view import NAME_SORTS, NAME_SORT_COL, name_sort_span, names_cols
+    from swing_it.tui.flow_view import NAME_SORTS, NAME_SORT_COL, name_sort_span, names_cols
 
     class _S:
         pass
@@ -601,7 +601,7 @@ def test_lead_name_and_amount_align_in_fixed_cells(data):
 
     이름 길이가 제각각이라 '이름 + 금액' 을 그냥 이어붙이면 금액이 들쭉날쭉해진다.
     """
-    from kr_quant.tui.flow_view import col_span, color_spans, table_cols
+    from swing_it.tui.flow_view import col_span, color_spans, table_cols
 
     st = State(data)
     width = 170
@@ -643,7 +643,7 @@ def test_data_cells_sit_under_their_headers(data):
     `.strip()` 하면 안 된다 — 값이 셀보다 짧을 때 1칸 어긋남이 여백에
     먹혀서 폭 변경(헤더 12 · 셀 13)을 놓친다.
     """
-    from kr_quant.tui.flow_view import _fit, col_span, table_cols
+    from swing_it.tui.flow_view import _fit, col_span, table_cols
 
     st = State(data)
     for width in (80, 100, 132, 150, 170):
@@ -683,7 +683,7 @@ def test_stock_list_cells_sit_under_their_headers(data):
     픽스처에 `names` 가 없어 `State.names()` 가 늘 빈 목록을 돌려줬고,
     그래서 셀을 통째로 지워도·정렬을 뒤집어도 전부 초록이었다.
     """
-    from kr_quant.tui.flow_view import (
+    from swing_it.tui.flow_view import (
         COL_INVTRT, COL_PENFND, _fit, col_span, fmt_conc, names_cols, names_lines)
 
     st = State(data)
@@ -748,7 +748,7 @@ def test_numbers_are_never_cut_mid_value_in_narrow_terminals(data):
     실측된 증상: 40칸에서 `-1,360` 이 `-1` 로 보였다. 줄을 통째로 자르는 대신
     열 경계에서 떨어뜨려야 한다. 안 보이는 것보다 틀리게 보이는 게 나쁘다.
     """
-    from kr_quant.tui.flow_view import col_span, table_cols
+    from swing_it.tui.flow_view import col_span, table_cols
 
     st = State(data)
     for width in range(20, 90, 3):
@@ -861,7 +861,7 @@ def test_render_walks_the_column_definition_and_nothing_else(data):
     적었고 분기 모양까지 서로 달랐다. 결과가 같았던 건 우연이다. 이제 셀 수는
     열 수와 **항상** 같아야 한다 — 이 등식이 깨지면 헤더와 값이 어긋난다.
     """
-    from kr_quant.tui.flow_view import _fit, table_cols
+    from swing_it.tui.flow_view import _fit, table_cols
 
     st = State(data)
     for wi in range(len(WINDOWS)):
@@ -880,7 +880,7 @@ def test_no_width_threshold_lives_outside_the_column_list():
     """회귀 — 폭 임계값이 렌더 쪽에 다시 나타나면 이중화가 되살아난 것이다."""
     import inspect
 
-    from kr_quant.tui import flow_view
+    from swing_it.tui import flow_view
 
     src = inspect.getsource(flow_view.table_lines) + inspect.getsource(
         flow_view.names_lines) + inspect.getsource(flow_view._render)
@@ -905,7 +905,7 @@ def test_spark_and_bar_glyphs_are_never_ambiguous_width():
     """
     import unicodedata
 
-    from kr_quant.tui.flow_view import SPARK, SPARK_EMPTY
+    from swing_it.tui.flow_view import SPARK, SPARK_EMPTY
 
     for ch in list(SPARK) + [SPARK_EMPTY]:
         eaw = unicodedata.east_asian_width(ch)
@@ -914,9 +914,9 @@ def test_spark_and_bar_glyphs_are_never_ambiguous_width():
 
 
 def test_spark_is_exactly_its_column_width_and_recent_is_rightmost():
-    from kr_quant.tui.flow_view import spark
+    from swing_it.tui.flow_view import spark
 
-    from kr_quant.tui.flow_view import SPARK, SPARK_EMPTY
+    from swing_it.tui.flow_view import SPARK, SPARK_EMPTY
 
     assert _w(spark([1, 2, 3, 4, 5, 6, 7, 8])) == 8
     assert _w(spark([1, 2, 3])) == 8              # 조각이 적어도 폭은 같다
@@ -944,7 +944,7 @@ def test_year_percentile_and_spark_follow_the_selected_actor(data):
     임펄스만 주체를 따르고 새 열이 기관 값에 머물면, 외국인 화면의 한 행이
     두 주체를 동시에 말한다. 픽스처는 주체마다 다른 값을 싣는다.
     """
-    from kr_quant.tui.flow_view import col_span, table_cols
+    from swing_it.tui.flow_view import col_span, table_cols
 
     st = State(data)
     st.wi = WINDOWS.index("20")
@@ -965,7 +965,7 @@ def test_year_percentile_and_spark_follow_the_selected_actor(data):
 
 
 def test_spark_column_changes_with_the_actor(data):
-    from kr_quant.tui.flow_view import col_span, table_cols
+    from swing_it.tui.flow_view import col_span, table_cols
 
     st = State(data)
     st.wi = WINDOWS.index("20")
@@ -990,7 +990,7 @@ def test_default_sort_is_acceleration_not_the_unvalidated_score(data):
 
 def test_conclusion_columns_come_after_their_inputs(data):
     """회귀 — 결론(G)이 자기 입력(가속·미실현·풀림)보다 왼쪽에 있으면 안 된다."""
-    from kr_quant.tui.flow_view import table_cols
+    from swing_it.tui.flow_view import table_cols
 
     st = State(data)
     st.wi = WINDOWS.index("20")
@@ -1038,7 +1038,7 @@ def test_cumulative_is_blank_where_it_would_be_meaningless(data):
     st = State(data)
     st.nsi = [k for k, _ in NAME_SORTS].index("name")
     assert all(t["cum"] is None for t in st.names())
-    from kr_quant.tui.flow_view import col_span, names_cols, names_lines
+    from swing_it.tui.flow_view import col_span, names_cols, names_lines
     lines, nhead = names_lines(st, 170)
     span = col_span(names_cols(), "누적[%]")
     for line in lines[nhead:]:
@@ -1053,7 +1053,7 @@ def test_stock_rows_stay_one_to_one_with_the_name_list(data):
     for nsi in range(len(NAME_SORTS)):
         st.nsi = nsi
         names = st.names()
-        from kr_quant.tui.flow_view import names_lines
+        from swing_it.tui.flow_view import names_lines
         lines, nhead = names_lines(st, 170)
         assert len(lines) - nhead == len(names), (
             f"정렬{nsi}: 본문 {len(lines) - nhead}줄 vs 종목 {len(names)}개")
@@ -1129,7 +1129,7 @@ def test_help_screen_shows_no_markdown_asterisks():
     """회귀 — 소스의 **강조** 는 읽는 사람 눈에 띄라고 쓴 표기지 화면에
     나갈 글자가 아니다. 힌트바는 떼는데 모달은 안 떼서 `**닫기만**` 이
     그대로 보였다 — 같은 일을 하는 두 경로 중 하나에만 처리가 있었다."""
-    from kr_quant.tui.flow_view import HELP, help_lines
+    from swing_it.tui.flow_view import HELP, help_lines
 
     assert any("**" in d for _n, d in HELP), "소스에 강조가 없다 — 검사가 헛돈다"
     lines, _ = help_lines(120, 0, 10**6)
@@ -1141,7 +1141,7 @@ def test_help_screen_shows_no_markdown_asterisks():
 def test_help_title_fits_every_width():
     """회귀 — 제목이 85칸이라 80칸(SSH 기본)에서 단어 중간에 잘렸다.
     푸터에 만든 단계 기법을 이 줄에도 쓴다."""
-    from kr_quant.tui.flow_view import help_lines
+    from swing_it.tui.flow_view import help_lines
 
     for width in range(20, 130, 2):
         title = help_lines(width, 0, 5)[0][0].rstrip()
@@ -1162,7 +1162,7 @@ def test_hint_bar_fits_the_width_it_is_given(data):
     실측으로 폭 20~27 에서 88칸짜리 줄이, 폭 20~69 에서 70칸짜리 종합 문구가
     그대로 나갔다. 이제 **모든 구간 × 모든 정렬 × 드릴다운 × 폭 20~200** 을 본다.
     """
-    from kr_quant.tui.flow_app import hint_text
+    from swing_it.tui.flow_app import hint_text
 
     st = State(data)
     for width in range(20, 201):
@@ -1192,8 +1192,8 @@ def test_hint_bar_has_its_own_short_lines_and_never_gets_cut_at_80(data):
     주입: `hint_desc` 가 `HINT_DESC` 를 안 보고 `help_desc` 만 내면(예전 동작)
     폭 80 에서 잘리는 열이 나와 실패한다.
     """
-    from kr_quant.tui.flow_app import hint_text
-    from kr_quant.tui.flow_view import (
+    from swing_it.tui.flow_app import hint_text
+    from swing_it.tui.flow_view import (
         HINT_DESC, NAME_SORT_COL, SORT_COL, hint_desc)
 
     st = State(data)
@@ -1224,7 +1224,7 @@ def test_the_long_explanations_stay_in_the_help(data):
     주입: `HELP` 에서 물리 비유를 지우면 실패한다. 힌트바를 짧게 만든 대가로
     설명을 **잃지는 않았다**는 사실이 이 검사의 내용이다.
     """
-    from kr_quant.tui.flow_view import HELP, HINT_DESC, help_desc
+    from swing_it.tui.flow_view import HELP, HINT_DESC, help_desc
 
     assert "물리로 a = F/m" in help_desc(HELP, "가속[%p]")
     assert "물리로" not in HINT_DESC["가속[%p]"], "비유가 힌트바에 남았다"
@@ -1244,7 +1244,7 @@ def test_dates_are_not_painted_as_negative_numbers(data):
     주입: `_NUM` 앞에 새로 붙인 "숫자·글자 뒤에서는 안 잡는다" 제한을 지우면
     첫 단언이 실패한다.
     """
-    from kr_quant.tui.flow_view import (
+    from swing_it.tui.flow_view import (
         color_spans, detail_lines, header_lines, table_lines)
 
     st = State(data)
@@ -1265,7 +1265,7 @@ def test_help_labels_are_never_truncated():
     잘려 있었다(7개). 표 헤더와 이름이 안 맞으면 도움말이 자기 일을 못 한다.
     열을 넓히면 설명이 폭 80(SSH 기본)을 넘으므로, 긴 라벨은 자기 줄에 둔다.
     """
-    from kr_quant.tui.flow_view import HELP, cell_len, help_lines
+    from swing_it.tui.flow_view import HELP, cell_len, help_lines
 
     long = [n for n, _d in HELP if n and cell_len(n) > 10]
     assert long, "긴 라벨이 없다 — 이 검사가 헛돈다"
@@ -1293,7 +1293,7 @@ def test_ambiguous_wide_mode_is_off_by_default_and_counts_A_as_two_when_on(monke
     """'A' 글자의 폭은 터미널이 정한다 — 그걸 셀 수 있어야 한다."""
     import unicodedata
 
-    from kr_quant.tui import flow_view
+    from swing_it.tui import flow_view
 
     amb = [c for c in "·—↑↓→←×÷²½ΔΣβ▲▼※≠…─"
            if unicodedata.east_asian_width(c) == "A"]
@@ -1323,8 +1323,8 @@ def test_no_line_overflows_when_the_terminal_draws_ambiguous_chars_wide(data, mo
     그래서 모드를 켠 채 모든 표시면을 그려 보고, `cell_width` 를 쓰지 않는
     참조 구현(`_wide_w`)으로 재서 폭을 넘는 줄이 하나도 없어야 한다고 본다.
     """
-    from kr_quant.tui import flow_view
-    from kr_quant.tui.flow_view import (
+    from swing_it.tui import flow_view
+    from swing_it.tui.flow_view import (
         detail_lines, footer_line, header_lines, help_lines, names_lines, table_lines,
     )
 
@@ -1356,8 +1356,8 @@ def test_both_screens_cut_columns_by_the_same_rule():
     """
     import random
 
-    from kr_quant.tui.flow_view import Col, _fit as flow_fit, fit_widths
-    from kr_quant.tui.ledger_view import _fit as ledger_fit
+    from swing_it.tui.flow_view import Col, _fit as flow_fit, fit_widths
+    from swing_it.tui.ledger_view import _fit as ledger_fit
 
     rng = random.Random(20260829)
     for _ in range(2000):
@@ -1376,7 +1376,7 @@ def test_fit_widths_keeps_the_first_column_and_counts_the_gap():
     첫 열을 떨어뜨리면 좁은 터미널에서 표가 통째로 사라지고, 공백을 안 세면
     마지막 열이 한 칸 넘쳐 줄이 접힌다.
     """
-    from kr_quant.tui.flow_view import fit_widths, span_at
+    from swing_it.tui.flow_view import fit_widths, span_at
 
     assert fit_widths([], 80) == 0
     assert fit_widths([100], 10) == 1          # 첫 열은 잘려도 남는다
@@ -1398,7 +1398,7 @@ def test_the_panel_marks_the_sector_name_and_the_view_gives_the_coordinates(data
     주입: `detail_title_span` 이 문자 수(`len`)로 폭을 내면 한글 섹터에서
     칠하는 칸이 절반으로 어긋나 실패한다.
     """
-    from kr_quant.tui.flow_view import cell_len, detail_lines, detail_title_span
+    from swing_it.tui.flow_view import cell_len, detail_lines, detail_title_span
 
     st = State(data)
     for row in range(min(5, len(st.rows()))):
@@ -1437,8 +1437,8 @@ def test_the_combined_screen_neither_sorts_nor_claims_to(data):
     주입: `handle_key` 의 `and st.sortable` 을 지우면 상태가 바뀌어 실패하고,
     헤더가 `정렬[…]` 을 다시 적으면 마지막 단언이 실패한다.
     """
-    from kr_quant.tui.flow_app import handle_key, hint_text
-    from kr_quant.tui.flow_view import State, header_lines
+    from swing_it.tui.flow_app import handle_key, hint_text
+    from swing_it.tui.flow_view import State, header_lines
 
     st = State(data)
     st.wi = WINDOWS.index("종합")
@@ -1479,7 +1479,7 @@ def test_combined_screen_shows_the_four_actors_and_says_which_window(data):
     주입: `_rows_uncached` 의 종합 갈래에서 `_actor_sums` 를 빼면 대시가 돌아와
     실패하고, `_actors_line` 의 꼬리표를 지우면 마지막 단언이 실패한다.
     """
-    from kr_quant.tui.flow_view import ACTORS, State, detail_lines, fmt_amt
+    from swing_it.tui.flow_view import ACTORS, State, detail_lines, fmt_amt
 
     st = State(data)
     st.wi = WINDOWS.index("종합")
@@ -1515,7 +1515,7 @@ def test_the_drill_title_says_20_days_when_the_window_is_combined(data):
 
     주입: 제목을 `f"{st.window}일 기준"` 으로 되돌리면 실패한다.
     """
-    from kr_quant.tui.flow_view import State, names_lines
+    from swing_it.tui.flow_view import State, names_lines
 
     st = State(data)
     st.wi = WINDOWS.index("종합")
@@ -1538,7 +1538,7 @@ def test_detail_panel_does_not_repeat_what_the_table_already_shows(data):
 
     주입: 첫 줄에 `f" · 미실현 {fmt_pct(x, 1)}%p"` 를 되살리면 실패한다.
     """
-    from kr_quant.tui.flow_view import detail_lines, table_cols
+    from swing_it.tui.flow_view import detail_lines, table_cols
 
     st = State(data)
     # `섹터`·`종목`(수) 는 이 줄이 지고 있는 일 자체다 — 무슨 섹터의 몇 종목인가.
@@ -1559,11 +1559,11 @@ def test_detail_panel_does_not_repeat_what_the_table_already_shows(data):
 def test_detail_panel_answers_who_took_the_other_side(data):
     """회귀 — "기관이 팔았다" 다음 질문은 **"그럼 누가 받았지"** 다.
 
-    화면이 한 번에 한 주체만 보여주므로 그 답은 앱을 바꿔야(`kq-ledger`)
+    화면이 한 번에 한 주체만 보여주므로 그 답은 앱을 바꿔야(`sw-ledger`)
     알 수 있었다. 주식은 누가 사면 누가 판 것이고 4주체 합은 0 에 닫히므로,
     답은 같은 페이로드 안에 이미 있다 — 화면을 바꿀 이유가 없다.
     """
-    from kr_quant.tui.flow_view import ACTORS, cell_len, detail_lines
+    from swing_it.tui.flow_view import ACTORS, cell_len, detail_lines
 
     st = State(data)
     raw = {r["sector"]: r for r in data["blocks"][f"{st.window}|{st.market}"]["rows"]}
@@ -1585,7 +1585,7 @@ def test_detail_panel_answers_who_took_the_other_side(data):
     # 좁아지면 단계를 내려 줄인다. **자르기 전 원문**을 재야 한다 —
     # `detail_lines` 가 `pad` 로 감싸므로 출력으로는 넘침이 원리상 안 보인다
     # (이 저장소가 오늘만 세 번 밟은 함정이다).
-    from kr_quant.tui.flow_view import _actors_line
+    from swing_it.tui.flow_view import _actors_line
 
     st.row = 0
     r = st.rows()[0]
@@ -1608,7 +1608,7 @@ def test_detail_panel_answers_who_took_the_other_side(data):
 # 여기서 잠그는 것은 새로 들어온 세 축이 **다른 질문에 답하는가** 다.
 
 def test_stock_list_has_three_axes_not_one_number_rescaled(data):
-    from kr_quant.tui.flow_view import COL_INVTRT, COL_PENFND, names_cols
+    from swing_it.tui.flow_view import COL_INVTRT, COL_PENFND, names_cols
 
     heads = [c.header for c in names_cols()]
     for h in (COL_INVTRT, COL_PENFND, "최근집중[%]", "상대수익[%p]"):
@@ -1623,7 +1623,7 @@ def test_the_new_axes_survive_at_eighty_columns():
     남길 수 있다면 네 축을 겹쳐 놓은 점수가 그중 하나보다 낫다. 이 검사가
     바뀌는 것 자체가 그 판단을 기록으로 남기는 일이다.
     """
-    from kr_quant.tui.flow_view import COL_INVTRT, fit_names, view_width
+    from swing_it.tui.flow_view import COL_INVTRT, fit_names, view_width
 
     heads = [c.header for c in fit_names(view_width(80))]
     for h in ("선정", "순매수[억]", "누적[%]", COL_INVTRT):
@@ -1746,7 +1746,7 @@ def test_a_report_without_the_new_fields_still_renders(data):
     """
     import copy
 
-    from kr_quant.tui.flow_view import names_lines
+    from swing_it.tui.flow_view import names_lines
 
     d = copy.deepcopy(data)
     for nmv in d["names"].values():
@@ -1778,8 +1778,8 @@ def test_the_curses_last_cell_rule_lives_in_one_place():
     import inspect
     import re
 
-    from kr_quant.tui import flow_app
-    from kr_quant.tui.flow_view import view_width
+    from swing_it.tui import flow_app
+    from swing_it.tui.flow_view import view_width
 
     assert view_width(80) == 79
     assert view_width(1) == 1                      # 폭 0 으로 내려가지 않는다
@@ -1797,7 +1797,7 @@ def test_recent_concentration_is_hidden_on_rows_that_do_not_move_the_sector(data
     """
     import copy
 
-    from kr_quant.tui.flow_view import CONC_MIN_SHARE
+    from swing_it.tui.flow_view import CONC_MIN_SHARE
 
     d = copy.deepcopy(data)
     # 섹터를 압도하는 종목 하나를 넣어 나머지의 몫을 임계 아래로 민다.
@@ -1867,7 +1867,7 @@ def test_an_old_report_says_so_instead_of_showing_four_blank_columns(data):
     """
     import copy
 
-    from kr_quant.tui.flow_view import names_lines
+    from swing_it.tui.flow_view import names_lines
 
     d = copy.deepcopy(data)
     for nmv in d["names"].values():
@@ -1906,7 +1906,7 @@ def test_participation_is_never_shown_without_its_liquidity_partner():
     예전 순서는 참여율(102) → 시총대비(115) → 시총(129) → 거래대금(143) 이라
     폭 120 터미널에서 참여율만 보이고 거래대금이 안 보였다.
     """
-    from kr_quant.tui.flow_view import fit_names, view_width
+    from swing_it.tui.flow_view import fit_names, view_width
 
     for w in range(40, 220):
         heads = [c.header for c in fit_names(view_width(w))]
@@ -1921,7 +1921,7 @@ def test_liquidity_pair_is_adjacent():
     사이에 다른 열이 끼면 눈이 둘을 짝으로 안 본다. 이 검사가 없으면 나중에
     누가 열을 하나 끼워 넣어도 위 검사는 통과한다(둘 다 보이기는 하므로).
     """
-    from kr_quant.tui.flow_view import names_cols
+    from swing_it.tui.flow_view import names_cols
 
     heads = [c.header for c in names_cols()]
     assert heads.index("거래대금[억]") == heads.index("참여율[%]") + 1, heads
@@ -2083,7 +2083,7 @@ _PICK_ROWS = [
 
 
 def _pick_rows(data, sector="건설"):
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     st = State(data)
     st.row = next(i for i, r in enumerate(st.rows()) if r["sector"] == sector)
@@ -2097,7 +2097,7 @@ def _pick_rows(data, sector="건설"):
 
 
 def _scores(rows=None):
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     st = State(_pick_payload(rows or _PICK_ROWS))
     st.row = 0
@@ -2136,7 +2136,7 @@ def test_pick_score_stops_at_the_eighty_percent_marker():
     마커가 붙은 행은 **포함**한다 — 도움말이 그 줄까지를 "이 섹터를 움직인
     종목" 이라 부르므로, 화면의 가로줄과 점수의 경계가 같아야 한다.
     """
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     # 앞 하나가 압도적이라 두 번째 줄에서 80% 를 넘긴다 → 3·4번째는 마커 아래.
     rows = [("A", "가", 5000.0, 500.0, 300.0, 2000.0, 9000.0),
@@ -2162,7 +2162,7 @@ def test_pick_score_gives_ties_the_same_rank():
     안 그러면 순서가 입력 순서에 따라 임의로 갈리고, 세 축이 같은 두 종목이
     그 축들에서 0 과 1 을 나눠 가져 네 번째 축의 차이가 묻힌다.
     """
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     rows = [("A", "가", 1000.0, 500.0, 300.0, 400.0, 5000.0),
             ("B", "나", 1000.0, 500.0, 300.0, 400.0, 5000.0)]
@@ -2178,7 +2178,7 @@ def test_pick_score_puts_the_name_that_has_not_moved_above_the_one_that_has():
     다른 세 축을 똑같이 두고 상대수익만 갈라 놓으면, 뒤집기를 빼먹었을 때
     순서가 정확히 반대가 된다.
     """
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     rows = [("A", "가", 1000.0, 500.0, 300.0, 400.0, 5000.0),
             ("B", "나", 1000.0, 500.0, 300.0, 400.0, 5000.0)]
@@ -2199,7 +2199,7 @@ def test_pick_score_leads_the_row_like_the_sector_markers_do():
     근거를 확인한다. 오른쪽 끝에 두었더니 폭 123 부터 보여서 대부분의 터미널에서
     없는 열이었다(실측).
     """
-    from kr_quant.tui.flow_view import names_cols
+    from swing_it.tui.flow_view import names_cols
 
     heads = [c.header for c in names_cols()]
     assert heads.index("선정") == 2, heads       # 종목 · 코드 · 선정
@@ -2212,13 +2212,13 @@ def test_pick_score_does_not_change_when_you_sort_by_it():
     `선정점수` 로 정렬하는 순간 전 행이 `—` 가 된다. 점수는 그 종목이 섹터 안에서
     갖는 성질이지 지금 무엇으로 줄세웠나가 아니다.
     """
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     st = State(_pick_payload(_PICK_ROWS))
     st.row = 0
     by_flow = {t["code"]: t.get("pick") for t in st.names()}
     assert any(v is not None for v in by_flow.values()), by_flow
-    from kr_quant.tui.flow_view import NAME_SORTS
+    from swing_it.tui.flow_view import NAME_SORTS
 
     for _ in range(len(NAME_SORTS)):
         st.cycle("ns", 1)
@@ -2234,7 +2234,7 @@ def test_the_cross_sector_list_multiplies_instead_of_averaging():
     평균이다). 층 사이에서는 아니다. 사용자의 질문이 "섹터도 높고 종목도 높은
     것" 이므로 AND 를 뜻하는 연산이어야 한다.
     """
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     st = State(_pick_payload(_PICK_ROWS))
     rows = st.all_picks()
@@ -2251,7 +2251,7 @@ def test_the_cross_sector_list_drops_a_stock_whose_sector_failed_its_gate():
     """섹터가 관문에 걸리면 그 안의 종목은 아무리 좋아도 안 나온다."""
     import copy
 
-    from kr_quant.tui.flow_view import State
+    from swing_it.tui.flow_view import State
 
     d = _pick_payload(_PICK_ROWS)
     base = {t["code"] for t in State(d).all_picks()}
@@ -2270,7 +2270,7 @@ def test_every_footer_tier_that_names_enter_also_names_the_all_stocks_screen():
     단계를 쓰므로, 정작 화면이 넓은 사람에게 그 키가 안 보였다. 이 코드베이스는
     "듣는데 화면 어디에도 안 적혀 있다" 를 버그로 취급해 왔다.
     """
-    from kr_quant.tui.flow_view import FOOTER_TIERS
+    from swing_it.tui.flow_view import FOOTER_TIERS
 
     for tier in FOOTER_TIERS:
         if "종목" in tier and "Enter" in tier:
@@ -2284,7 +2284,7 @@ def test_the_cross_sector_title_says_which_windows_it_multiplied(data):
     목록에서 나온다. 예전엔 `20일 기준` 이라고만 적어서 섹터 쪽도 20일인 것처럼
     읽혔다. 곱이 뜻을 가지려면 무엇과 무엇을 곱했는지가 화면에 있어야 한다.
     """
-    from kr_quant.tui.flow_view import State, all_lines
+    from swing_it.tui.flow_view import State, all_lines
 
     st = State(data)
     while st.window != "종합":
@@ -2304,7 +2304,7 @@ def test_the_cross_sector_title_never_loses_what_it_multiplied(data):
     × 종목 20일" 이 "…섹터 종합(20·60" 으로 끝나면 무엇을 곱했는지가 오히려
     잘못 읽힌다. 잘린 설명은 설명이 아니다.
     """
-    from kr_quant.tui.flow_view import State, all_lines, cell_len, view_width
+    from swing_it.tui.flow_view import State, all_lines, cell_len, view_width
 
     st = State(data)
     while st.window != "종합":
@@ -2326,7 +2326,7 @@ def test_the_html_report_calls_the_score_the_same_name_as_the_tui():
     """
     from pathlib import Path
 
-    from kr_quant.tui.flow_view import SORT_COL
+    from swing_it.tui.flow_view import SORT_COL
 
     tpl = Path(__file__).resolve().parents[1] / "scripts" / "templates" / "sector_numbers.html"
     html = tpl.read_text(encoding="utf-8")
@@ -2353,7 +2353,7 @@ def test_the_selected_row_is_marked_on_every_screen_that_has_a_cursor(data):
     """
     import curses
 
-    from kr_quant.tui import flow_app
+    from swing_it.tui import flow_app
 
     class Scr:
         def __init__(self, h, w):
@@ -2481,7 +2481,7 @@ def test_reversal_flags_is_empty_at_the_5day_window_itself():
 
 
 def test_flow_app_draws_the_banner_before_the_table():
-    from kr_quant.tui import flow_app
+    from swing_it.tui import flow_app
 
     class Scr:
         def __init__(self, h, w):
@@ -2519,7 +2519,7 @@ def test_segment_flows_sums_back_to_the_longest_window(data):
 
     이 항등식이 깨지면 구간을 잘못 잘랐다는 뜻이다 — 돈이 새거나 두 번 세어진다.
     """
-    from kr_quant.tui.flow_view import segment_flows
+    from swing_it.tui.flow_view import segment_flows
 
     win = data["names"]["000720"]["win"]        # 현대건설
     segs = segment_flows(win, "invtrt")
@@ -2530,7 +2530,7 @@ def test_segment_flows_sums_back_to_the_longest_window(data):
 
 def test_segment_flows_is_ordered_oldest_to_newest(data):
     """왼쪽이 오래된 구간, 오른쪽이 최근 — 화면이 그 순서로 읽힌다."""
-    from kr_quant.tui.flow_view import TREND_SEGS, segment_flows
+    from swing_it.tui.flow_view import TREND_SEGS, segment_flows
 
     win = data["names"]["000720"]["win"]
     labels = [lab for lab, _ in segment_flows(win, "invtrt")]
@@ -2544,7 +2544,7 @@ def test_segment_flows_keeps_missing_as_missing(data):
     신규상장·거래정지 종목은 긴 창이 비어 있다. 0 으로 메우면 화면이 "120일 동안
     아무도 안 샀다" 로 읽히는데, 사실은 "그 기간이 없다" 다.
     """
-    from kr_quant.tui.flow_view import segment_flows
+    from swing_it.tui.flow_view import segment_flows
 
     win = {w: dict(v) for w, v in data["names"]["000720"]["win"].items()}
     win["60"]["invtrt"] = None
@@ -2565,7 +2565,7 @@ def test_sector_actor_win_sums_only_that_sector_and_market(data):
     섹터 row 에는 투신·연기금이 없어 `names` 에서 합산해야 한다. 필터가 새면
     다른 섹터의 돈이 섞여 들어오는데, 화면에는 그냥 큰 숫자로 보인다.
     """
-    from kr_quant.tui.flow_view import sector_actor_win
+    from swing_it.tui.flow_view import sector_actor_win
 
     got = sector_actor_win(data, "건설", ["거래소"], "invtrt")
     for w, s in (("5", 0.4), ("20", 1.0), ("60", 2.5), ("120", 3.0)):
@@ -2605,7 +2605,7 @@ def test_trend_arrow_is_one_display_cell():
     `→` `▲` `·` 는 East Asian Width 가 'A'(Ambiguous) 라 한글 터미널이 2칸으로
     그린다 — 그러면 그 줄만 오른쪽으로 밀린다. 이 저장소가 이미 세 번 밟았다.
     """
-    from kr_quant.tui.flow_view import TREND_ARROW
+    from swing_it.tui.flow_view import TREND_ARROW
 
     for ch in TREND_ARROW:
         assert unicodedata.east_asian_width(ch) in ("N", "Na"), \
@@ -2618,7 +2618,7 @@ def test_banner_pick_rows_all_use_the_same_trend_form(data):
     폭을 줄마다 재면 이름이 짧은 종목만 긴 표기를 얻어, 같은 열에 다른 것이 놓인
     표가 된다(실측 2026-09-04 폭 80: 1·4·5행은 최근값만, 2·3행은 직전→최근).
     """
-    from kr_quant.tui.flow_view import TREND_ARROW
+    from swing_it.tui.flow_view import TREND_ARROW
 
     for width in range(60, 201):
         picks = [ln for ln in banner_lines(State(data), width) if "곱 " in ln]
@@ -2649,7 +2649,7 @@ def test_drill_detail_shows_the_selected_stock_not_the_sector(data):
 
 def test_drill_detail_shows_both_actors_over_all_segments(data):
     """패널은 투신·연기금을 **네 구간 전부** 보여준다."""
-    from kr_quant.tui.flow_view import TREND_SEGS
+    from swing_it.tui.flow_view import TREND_SEGS
 
     st = State(data)
     st.row, st.drill, st.drow = 1, True, 0
@@ -2695,7 +2695,7 @@ def test_sector_table_shows_recent_trusted_flow(data):
 
 def test_sector_trusted_flow_is_summed_from_names_not_invented(data):
     """그 열의 값은 `names` 합계와 같아야 한다 — 어림수를 지어내면 안 된다."""
-    from kr_quant.tui.flow_view import sector_actor_win
+    from swing_it.tui.flow_view import sector_actor_win
 
     st = State(data)
     st.wi = WINDOWS.index("20")

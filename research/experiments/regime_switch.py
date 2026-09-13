@@ -7,7 +7,7 @@
 인버스헤지)로 만든 뒤, 지수가 자기 200일 이평 아래인 달에 북을 내려두는 오버레이를
 씌우고 **그게 타이밍인지 그냥 노출 축소인지**를 가른다.
 
-판별기는 always-on 이 아니라 회전 널(:func:`kr_quant.strategies.regime.rotation_null`)이다 —
+판별기는 always-on 이 아니라 회전 널(:func:`swing_it.strategies.regime.rotation_null`)이다 —
 같은 상태 수열을 시간축으로 돌려 듀티사이클·런렝스·스위치 횟수를 그대로 두고 수익과의
 정렬만 깨뜨린다. 노출 축소 효과는 회전에도 살아남고, 타이밍 효과만 죽는다.
 
@@ -23,15 +23,15 @@ import os
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.metrics import max_drawdown, newey_west_t
-from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default, read_earnings, read_prices
-from kr_quant.strategies.combo import series_metrics
-from kr_quant.strategies.hedge import (
+from swing_it.engine.metrics import max_drawdown, newey_west_t
+from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
+from swing_it.storage import connect, db_default, read_earnings, read_prices
+from swing_it.strategies.combo import series_metrics
+from swing_it.strategies.hedge import (
     INVERSE_ANNUAL_FEE, inverse_hedged_return, universe_market_return)
-from kr_quant.strategies.lowvol import lowvol_backtest
-from kr_quant.strategies.pead import pead_backtest
-from kr_quant.strategies.regime import (
+from swing_it.strategies.lowvol import lowvol_backtest
+from swing_it.strategies.pead import pead_backtest
+from swing_it.strategies.regime import (
     apply_switch, ma_regime_state, market_index_level, monthly_state,
     percentile_of, rotation_null)
 

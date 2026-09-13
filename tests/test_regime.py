@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from kr_quant.engine.metrics import max_drawdown
-from kr_quant.strategies.regime import (
+from swing_it.engine.metrics import max_drawdown
+from swing_it.strategies.regime import (
     apply_switch, ma_regime_state, market_index_level, monthly_state,
     percentile_of, rotation_null,
 )
@@ -141,7 +141,7 @@ def test_cost_edge_dies_distinguishes_empty_from_surviving():
     `NaN <= 0` 이 False 라, 관측이 하나도 없는 비용 곡선이 그냥 두면 None(생존)을
     돌려준다. 유니버스가 비어 폴드가 n=0 인 상황에서 정확히 그 모양이 나온다.
     """
-    from kr_quant.diagnostics.gate_report import _cost_edge_dies
+    from swing_it.diagnostics.gate_report import _cost_edge_dies
 
     nan = float("nan")
     assert _cost_edge_dies({0.0046: 0.5, 0.008: 0.2}) is None          # 진짜 생존

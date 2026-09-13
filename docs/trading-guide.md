@@ -1,6 +1,6 @@
 # 종목 선정 가이드
 
-`kq-flow` 로 섹터를 훑고 종목을 고르는 순서. 화면의 각 열이 무슨 뜻인지는
+`sw-flow` 로 섹터를 훑고 종목을 고르는 순서. 화면의 각 열이 무슨 뜻인지는
 [README §3](../README.md#3-화면-읽는-법), 정확한 수식은
 [kqflow-formulas.pdf](kqflow-formulas.pdf) 에 있다.
 

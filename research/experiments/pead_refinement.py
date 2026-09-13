@@ -2,11 +2,11 @@
 """PEAD refinement research — surprise-magnitude filter, horizon
 sweep, per-position trailing stop.
 
-Scratch research only. Nothing here touches ``src/kr_quant/`` (production
+Scratch research only. Nothing here touches ``src/swing_it/`` (production
 isolation). It *reuses* the validated production machinery:
 ``staggered_backtest`` / ``_summarize`` / ``_panel`` / ``_resolve_signal`` from
-``kr_quant.strategies.pead`` and ``earnings_yoy_panel`` from
-``kr_quant.features.fundamentals`` (see the RALPLAN-DR plan, Option C).
+``swing_it.strategies.pead`` and ``earnings_yoy_panel`` from
+``swing_it.features.fundamentals`` (see the RALPLAN-DR plan, Option C).
 
 Data source: TimescaleDB via ``connect(db_default())`` (``KR_QUANT_DB``), DB only,
 never CSV.
@@ -41,10 +41,10 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from kr_quant.engine.panels import price_arrays
-from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default, read_earnings, read_prices
-from kr_quant.strategies.pead import (
+from swing_it.engine.panels import price_arrays
+from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
+from swing_it.storage import connect, db_default, read_earnings, read_prices
+from swing_it.strategies.pead import (
     _resolve_signal,
     _summarize,
     staggered_backtest,
@@ -538,7 +538,7 @@ def run_all() -> None:
 
 Three sequential refinements to the validated PEAD alpha — (1) earnings-surprise
 magnitude filter, (2) holding-horizon sweep, (3) per-position trailing stop —
-each built with `staggered_backtest` from `kr_quant.strategies.pead` so all
+each built with `staggered_backtest` from `swing_it.strategies.pead` so all
 results share identical return / benchmark / annualization conventions
 (Accounting Harmonization). Data is loaded **from TimescaleDB** (not CSV), full
 expanded universe (2,629 DART codes, 2016Q1-2026). YoY is computed from

@@ -1,7 +1,7 @@
 """Post-earnings-announcement drift (PEAD) — the project's one validated alpha.
 
 Rank stocks cross-sectionally by year-over-year net-income growth (lookahead-safe
-via :func:`kr_quant.features.fundamentals.earnings_yoy_panel`) and hold a
+via :func:`swing_it.features.fundamentals.earnings_yoy_panel`) and hold a
 rank-weighted, dollar-neutral long/short book, rebalanced every ``horizon`` days.
 
 Validated behaviour (DART earnings, ~812 liquid KR names, 2018–2026): net Sharpe
@@ -62,7 +62,7 @@ def pead_backtest(
             (``trade_value`` in the same units as ``adv_floor`` — 백만원 in this
             project). Close may be signed (Kiwoom); it is abs'd.
         earnings_panel: Output of
-            :func:`kr_quant.features.fundamentals.earnings_yoy_panel` — long rows
+            :func:`swing_it.features.fundamentals.earnings_yoy_panel` — long rows
             with ``code``, ``date``, ``yoy``.
         horizon: Rebalance/holding period in trading days (30–60 is the validated
             sweet spot; drift is a multi-week effect).
@@ -262,7 +262,7 @@ def recommend_holdings(
 
 
 def main() -> int:
-    """CLI (``kq-pead``): run the validated tradeable PEAD⊕value backtest.
+    """CLI (``sw-pead``): run the validated tradeable PEAD⊕value backtest.
 
     Loads prices + shares from the DB and DART earnings from a CSV (columns:
     code, period, avail_date, netinc, prior, yoy), builds the combined signal and

@@ -2,7 +2,7 @@
 """개미 투매 급등주 전략 — 베이지안 최적화(optuna TPE) + 과최적 방지 + OOS 검증.
 
 이 스크립트는 **얇은 러너**다: 과최적 방지 기계(부트스트랩 하단 목적함수·거래수 페널티·
-TRAIN 격리)는 전부 ``kr_quant.validation.optimization`` 한 곳에서 온다 — 여기선 재구현하지
+TRAIN 격리)는 전부 ``swing_it.validation.optimization`` 한 곳에서 온다 — 여기선 재구현하지
 않는다(단일 소스). 신호 특정 배선(시뮬레이터·탐색공간·데이터 로드·리포팅)만 남긴다.
 
 과최적을 구조적으로 막는 라이브러리 계약:
@@ -22,7 +22,7 @@ import os
 
 import numpy as np
 
-from kr_quant.validation.optimization import (
+from swing_it.validation.optimization import (
     TRADE_FLOOR,
     TRAIN_HI,
     make_objective,

@@ -100,7 +100,7 @@
 > ⚠️ **단기 반전은 수익률의 사실이지 수급의 사실이 아니다.**
 > Jegadeesh(1990)·Lehmann(1990) 의 단기 반전 때문에 모멘텀은 최근 한 달을
 > 건너뛴다(Jegadeesh & Titman 1993; Carhart 1997). 그건 **수익률** 이야기다 —
-> 기관 **수요**는 오히려 지속된다는 쪽이 문헌이다(Sias 2004). 그래서 kq-flow 는
+> 기관 **수요**는 오히려 지속된다는 쪽이 문헌이다(Sias 2004). 그래서 sw-flow 는
 > 최근 구간을 **분리해서 보여주기만 하고 좋다/나쁘다 부호를 붙이지 않는다.**
 > 눌림목이냐 추세전환이냐는 가격 구조에서 갈리는데, 일일 리포트에는 구간
 > 수익률 네 개뿐이라 그 판정을 할 자료가 없다 — 판정은 화면 밖에 둔다.
@@ -110,8 +110,8 @@
 ## 4. 이 레포의 커버리지 & 공백 (감사 요약)
 
 **이미 best-in-class (코드로 강제됨):**
-- 무룩어헤드 폴드 분할 (`src/kr_quant/validation/walkforward.py` — 순수함수, 우회 불가)
-- 리포터-not-판정기 (`src/kr_quant/diagnostics/gate_report.py` — bool 필드 없음)
+- 무룩어헤드 폴드 분할 (`src/swing_it/validation/walkforward.py` — 순수함수, 우회 불가)
+- 리포터-not-판정기 (`src/swing_it/diagnostics/gate_report.py` — bool 필드 없음)
 - 부트스트랩 하단 목적함수 (`optimization.py:_boot_lower` — raw-mean 미노출)
 - 개별 트레이드 R-분포·fragility 배터리 (`diagnostics/r_distribution.py`, `fragility.py`)
 - 비용 스윕 + `cost_edge_dies`, 음성대조(`random_entry_control`), 손안댄창, plateau 민감도 (`prop_gate.py`)
@@ -179,7 +179,7 @@
    에 이미 있었으나 **어떤 게이트도 `n_trials` 를 넘기지 않아 한 번도 계산되지 않았다**
    (이 레포 네 번째 "기능은 있고 쓰는 쪽이 안 씀"). 빠진 조각은 N 을 **어디서 가져오느냐**
    였다 — 손으로 적으면 부탁이지 규율이 아니다.
-   `kr_quant.diagnostics.trials` 원장 신설: `prop_gate(config=..., log_dir=...)` 이
+   `swing_it.diagnostics.trials` 원장 신설: `prop_gate(config=..., log_dir=...)` 이
    사전등록 config 를 `research/logs/<alpha>/TRIALS.jsonl` 에 append 하고 N 을 거기서
    읽는다. config 지문으로 중복 제거해 **재실행은 시행으로 안 센다**(시행 = 다르게 시도한
    횟수). label 별 원장이라 음성대조(`rand`)가 실제 셋업 N 을 오염시키지 않는다.
@@ -240,7 +240,7 @@
    (리포터 원칙 유지 — 판정 아닌 숫자.) 누락은 `check_guardrails` (e) 가 잡는다.
 4. ~~**음성대조·비용을 표준으로**~~ **완료** → TEMPLATE §5 에 명시돼 있고, "유도"가 아니라
    `check_guardrails` (f) 가 `*_gate.py` 의 하버스 사용을 강제한다(부탁 → 규칙).
-5. **경계 린트** → `src/kr_quant`가 `research/`를 import하면 실패하는 간단한 검사, 모든
+5. **경계 린트** → `src/swing_it`가 `research/`를 import하면 실패하는 간단한 검사, 모든
    `research/experiments/*_gate.py`에 대응 `VERDICT.md`가 있는지 grep 검사(pre-commit/CI).
 
 > CI(`.github/workflows/ci.yml`)는 **가드레일 기계의 정합성**(누출 없는 폴드 분할, 판정 필드 없음)을

@@ -10,11 +10,11 @@ sliced by the frozen walk-forward FOLDS test windows and by the untouched
 (~<30/fold), the 5/6 bar is not measurable and it dies here before Step 0/1.
 
 Thin runner (plan §"thin runner in research, calls library functions only"):
-reuses ``kr_quant.engine.panels.panel_pivot`` for the code×date grid,
-``kr_quant.validation.walkforward.FOLDS`` for the frozen folds, and
-``kr_quant.features.fundamentals`` (``_yoy_vec`` / ``earnings_yoy_panel``) for the
+reuses ``swing_it.engine.panels.panel_pivot`` for the code×date grid,
+``swing_it.validation.walkforward.FOLDS`` for the frozen folds, and
+``swing_it.features.fundamentals`` (``_yoy_vec`` / ``earnings_yoy_panel``) for the
 PEAD signal — exactly as ``research/experiments/pead_refinement.py`` and
-``research/signals/contrarian_retail.py`` do. Nothing in ``src/kr_quant/`` changes.
+``research/signals/contrarian_retail.py`` do. Nothing in ``src/swing_it/`` changes.
 
 Data (MULTI_ALPHA.md §"반드시 지킬 전제" #1): SPLIT-ADJUSTED ``daily_bars_adjusted``
 only — raw ``daily_bars`` reads splits as catastrophic returns and corrupts every
@@ -42,11 +42,11 @@ import pandas as pd
 
 from prop_swing_common import dedup_gap, load_env_db, weekly_count
 
-from kr_quant.engine.panels import panel_pivot
-from kr_quant.features.fundamentals import _yoy_vec, earnings_yoy_panel
-from kr_quant.storage import connect, db_default, read_earnings, read_prices
-from kr_quant.validation.optimization import TRAIN_HI
-from kr_quant.validation.walkforward import FOLDS
+from swing_it.engine.panels import panel_pivot
+from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
+from swing_it.storage import connect, db_default, read_earnings, read_prices
+from swing_it.validation.optimization import TRAIN_HI
+from swing_it.validation.walkforward import FOLDS
 
 # --- Parameters -------------------------------------------------------------
 PRICE_TABLE = "daily_bars_adjusted"       # split-adjusted (raw daily_bars forbidden)

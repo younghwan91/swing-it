@@ -2,7 +2,7 @@
 """선별형 전략 walk-forward 검증 — "모멘텀 선별이 R-분포를 굽힌다"를 look-ahead 없이 승격.
 
 **얇은 러너**: θ 학습(TRAIN 분위)→TEST 적용의 no-lookahead fold 슬라이스와 굽힘 재현성
-집계는 전부 ``kr_quant.validation.walkforward`` 한 곳에서 온다(fold_slices/fold_consistency/
+집계는 전부 ``swing_it.validation.walkforward`` 한 곳에서 온다(fold_slices/fold_consistency/
 rdist). FOLDS 는 라이브러리 frozen 기본값. 여기선 신호 배선(simulate_detailed)과 print만.
 
 지난 선별 곡선의 함정: "그 기간 상위 X%"는 기간 전체를 본 뒤 랭킹 → 미묘한 look-ahead.
@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from kr_quant.validation.optimization import TRAIN_HI
-from kr_quant.validation.walkforward import FOLDS, fold_consistency
+from swing_it.validation.optimization import TRAIN_HI
+from swing_it.validation.walkforward import FOLDS, fold_consistency
 from research.signals.contrarian_retail import _load_env_db, load_data, simulate_detailed
 
 PARAMS = dict(window=8, top_mom=0.80, ext_q=0.85, stop=0.10, trail=0.20, hold=60)
