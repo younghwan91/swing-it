@@ -68,7 +68,7 @@ DB 에 접속하지 않는다. 일일 배치가 만들어 둔 리포트 JSON 만
 
 ## 2. 설치와 실행
 
-**요구사항:** Python 3.10 이상, [uv](https://docs.astral.sh/uv/). DB 없이 화면만 보려면
+**요구사항:** Python 3.11 이상, [uv](https://docs.astral.sh/uv/). DB 없이 화면만 보려면
 (§2.3) 이걸로 끝이고, 리포트를 직접 만들려면(§2.1) PostgreSQL/TimescaleDB 접속정보가
 추가로 필요하다.
 
