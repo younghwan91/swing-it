@@ -211,6 +211,7 @@ def test_rule_i_flags_a_foreign_commit_identity(tmp_path, monkeypatch):
                               text=True, check=False, **kw)
 
     git("init", "-q")
+    git("config", "core.hooksPath", "")  # 전역 커밋 신원 훅이 이 임시 레포까지 잡아 위반 주입용 커밋을 막는 걸 방지
     git("config", "user.name", "T")
     git("config", "user.email", "me@example.com")
     (repo / "f.txt").write_text("x", encoding="utf-8")
@@ -278,6 +279,7 @@ def test_identity_allows_github_merge_commits_but_not_other_addresses(lint, tmp_
                               text=True, check=False, env=env)
 
     git("init", "-q")
+    git("config", "core.hooksPath", "")  # 전역 커밋 신원 훅이 이 임시 레포까지 잡아 위반 주입용 커밋을 막는 걸 방지
     git("config", "user.name", "T")
     git("config", "user.email", "me@example.com")
     (repo / "f.txt").write_text("x", encoding="utf-8")
