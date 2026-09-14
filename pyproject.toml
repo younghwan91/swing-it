@@ -18,7 +18,7 @@ dependencies = [
     "pandas>=2.0",
     # 검증 통계·성과지표·횡단면 루프·가격제한폭의 정본. 세 레포(scalp-it·daytrade-it·
     # swing-it)가 같은 수익열에서 같은 숫자를 내게 하려고 공유한다. 태그로 고정.
-    "krx-quant-core @ git+https://github.com/younghwan91/krx-quant-core@v0.1.1",
+    "krx-quant-core==0.1.1",
 ]
 
 [project.optional-dependencies]
@@ -41,10 +41,6 @@ sw-ledger = "swing_it.tui.ledger_app:main"
 
 [project.urls]
 Repository = "https://github.com/younghwan91/swing-it"
-
-[tool.hatch.metadata]
-# krx-quant-core 를 git 태그로 직접 참조한다(PyPI 미배포).
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swing_it"]
