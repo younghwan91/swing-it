@@ -33,9 +33,14 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from krx_quant_core.market.limits import LIMIT_RATE
 
-LIMIT = LIMIT_RATE  # 한국 일일 가격제한 ±30%(정본: krx_quant_core) — 넘는 종가변동은 데이터 아티팩트
+# 한국 일일 가격제한 ±30% — 이를 넘는 종가변동은 데이터 아티팩트.
+# krx_quant_core.market.limits.LIMIT_RATE 와 같은 값이지만 **import 하지 않는다.**
+# 이 모듈은 quant-airflow 의 daily/weekly_price_adjust DAG 가 swing-it 작업 트리를
+# PYTHONPATH 로 직접 실행한다 — pyproject 의존성이 설치되지 않는 환경이라, 코어를
+# import 하자 2026-09-14 16:55 런이 `No module named 'krx_quant_core'` 로 죽었다.
+# 이 파일은 numpy·pandas 외 의존성을 늘리지 않는다.
+LIMIT = 0.30
 DOWN = 1 - LIMIT  # 0.70
 UP = 1 / DOWN  # ≈1.4286 (역분할/기준상향)
 PERSIST_DAYS = 3  # 새 레벨이 유지되어야 분할로 인정(일시 스파이크 배제)
