@@ -18,7 +18,7 @@ dependencies = [
     "pandas>=2.0",
     # 검증 통계·성과지표·횡단면 루프·가격제한폭의 정본. 세 레포(scalp-it·daytrade-it·
     # swing-it)가 같은 수익열에서 같은 숫자를 내게 하려고 공유한다. 태그로 고정.
-    "krx-quant-core==0.1.1",
+    "krx-quant-core==0.4.1",
 ]
 
 [project.optional-dependencies]
