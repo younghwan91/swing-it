@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 
 from swing_it.diagnostics.fragility import fragility_report, monster_share
+from swing_it.diagnostics.runs import record_gate_run
 from swing_it.diagnostics.trials import count_trials, record_trial
 from swing_it.diagnostics.gate_report import gate_report
 from swing_it.diagnostics.r_distribution import dist_shape, r_multiples
@@ -270,6 +271,13 @@ def prop_gate(
         "untouched": untouched,
         "gate_report": gr,
     }
+    if config is not None:
+        # simnode 체크아웃에서만 실행 기록(research/runs/<label>/RUNS.jsonl) — 판정 키는 넣지 않는다.
+        record_gate_run(
+            led_label, config, entry_range=entry_range, logs_dir=led_dir,
+            result={"n_total": n_total, "primary_cost": float(primary_cost),
+                    "cost_edge_dies": gr.get("cost_edge_dies"), "n_trials": n_trials},
+        )
     if verbose:
         _print_summary(report)
     return report

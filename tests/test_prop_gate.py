@@ -198,3 +198,54 @@ def test_prop_gate_without_config_is_unchanged(tmp_path, monkeypatch):
     rep = prop_gate(entry, rng.normal(0.01, 0.05, n), 0.10, label="none", verbose=False)
     assert rep["gate_report"].get("deflation") is None
     assert not (tmp_path / "research").exists()
+
+
+def test_prop_gate_writes_run_record_on_simnode_checkout(tmp_path, monkeypatch):
+    """simnode 의 git 체크아웃이면 실행 기록이 남고, 시행 원장(research/logs)은 중복 계산되지 않는다."""
+    import json
+    import subprocess
+
+    import numpy as np
+
+    from swing_it.diagnostics import trials
+    from research.experiments.prop_gate import prop_gate
+
+    monkeypatch.delenv("KQC_RUNS_ROOT", raising=False)
+    monkeypatch.delenv("KR_QUANT_DB", raising=False)
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "core.hooksPath=/dev/null", "-c",
+                    "user.email=t@example.com", "-c", "user.name=t", "commit", "-q",
+                    "--allow-empty", "-m", "init"], check=True)
+    monkeypatch.setattr(trials, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("socket.gethostname", lambda: "simnode")
+    rng = np.random.default_rng(0)
+    n = 400
+    entry = np.array([f"2023-{1 + i % 12:02d}-15" for i in range(n)])
+    ret = rng.normal(0.01, 0.05, n)
+
+    for cfg in ({"a": 1}, {"a": 1}, {"a": 2}):
+        rep = prop_gate(entry, ret, 0.10, label="tl", config=cfg, verbose=False)
+    assert rep["gate_report"]["deflation"]["n_trials"] == 2
+    runs_file = tmp_path / "research" / "runs" / "tl" / "RUNS.jsonl"
+    rows = [json.loads(x) for x in runs_file.read_text().splitlines()]
+    assert [r["event"] for r in rows] == ["start", "end"] * 3
+    assert rows[-2]["n_trials"] == 2 and rows[-2]["data"]["start"] == "2023-01-15"
+    assert rows[-1]["result"]["n_total"] == n
+    assert (tmp_path / "research" / "logs" / "tl" / "TRIALS.jsonl").exists()
+    assert not (tmp_path / "research" / "runs" / "tl" / "TRIALS.jsonl").exists()
+
+
+def test_prop_gate_off_simnode_writes_no_run_record(tmp_path, monkeypatch):
+    import numpy as np
+
+    from swing_it.diagnostics import trials
+    from research.experiments.prop_gate import prop_gate
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(trials, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("socket.gethostname", lambda: "github-runner")
+    rng = np.random.default_rng(0)
+    entry = np.array([f"2023-{1 + i % 12:02d}-15" for i in range(300)])
+    prop_gate(entry, rng.normal(0.01, 0.05, 300), 0.10, label="tl", config={"a": 1},
+              verbose=False)
+    assert not (tmp_path / "research" / "runs").exists()
