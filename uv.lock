@@ -493,7 +493,7 @@ wheels = [
 
 [[package]]
 name = "krx-quant-core"
-version = "0.4.1"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "kiwoom-client" },
@@ -501,9 +501,9 @@ dependencies = [
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pandas" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a0/33/96464da0831f1b23ffd7104cd1815d7efffc651c884238e9ea9a75de09fa/krx_quant_core-0.4.1.tar.gz", hash = "sha256:8d9fc84e0cbffbf16db5a5f4992221ade1f38707e6448b0f3c863f698628746e", size = 200715, upload-time = "2026-09-15T14:37:46.987Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/f7/6a08ba724cd1d787e3f6b363009012a87fba5236ac9bb815aa2b4d7632c1/krx_quant_core-0.6.0.tar.gz", hash = "sha256:bb23b53beb1fe0d8bffdda308cfc98a25a7ba87c9997722bb32516335f7d3872", size = 354456, upload-time = "2026-10-04T15:20:45.491Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/d2/3830ae8d3696311d55aa61aa7620d0f4b4d08004cd845b17094125d508ec/krx_quant_core-0.4.1-py3-none-any.whl", hash = "sha256:bdc8499105e2e3409213ef13af3f287b6cfc3ea67dfbdc12abda7d4d3d92da9b", size = 124050, upload-time = "2026-09-15T14:37:45.677Z" },
+    { url = "https://files.pythonhosted.org/packages/71/9a/e9fe833de12798a32a1f927032a9c8aea556d2e72837a4aefc55c2fd46b4/krx_quant_core-0.6.0-py3-none-any.whl", hash = "sha256:be2d3389c83a97c031a7311ac7ccbe77dc0c113b161d433e217d5cae417ca147", size = 205000, upload-time = "2026-10-04T15:20:43.918Z" },
 ]
 
 [[package]]
@@ -1069,7 +1069,7 @@ viz = [
 
 [package.metadata]
 requires-dist = [
-    { name = "krx-quant-core", specifier = "==0.4.1" },
+    { name = "krx-quant-core", specifier = "==0.6.0" },
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
     { name = "pandas", specifier = ">=2.0" },
