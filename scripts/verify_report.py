@@ -969,7 +969,14 @@ def layer_g(P: dict, D: dict) -> None:
     three = [v for ko in ("개인", "외국인", "기관") for v, *_ in obs[ko]]
     etc = [v for v, *_ in obs["기타법인"]]
     lo3, hi3 = min(three), max(three)
-    txt = "\n".join(LV.LIMITS) + "\n".join(d for _n, d in LV.LEDGER_HELP)
+    # **그려진 글**을 본다(소스 상수가 아니라). 한계 §6·도움말 `널` 의 범위는
+    # 이제 연 리포트에서 재서 끼운다(`ledger_view.comove_claims`) — 예전엔
+    # "2~43%(09-04)" 를 박아 둬서 27일 중 25일 이 검사가 빨갰다. 상수를 보면
+    # 자리표(`{C3}`)만 보이고, 끼우는 배선이 끊겨도 모른다. 폭은 넉넉히 —
+    # 줄바꿈이 범위 문자열을 가르면 있는 것을 없다고 한다.
+    txt = LV.render_text(LV.Model(P), 400)
+    left = [t for t in LV.COMOVE_TOKENS if t in txt]
+    chk("G", "도움말·한계에 끼우지 못한 자리표가 없는가", not left, " ".join(left))
     chk("G", "도움말·한계의 동시성 범위가 오늘 실측을 덮는가(β제거 끈 상태)",
         f"{lo3:.0f}~{hi3:.0f}%" in txt,
         f"실측 개인·외국인·기관 {lo3:.0f}~{hi3:.0f}% · "
@@ -1382,7 +1389,7 @@ def _advertised(text: str) -> set:
     """
     out = set()
     for tok in text.split():
-        head = re.split(r"[:%s]" % _HANGUL, tok, 1)[0]
+        head = re.split(r"[:%s]" % _HANGUL, tok, maxsplit=1)[0]
         for part in re.split(r"[/·]", head):
             part = part.strip()
             if part in _KEY_WORDS:
@@ -1746,30 +1753,104 @@ def layer_h(D: dict, P: dict) -> None:
     chk("H", "q·Esc·? 가 모든 화면에서 같은 뜻인가", not bad, "; ".join(bad[:4]))
 
     # g/G — 커서가 있는 화면이면 처음/끝이다.
-    bad = []
+    #
+    # ⚠️ **"끝" 은 그 화면 목록의 마지막 행이다 — 고정된 수가 아니다.** 예전엔
+    # 커서를 3 에 두고 G 뒤에 `> 3` 인지를 봤다. 그건 목록이 5행 이상이라는
+    # 가정이고, 관문(a·x·ẍ 전부 양수)을 통과한 섹터가 적은 날에는 전 종목(t)이
+    # 0~2행, 종합은 0행(G 가 나오는 창이 2개 미만)이라 **커서가 정확히 끝에
+    # 가 있는데도** "끝으로 안 간다" 고 했다(2026-09-07: 2행에서 arow=1 = 끝).
+    # 2026-09~10 리포트 27일 중 그 이유로만 빨간 날이 십여 일이다. 그래서 기대값을
+    # 화면의 목록 크기에서 꺼내고, 목록이 빈 날은 **목록이 있는 구간·시장을
+    # 찾아** 거기서 잰다 — 빈 목록에서 "0 이면 맞다" 로 통과하면 아무것도 안 본다.
+    flow_cur = {"섹터 표": ("row", lambda st: len(st.rows())),
+                "종합": ("row", lambda st: len(st.rows())),
+                "드릴다운": ("drow", lambda st: len(st.names())),
+                "전 종목(t)": ("arow", lambda st: len(st.all_picks())),
+                # 도움말의 끝은 마지막 줄이 아니라 **마지막 한 화면의 첫 줄**이다
+                # (`handle_key` 의 help_page 기본 10).
+                "도움말": ("hrow", lambda st: max(
+                    FV.help_lines(80, 0, 10**6)[1] - 10, 0) + 1)}
+
+    def populated(name, mk):
+        """(상태 생성기, 목록 크기) — 목록이 빈 날은 **찬 구간·시장**을 찾는다.
+
+        커서는 `min(3, 끝)` 에 둔다. 3 은 "0 이 아닌 중간" 이라는 뜻이지 행 수에
+        대한 가정이 아니다 — 2행짜리 목록에 커서 3 은 앱이 만들 수 없는 상태다.
+        """
+        cur, size = flow_cur[name]
+        base = mk()
+        cands = [(base.wi, base.mi)]
+        if name != "도움말":
+            wis = [base.wi] if name == "종합" else [
+                i for i, w in enumerate(FV.WINDOWS) if w != "종합"]
+            cands += [(wi, mi) for wi in wis for mi in range(len(base.markets))]
+        for wi, mi in cands:
+            o = mk()
+            o.wi, o.mi = wi, mi
+            n = size(o)
+            if n > 0:
+                break
+        else:
+            wi, mi, n = base.wi, base.mi, 0
+
+        def make():
+            o = mk()
+            o.wi, o.mi = wi, mi
+            setattr(o, cur, min(3, max(n - 1, 0)))
+            return o
+        return make, n
+
+    def ledger_last(mk, cur, name):
+        """원장 화면의 끝 — **그리는 쪽이 정한다.** 커서를 한참 넘겨 두고 한 번
+        그리면 `screen()` 이 끝으로 잘라 되돌려 적는다(행·스크롤 화면 공통).
+        도움말은 모달이라 `screen()` 이 안 자른다 — 키 처리의 하한(`_key` 의
+        page=10)을 그대로 쓴다."""
+        if name == "도움말":
+            return max(LV.help_total() - 10, 0)
+        e = mk()
+        setattr(e, cur, 10**6)
+        LV.screen(e, 100, 30)
+        return getattr(e, cur)
+
+    bad, unseen = [], []
     for app, name, mk, ap, f, _t in SCREENS:
-        # 원장 쪽은 **모델에게 묻는다**(`Model.scroll_attr`). 여기 표를 따로 들면
-        # 화면이 제 자리를 옮겼을 때 검사만 옛 자리를 보고 "키가 안 듣는다"고
-        # 한다 — 동시성이 `row` 를 떠나 `crow` 로 갈 때 실제로 그랬다.
-        # 도움말은 화면이 아니라 모달이라 표에 남는다.
-        cur = ({"섹터 표": "row", "종합": "row", "드릴다운": "drow",
-                "전 종목(t)": "arow", "도움말": "hrow"}[name] if app == "flow"
-               else "help_row" if name == "도움말" else mk().scroll_attr)
+        if app == "flow":
+            cur, size = flow_cur[name]
+            mk, _n0 = populated(name, mk)
+            last = max(size(mk()), 1) - 1
+        else:
+            # 원장 쪽은 **모델에게 묻는다**(`Model.scroll_attr`). 여기 표를 따로
+            # 들면 화면이 제 자리를 옮겼을 때 검사만 옛 자리를 보고 "키가 안
+            # 듣는다"고 한다 — 동시성이 `row` 를 떠나 `crow` 로 갈 때 실제로
+            # 그랬다. 도움말은 화면이 아니라 모달이라 표에 남는다.
+            cur = "help_row" if name == "도움말" else mk().scroll_attr
+            last = ledger_last(mk, cur, name)
+        if last == 0:
+            # 처음과 끝이 같은 자리면 g·G 가 듣는지 **볼 수 없다.** 통과로
+            # 세지 않고 못 봤다고 적는다.
+            unseen.append(f"{app}/{name}")
         for k, want_zero in ((ord("g"), True), (curses.KEY_HOME, True),
                              (ord("G"), False), (curses.KEY_END, False)):
             o = mk()
+            # 출발점은 **반대쪽**이다 — 처음으로 가는 키는 0 이 아닌 곳에서,
+            # 끝으로 가는 키는 0 에서. 출발점이 이미 목적지면 키가 죽어 있어도
+            # 통과한다(짧은 목록에서 `min(3, 끝)` 이 곧 끝이다).
+            setattr(o, cur, min(3, last) if want_zero else 0)
             ap(o, k)
             if app == "ledger":
                 # 원장은 행 수를 **그리는 쪽만** 안다 — 루프가 그러듯 한 번 그려
                 # 잘라 되돌려 적게 한 뒤에 본다(끝을 지나 쌓이던 자리다).
                 LV.screen(o, 100, 30)
             v = getattr(o, cur)
+            kn = chr(k) if k < 256 else ("Home" if want_zero else "End")
             if want_zero and v != 0:
-                bad.append(f"{app}/{name} {chr(k) if k < 256 else 'Home'} → {cur}={v}")
-            if not want_zero and v <= 3:
-                bad.append(f"{app}/{name} G/End 가 끝으로 안 간다 ({cur}={v})")
+                bad.append(f"{app}/{name} {kn} → {cur}={v}")
+            elif not want_zero and v != last:
+                bad.append(f"{app}/{name} {kn} 가 끝으로 안 간다 "
+                           f"({cur}={v}, 끝={last})")
     chk("H", "g·Home 은 처음 · G·End 는 끝 — 커서가 있는 모든 화면에서",
-        not bad, f"{len(bad)}건  " + "; ".join(bad[:4]))
+        not bad, f"{len(bad)}건  " + "; ".join(bad[:4])
+        + (f"  (처음=끝이라 못 본 화면: {', '.join(unseen)})" if unseen else ""))
 
     # t — 전 종목 화면을 여는 키. 도움말이 화면을 가리지 않는 한 어디서나 같다.
     bad = []
@@ -1795,12 +1876,18 @@ def layer_h(D: dict, P: dict) -> None:
     chk("H", "w·m·a 가 도움말 밖 모든 화면에서 듣는가", not bad, "; ".join(bad[:4]))
 
     # --- 커서가 상태 변경에서 살아남는가 -----------------------------------
+    # 시작 상태는 **앱이 만들 수 있는 상태**여야 한다. 예전엔 목록 크기와 무관하게
+    # 커서를 3 에 두고 시작해서, 전 종목(t)이 0행인 날 정렬이 없는 그 화면에서
+    # `s`·`r` 이 (설계대로) 아무 일도 안 하자 "arow=3 (행 0)" 이라고 했다 — 범위를
+    # 벗어난 것은 키가 아니라 검사가 만든 출발점이었다. 출발점은 `populated` 가
+    # 정한다(찬 목록 + 커서 min(3, 끝)). 목록이 줄어드는 키(`w`·`m`·`a`)가
+    # 커서를 따라 줄이는지는 그대로 본다.
     bad = []
     for k in "wWmMaAsSr":
         for name, cur, size in (("섹터 표", "row", lambda st: len(st.rows())),
                                 ("드릴다운", "drow", lambda st: len(st.names())),
                                 ("전 종목(t)", "arow", lambda st: len(st.all_picks()))):
-            st = [s for s in SCREENS if s[1] == name][0][2]()
+            st = populated(name, [s for s in SCREENS if s[1] == name][0][2])[0]()
             FA.handle_key(st, ord(k))
             n = size(st)
             v = getattr(st, cur)

@@ -772,3 +772,50 @@ def _corr(a, b) -> float:
 
 def neg_frac(v):
     return sum(1 for c in v if c < 0) / len(v)"""
+
+[[mutation]]
+id = "comove-range-hardcoded-again"
+why = """한계 §6 의 동시성 범위를 다시 고정 숫자로 박는다. 그 범위는 창이 하루씩
+밀릴 때마다 움직이는 관측값이라, 박아 둔 "2~43%(09-04)" 때문에 일일 검증 G 층이
+27일 중 25일 빨갰다 — 경보가 소음이 됐다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_range_in_limits_and_help_is_measured_from_the_open_payload"]
+file = "src/swing_it/tui/ledger_view.py"
+find = "\"   널을 못 이긴다 — 개인·기관·외국인은 음의 상관 쌍이 관측 **{C3}** 로\","
+replace = "\"   널을 못 이긴다 — 개인·기관·외국인은 음의 상관 쌍이 관측 **2~43%** 로\","
+
+[[mutation]]
+id = "comove-ranges-leaves-state-changed"
+why = """범위를 재느라 돌린 시장·구간·주체·β제거를 안 되돌린다. 도움말·한계를
+열었다 닫았더니 보던 화면이 다른 시장·구간으로 바뀌어 있게 된다."""
+guards = ["tests/test_tui_ledger_view.py::test_comove_range_in_limits_and_help_is_measured_from_the_open_payload"]
+file = "src/swing_it/tui/ledger_view.py"
+find = "            self.mi, self.wi, self.ai, self.detrend = keep"
+replace = "            pass"
+
+[[mutation]]
+id = "allv-end-stops-one-short"
+why = """전 종목(t)의 G/End 가 끝 한 칸 앞에 선다. 짧은 목록(2~4행)에서만 드러나는
+부류라, 예전 검증(`> 3`)은 원리적으로 못 잡았다."""
+guards = ["tests/test_tui_flow_view.py::test_the_cross_sector_list_end_key_lands_on_its_true_last_row"]
+file = "src/swing_it/tui/flow_app.py"
+find = "            st.arow = m - 1"
+replace = "            st.arow = max(m - 2, 0)"
+
+[[mutation]]
+id = "verify-end-check-assumes-five-rows"
+why = """검증 H 층의 끝 키 판정을 예전 `> 3` 으로 되돌린다. 관문 통과 섹터가 적은 날
+전 종목·종합이 0~2행이라 커서가 정확히 끝에 있는데도 빨갰다(2026-09~10 십여 일)."""
+guards = ["tests/test_verify_report.py::test_end_key_check_accepts_the_true_last_row_of_a_short_list"]
+file = "scripts/verify_report.py"
+find = "            elif not want_zero and v != last:"
+replace = "            elif not want_zero and v <= 3:"
+
+[[mutation]]
+id = "verify-cursor-check-starts-out-of-range"
+why = """검증 H 층의 커서 범위 검사가 목록 크기와 무관하게 커서 3 에서 출발한다.
+2행 목록에서 안 듣는 `s`·`r` 뒤에 "arow=3 (행 2)" 라는 거짓 경보가 난다 —
+범위를 벗어난 것은 키가 아니라 검사가 만든 출발점이다."""
+guards = ["tests/test_verify_report.py::test_cursor_range_check_starts_from_a_state_the_app_can_reach"]
+file = "scripts/verify_report.py"
+find = "            setattr(o, cur, min(3, max(n - 1, 0)))"
+replace = "            setattr(o, cur, 3)"

@@ -317,6 +317,7 @@ class Model:
         self.help_row = 0
         self._corr_cache: dict = {}
         self._null_cache: dict = {}
+        self._comove_rng: dict | None = None
         # ⚠️ 캐시 키에 **정렬이 의존하는 것까지** 넣는다. `sort_key == "actor"` 도,
         # `spike`·`최대일몫` 도 고른 주체의 값이라 **actor 가 키에 있어야 한다.**
         # `sw-flow` 가 바로 이 자리에서 물렸다(역순이 키에 빠져 `r` 이 안 먹었다).
@@ -645,6 +646,45 @@ class Model:
             return None
         return neg_frac(m[i][j] for i in range(len(keys))
                         for j in range(i + 1, len(keys)))
+
+    def comove_ranges(self) -> dict:
+        """시장 × 구간(≥ :data:`_MIN_CORR_N`) **전수**의 관측 음수쌍 비율[%].
+
+        한계 §6·도움말 `널` 이 적는 범위의 출처다(:func:`comove_claims`).
+        ``{"off": {주체: [%…]}, "on": {…}, "n_markets", "n_windows"}`` —
+        ``off`` 는 β제거 끈 상태(4주체), ``on`` 은 켠 상태(개인·외국인·기관;
+        기타법인은 켠 상태를 글에 안 적으므로 재지 않는다).
+
+        관측만 잰다 — 널(순환이동 20번)은 조합당 수십 ms 라 전수면 수 초다.
+        글이 인용하는 것은 관측 범위뿐이고, 널 대비 판정은 판정줄의 몫이다.
+        실측(2026-10-07 리포트, 27섹터·260일): 처음 한 번 약 0.9초, 이후 캐시.
+        그래서 한계 화면·도움말을 **처음 열 때** 한 번 잰다.
+
+        ⚠️ 상태(시장·구간·주체·β제거)를 돌려 가며 재므로 **반드시 되돌린다** —
+        도움말을 열었다 닫았더니 보던 시장이 바뀌어 있으면 그건 다른 버그다.
+        """
+        if self._comove_rng is not None:
+            return self._comove_rng
+        keep = (self.mi, self.wi, self.ai, self.detrend)
+        wins = [wi for wi, w in enumerate(WINDOWS) if w >= _MIN_CORR_N]
+        out: dict = {"off": {}, "on": {}, "n_markets": len(self.markets),
+                     "n_windows": len(wins)}
+        try:
+            for det, tag in ((False, "off"), (True, "on")):
+                for mi in range(len(self.markets)):
+                    for wi in wins:
+                        for ai, (k, _ko) in enumerate(ACTORS):
+                            if det and k == "etc":
+                                continue
+                            self.mi, self.wi, self.ai, self.detrend = mi, wi, ai, det
+                            v = self.obs_neg_frac()
+                            if v is None or v != v:
+                                continue
+                            out[tag].setdefault(k, []).append(v * 100)
+        finally:
+            self.mi, self.wi, self.ai, self.detrend = keep
+        self._comove_rng = out
+        return out
 
 
 # ---------------------------------------------------------------- 렌더
@@ -987,11 +1027,12 @@ def comove_lines(mo: Model, width: int) -> tuple[list[str], list[tuple], int]:
     그림을 못 봐도 ``평균`` 열과 셋째 줄이 같은 결론을 글자로 남긴다.
 
     헤더가 스스로 답한다 — "이 무늬가 우연보다 두드러지나". 순수 노이즈면 음수쌍이
-    50% 다. 개인·기관·외국인은 **2~43%**(β제거 끈 상태, 시장 3 × 구간 4 = 12조합
-    전수, 2026-09-04) 라 섹터들이 서로 **반대가 아니라 같이** 움직인다.
-    **기타법인은 41~54% 로 널과 구분되지 않는다** — 그리고 ``d`` 로 β제거를 켜면
-    셋도 17~53% 라 판정이 뒤집히는 조합이 있다. 주체마다·설정마다 다르므로 범위
-    하나로 단정하지 말고 헤더의 판정줄을 읽어야 한다.
+    50% 다. 개인·기관·외국인은 β제거 끈 상태로 시장 × 구간 전수에서 그보다
+    훨씬 낮아(2026-09~10 리포트들에서 하한 2~3%, 상한 42~48%) 섹터들이 서로
+    **반대가 아니라 같이** 움직인다. 기타법인은 널 근처(39~59%)다. 정확한 범위는
+    날마다 움직이므로 글에 박지 않고 :meth:`Model.comove_ranges` 가 연 리포트에서
+    잰다(한계 §6·도움말 `널`). 주체마다·설정마다 다르므로 범위 하나로 단정하지
+    말고 헤더의 판정줄을 읽어야 한다.
 
     ⚠️ 번호→이름 범례를 행렬 **아래**에 12줄로 두던 것을 없앴다. 폭 80·높이 24
     에서는 행이 15개만 보이는데 범례가 화면 밖이라, 정작 행렬을 보는 동안 열이
@@ -1097,13 +1138,14 @@ LIMITS = [
     "   크다는 사실을 지운다 — 그래서 별도 열로 남긴다.",
     "",
     "6. 섹터쌍 상관은 **동시성**이지 이동이 아니다. 그리고 이 데이터에서는 동시성조차",
-    "   널을 못 이긴다 — 개인·기관·외국인은 음의 상관 쌍이 관측 **2~43%** 로",
+    "   널을 못 이긴다 — 개인·기관·외국인은 음의 상관 쌍이 관측 **{C3}** 로",
     "   널(50%)보다 **드물다**. 섹터 자금흐름은 공통요인(위험선호)이 지배한다.",
-    "   범위는 β제거 끈 상태로 시장 3 × 구간 4 = **12조합 전수**를 잰 값이다(2026-09-04).",
-    "   β제거(d)를 켜면 셋도 17~53% 라 판정이 뒤집히는 조합이 있다.",
+    "   범위는 β제거 끈 상태로 {COMBOS} **전수**를 **이 리포트({ASOF})로** 잰 값이다.",
+    "   β제거(d)를 켜면 셋은 {C3D} 다 — 판정은 조합마다 판정줄이 말한다.",
     "   예전엔 17~34% 라 적혀 있었는데 그건 잰 적 없는 좁은 범위였다 —",
-    "   실측 주장은 **잰 범위와 같이** 적어야 한다.",
-    "   **기타법인은 예외다** — 41~54% 라 구간을 어떻게 잡아도 널과 구분되지 않는다.",
+    "   실측 주장은 **잰 범위와 같이** 적어야 한다. 그 뒤 적어 둔 2~43%(09-04)도",
+    "   날마다 어긋나서(이후 27일 하한 2~3%·상한 42~48%), 이제 리포트를 열 때 잰다.",
+    "   **기타법인은 예외다** — {ETC} 라 구간을 어떻게 잡아도 널과 구분되지 않는다.",
     "   그 주체에 대해서는 '같이 움직인다'도 '반대로 움직인다'도 말할 수 없다.",
     "   화면 상단 판정줄이 고른 주체·구간에 대해 그때그때 답한다 — 그걸 읽어라.",
     "",
@@ -1167,13 +1209,73 @@ def wrap_cells(text: str, width: int) -> list[str]:
     return fixed
 
 
-def limits_body(width: int) -> list[str]:
+#: 한계 §6·도움말 `널` 이 **오늘 페이로드로 잰 값**을 끼우는 자리.
+#:
+#: 예전엔 "2~43%(2026-09-04)" 를 글로 박아 뒀다. 그 범위는 창이 하루씩 밀릴
+#: 때마다 움직이는 **관측값**이라(이후 27일 실측 하한 2~3%, 상한 42~48%),
+#: 적은 다음 날부터 거의 매일 틀렸고 `verify_report` G 층이 27일 중 25일을
+#: 빨갛게 칠했다 — 경보가 배경 소음이 됐다. 숫자를 매번 고쳐 적는 것은 같은
+#: 일을 내일 다시 하는 것이고, 검사 허용폭을 넓히는 것은 틀린 숫자를 눈감는
+#: 것이다. 그래서 **화면이 연 리포트에서 잰다**(:meth:`Model.comove_ranges`).
+COMOVE_TOKENS = ("{C3}", "{C3D}", "{ETC}", "{COMBOS}", "{ASOF}")
+
+#: 잴 수 없을 때(구간이 전부 :data:`_MIN_CORR_N` 미만, 모델 없음) 끼우는 말.
+#: 숫자처럼 보이는 것을 지어내지 않는다 — 틀린 값보다 없는 값이 낫다.
+_UNMEASURED = "(잴 구간 없음)"
+
+
+def _fmt_range(vals: list[float]) -> str:
+    """``verify_report`` G 층과 **같은 반올림**(``{:.0f}``)이다 — 최소·최대를
+    먼저 고른 뒤에 반올림한다. 반올림한 뒤 고르면 경계에서 1%p 갈린다."""
+    if not vals:
+        return _UNMEASURED
+    return f"{min(vals):.0f}~{max(vals):.0f}%"
+
+
+def comove_claims(mo: "Model | None") -> dict[str, str]:
+    """자리표(:data:`COMOVE_TOKENS`) → 끼울 글자. 모델이 없으면 '잴 수 없음'."""
+    if mo is None:
+        return {t: _UNMEASURED for t in COMOVE_TOKENS}
+    r = mo.comove_ranges()
+    three = ("indiv", "forgn", "inst")
+    return {
+        "{C3}": _fmt_range([v for k in three for v in r["off"].get(k, [])]),
+        "{C3D}": _fmt_range([v for k in three for v in r["on"].get(k, [])]),
+        "{ETC}": _fmt_range(r["off"].get("etc", [])),
+        "{COMBOS}": (f"시장 {r['n_markets']} × 구간 {r['n_windows']} = "
+                     f"{r['n_markets'] * r['n_windows']}조합"),
+        "{ASOF}": mo.dates[-1] if mo.dates else "—",
+    }
+
+
+def _fill(text: str, claims: dict[str, str]) -> str:
+    for tok, val in claims.items():
+        if tok in text:
+            text = text.replace(tok, val)
+    return text
+
+
+def limits_text(mo: "Model | None" = None) -> list[str]:
+    """:data:`LIMITS` 에 오늘 잰 값을 끼운 것 — 화면·평문·검증이 **이것**을 본다."""
+    c = comove_claims(mo)
+    return [_fill(t, c) for t in LIMITS]
+
+
+def ledger_help(mo: "Model | None" = None) -> list[tuple[str, str]]:
+    """:data:`LEDGER_HELP` 에 오늘 잰 값을 끼운 것."""
+    c = comove_claims(mo)
+    return [(n, _fill(d, c)) for n, d in LEDGER_HELP]
+
+
+def limits_body(width: int, mo: "Model | None" = None) -> list[str]:
     """한계 화면의 본문 — curses 와 `--dump` 가 **같은 것**을 쓴다."""
-    return [ln for t in LIMITS for ln in (wrap_cells(t, width) if t.strip() else [""])]
+    return [ln for t in limits_text(mo)
+            for ln in (wrap_cells(t, width) if t.strip() else [""])]
 
 
-def limits_lines(width: int, top: int, height: int) -> tuple[list[str], int]:
-    body = [pad(t, width) for t in limits_body(width)]
+def limits_lines(width: int, top: int, height: int,
+                 mo: "Model | None" = None) -> tuple[list[str], int]:
+    body = [pad(t, width) for t in limits_body(width, mo)]
     top = max(0, min(top, max(0, len(body) - height)))
     return body[top:top + height], len(body)
 
@@ -1322,12 +1424,12 @@ LEDGER_HELP = [
     ("", "           구간이 20일 미만이면 상관을 아예 내지 않는다."),
     ("널", "각 계열을 **무작위로 순환이동**해 20번 다시 잰 음의 상관 쌍 비율."),
     ("", "           순수 노이즈면 50% 다. **주체마다 다르다** — 개인·기관·외국인은"),
-    ("", "           **2~43%** 로 널보다 낮다(섹터는 반대가 아니라 **같이** 움직인다)."),
-    ("", "           범위는 β제거 끈 상태로 12조합 전수다(시장 3 × 구간 4, 09-04)."),
-    ("", "           β제거(d)를 켜면 셋도 17~53% 라 판정이 뒤집히는 조합이 있다."),
+    ("", "           **{C3}** 로 널보다 낮다(섹터는 반대가 아니라 **같이** 움직인다)."),
+    ("", "           β제거 끈 상태 {COMBOS} 전수 — 이 리포트로 잰다."),
+    ("", "           β제거(d)를 켜면 셋은 {C3D} 다 — 판정은 판정줄이 말한다."),
     ("", "           실측 주장은 **잰 범위와 같이** 적어야 한다 — 예전의 17~34% 는"),
     ("", "           그러지 않았다(근거 스크립트의 260일 값을 화면의 범위로 적었다)."),
-    ("", "           기타법인은 41~54% 로 **널과 구분되지 않는다.** 판정줄이 화면에서"),
+    ("", "           기타법인은 {ETC} 로 **널과 구분되지 않는다.** 판정줄이 화면에서"),
     ("", "           그때그때 말해 주니 숫자를 외우지 말고 그 줄을 읽어라."),
     ("", "           그리고 상관은 **동시성이지 이동이 아니다.** 돈에 꼬리표가 없다."),
     ("β제거 (d)", "시총가중 시장요인을 회귀로 뺀 잔차. 기본은 꺼둔다 — 켜면 가장 음인"),
@@ -1349,7 +1451,8 @@ LEDGER_HELP = [
 ]
 
 
-def help_body(width: int, offset: int = 0, height: int = 10**6):
+def help_body(width: int, offset: int = 0, height: int = 10**6,
+              mo: "Model | None" = None):
     """도움말 본문 — 렌더는 ``flow_view.help_lines`` 를 **그대로** 쓴다.
 
     ``sw-flow`` 와 ``sw-ledger`` 는 같은 제품이다. 도움말 렌더가 두 벌이면
@@ -1357,7 +1460,7 @@ def help_body(width: int, offset: int = 0, height: int = 10**6):
     이 저장소는 오늘 폭 단계 고르기가 네 벌로 갈라져 있던 걸 하나로 합쳤다.
     **내용만** 다르고 기제는 하나다.
     """
-    return help_lines(width, offset, height, LEDGER_HELP, HELP_TITLE_TIERS,
+    return help_lines(width, offset, height, ledger_help(mo), HELP_TITLE_TIERS,
                       label_w=HELP_LABEL_W)
 
 
@@ -1377,7 +1480,7 @@ HELP_FOOT_TIERS = (
 
 def help_screen(mo: "Model", width: int, height: int) -> list[str]:
     """전면 도움말 — 정확히 ``height`` 줄. 제목·본문·위치표시 푸터."""
-    lines, total = help_body(width, mo.help_row, max(1, height - 1))
+    lines, total = help_body(width, mo.help_row, max(1, height - 1), mo)
     shown = max(0, len(lines) - 1)
     pos = f"  {mo.help_row + 1}-{mo.help_row + shown} / {total}"
     foot = tier_for(HELP_FOOT_TIERS, max(0, width - cell_len(pos))) + pos
@@ -1660,7 +1763,7 @@ def screen(mo: Model, width: int, height: int) -> dict:
     marks: list[tuple] = []
     if mo.view == "limits":
         head_lines: list[str] = []
-        body, total = limits_lines(width, mo.hrow, body_h)
+        body, total = limits_lines(width, mo.hrow, body_h, mo)
         # 스크롤 위치를 **되돌려 적는다.** `limits_lines` 는 자기가 그릴 때만
         # 잘라 쓰고 `mo.hrow` 는 안 건드렸다 — 그래서 끝을 지나 누른 PgDn 이
         # 그대로 쌓였고, 되돌아오려면 그만큼 ↑ 를 눌러야 했다(실측: 폭 100·높이
@@ -1741,7 +1844,7 @@ def render_text(mo: Model, width: int = 100) -> str:
         mo.vi = vi
         out.append(f"### {ko}")
         if v == "limits":
-            out += limits_body(width)
+            out += limits_body(width, mo)
         else:
             out += header_lines(mo, width)
             if v == "ledger":
@@ -1755,7 +1858,7 @@ def render_text(mo: Model, width: int = 100) -> str:
     # 도움말도 **평문 경로에 싣는다.** 키와 열의 뜻은 인쇄·공유용 산출물에서
     # 오히려 더 필요하다(그 사람에게는 ``?`` 를 누를 터미널이 없다).
     out.append("### 키와 열")
-    out += help_body(width, 0, 10**6)[0][1:]     # 제목 줄(닫기 안내)은 뺀다
+    out += help_body(width, 0, 10**6, mo)[0][1:]  # 제목 줄(닫기 안내)은 뺀다
     out.append("")
     out.append(banner_for(width))
     # screen() 과 같은 이유로 여기서도 뗀다 — 평문 경로는 screen() 을 안 거친다.
