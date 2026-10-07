@@ -17,7 +17,6 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from swing_it.engine.panels import cached_panel_pivot
 from swing_it.features.catalysts import align_to_trading_days, catalyst_events, read_dart
 from swing_it.features.flows import net_to_volume, smart_money_net
 from swing_it.features.technical import average_trade_value, moving_average, simple_return
@@ -61,10 +60,9 @@ def load_panels(con, *, start: str = "2023-06-01") -> Panels:
     prices = read_prices(con)
     prices["date"] = pd.to_datetime(prices["date"])
     prices = prices[prices["date"] >= pd.Timestamp(start)]
-    piv = {c: cached_panel_pivot(prices, c) for c in ("open", "high", "low", "close", "volume", "trade_value")}
-    for k, v in piv.items():
-        v.index = pd.to_datetime(v.index)
-        piv[k] = v.sort_index().astype(float)
+    # engine.panels 의 pivot 은 종목×날짜(전치) 모양이라 여기선 날짜×종목으로 직접 편다((code,date) 는 PK).
+    piv = {c: prices.pivot(index="date", columns="code", values=c).sort_index().astype(float)
+           for c in ("open", "high", "low", "close", "volume", "trade_value")}
     sd = read_supply_demand(con, cols=("code", "date", "foreign_", "institution"), start=start)
     net = smart_money_net(sd).reindex(index=piv["close"].index, columns=piv["close"].columns)
     mk = pd.read_sql_query("SELECT code, market FROM stocks", con)
