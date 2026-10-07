@@ -2247,6 +2247,38 @@ def test_the_cross_sector_list_multiplies_instead_of_averaging():
     assert all(t.get("gsec") is not None and t.get("pick") is not None for t in rows)
 
 
+@pytest.mark.parametrize("n_rows", [0, 2, 3, 4])
+def test_the_cross_sector_list_end_key_lands_on_its_true_last_row(n_rows):
+    """전 종목(t) 목록은 관문을 통과한 섹터가 적은 날 **0~2행**이다(2026-09~10 실측).
+
+    그런 날 일일 검증이 "G/End 가 끝으로 안 간다 (arow=1)" 를 냈는데, 화면은
+    맞았고 검사가 `> 3` 을 요구하고 있었다(`tests/test_verify_report.py`).
+    여기서는 **화면 쪽 계약**을 직접 고정한다 — 끝은 `n-1`, 빈 목록이면 0,
+    그리고 이 화면에서 안 듣는 `s`·`S`·`r` 뒤에도 커서가 범위 안에 남는다.
+
+    주입: 전 종목 분기의 `st.arow = m - 1` 을 `m - 2` 로 바꾸면 실패한다.
+    """
+    import curses
+
+    from swing_it.tui.flow_app import handle_key
+    from swing_it.tui.flow_view import State
+
+    d = _pick_payload(_PICK_ROWS[:max(n_rows, 2)], gsec=0.6 if n_rows else None)
+    st = State(d)
+    st.allv = True
+    n = len(st.all_picks())
+    assert n == n_rows, f"픽스처가 {n_rows}행을 못 만든다({n}) — 검사가 헛돈다"
+    last = max(n, 1) - 1
+    for k in (ord("G"), curses.KEY_END):
+        st.arow = 0
+        handle_key(st, k)
+        assert st.arow == last, f"{k}: arow={st.arow}, 끝={last}"
+    for k in "sSr":
+        st.arow = last
+        handle_key(st, ord(k))
+        assert 0 <= st.arow < max(n, 1), f"{k}: arow={st.arow} (행 {n})"
+
+
 def test_the_cross_sector_list_drops_a_stock_whose_sector_failed_its_gate():
     """섹터가 관문에 걸리면 그 안의 종목은 아무리 좋아도 안 나온다."""
     import copy

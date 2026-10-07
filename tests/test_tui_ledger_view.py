@@ -445,6 +445,111 @@ def test_banner_is_on_screen_not_in_a_footnote(data):
     assert "균등" in status_line(mo, 200)
 
 
+def _comove_ref(data, detrend=False):
+    """주체 → 관측 음수쌍 비율[%] 목록 — :meth:`Model.comove_ranges` 를 **안 거치고**
+    시장 × 구간(≥20) 조합을 여기서 직접 돈다(``verify_report`` G 층과 같은 루프)."""
+    from swing_it.tui.ledger_view import _MIN_CORR_N
+
+    ref = Model(data)
+    out: dict = {}
+    for mi in range(len(ref.markets)):
+        for wi, w in enumerate(WINDOWS):
+            if w < _MIN_CORR_N:
+                continue
+            for ai, (k, _ko) in enumerate(ACTORS):
+                ref.mi, ref.wi, ref.ai, ref.detrend = mi, wi, ai, detrend
+                out.setdefault(k, []).append(ref.obs_neg_frac() * 100)
+    return out
+
+
+def _comove_payload():
+    """동시성 범위가 **주체마다·조합마다 갈리는** 합성 페이로드.
+
+    기본 픽스처는 계열이 결정적 교대 패턴이라 음수쌍 비율이 전 조합 0% 로
+    뭉친다 — 그러면 셋·기타법인 범위가 같은 글자(`0~0%`)가 되어 "어느 자리에
+    무엇을 끼웠나" 를 못 가른다. 공통요인의 세기를 주체마다 다르게 준다.
+    """
+    import random
+
+    rnd = random.Random(7)
+    n, secs, mkts = 130, [f"섹터{i}" for i in range(8)], ["거래소", "코스닥"]
+    beta = {"indiv": 0.9, "forgn": 0.6, "inst": 0.3, "etc": 0.0}
+    common = {k: [rnd.gauss(0, 1) for _ in range(n)] for k in ACTOR_KEYS}
+
+    def cell():
+        out = {k: [round(100 * (beta[k] * common[k][i] + rnd.gauss(0, 1)), 2)
+                   for i in range(n)] for k in ACTOR_KEYS}
+        out["tv"] = [1000.0] * n
+        return out
+
+    return {"dates": [f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(n)],
+            "sectors": secs, "markets": mkts,
+            "flows": {m: {s: cell() for s in secs} for m in mkts},
+            "cap": {m: {s: 10000.0 for s in secs} for m in mkts},
+            "n_by_sector": {m: {s: 50 for s in secs} for m in mkts},
+            "n_names": 400, "finalized": True}
+
+
+def test_comove_range_in_limits_and_help_is_measured_from_the_open_payload():
+    """회귀 — 한계 §6·도움말 `널` 이 동시성 범위를 **"2~43%(09-04)" 로 박아** 뒀다.
+
+    그 범위는 창이 하루씩 밀릴 때마다 움직이는 관측값이라 적은 다음 날부터
+    거의 매일 틀렸고, 일일 검증(G 층)이 27일 중 25일 빨갰다 — 경보가 소음이
+    됐다. 이제 연 리포트에서 잰다. 기대값은 같은 조합을 **따로** 돌려 만든다.
+
+    주입: LIMITS·LEDGER_HELP 의 ``{C3}`` 를 예전 고정값 ``2~43%`` 로 되돌리면 실패한다.
+    """
+    from swing_it.tui.ledger_view import (
+        COMOVE_TOKENS, ledger_help, limits_text)
+
+    data = _comove_payload()
+    off, on = _comove_ref(data), _comove_ref(data, detrend=True)
+    three = [v for k in ("indiv", "forgn", "inst") for v in off[k]]
+    three_d = [v for k in ("indiv", "forgn", "inst") for v in on[k]]
+    want = {"셋": f"{min(three):.0f}~{max(three):.0f}%",
+            "셋 β제거": f"{min(three_d):.0f}~{max(three_d):.0f}%",
+            "기타법인": f"{min(off['etc']):.0f}~{max(off['etc']):.0f}%"}
+    assert len(set(want.values())) == 3 and "2~43%" not in want.values(), (
+        f"픽스처 범위가 서로·옛 고정값과 안 갈린다 — 검사가 헛돈다: {want}")
+
+    mo = Model(data)
+    # 재는 동안 상태를 돌리므로 **되돌리는지**도 본다 — 도움말을 열었다 닫았더니
+    # 보던 시장·구간·주체·β제거가 바뀌어 있으면 그건 다른 버그다.
+    mo.mi, mo.wi, mo.ai, mo.detrend = 1, 2, 3, True
+    lim = "\n".join(limits_text(mo))
+    hlp = "\n".join(d for _n, d in ledger_help(mo))
+    for what, rng in want.items():
+        assert rng in lim, f"한계 §6 에 오늘 잰 {what} 범위 {rng} 가 없다"
+        assert rng in hlp, f"도움말 `널` 에 오늘 잰 {what} 범위 {rng} 가 없다"
+    assert (mo.mi, mo.wi, mo.ai, mo.detrend) == (1, 2, 3, True), "재고 나서 상태를 안 되돌렸다"
+    # 모든 출구(평문·한계 화면·도움말 모달)에서 자리표가 새어 나가지 않는다.
+    shown = [render_text(mo, 100)]
+    mo.vi = [v for v, _ in VIEWS].index("limits")
+    shown.append("\n".join(screen(mo, 100, 200)["lines"]))
+    mo.help = True
+    shown.append("\n".join(screen(mo, 100, 200)["lines"]))
+    for txt in shown:
+        assert not [t for t in COMOVE_TOKENS if t in txt], "자리표가 화면에 남았다"
+
+
+def test_comove_range_is_withheld_not_invented_when_nothing_is_measurable(data):
+    """잴 구간(≥20일)이 없는 짧은 페이로드에서는 범위를 **지어내지 않는다.**
+
+    틀린 값보다 없는 값이 낫다 — 예전처럼 고정 숫자가 남아 있으면 이 페이로드
+    에서는 잰 적 없는 범위를 잰 것처럼 말한다.
+    """
+    from swing_it.tui.ledger_view import _UNMEASURED, limits_text
+
+    n = 10
+    short = dict(data, dates=data["dates"][:n],
+                 flows={m: {s: {k: v[:n] for k, v in c.items()}
+                            for s, c in secs.items()}
+                        for m, secs in data["flows"].items()})
+    lim = "\n".join(limits_text(Model(short)))
+    assert _UNMEASURED in lim
+    assert "2~43%" not in lim.replace("2~43%(09-04)", ""), "잰 적 없는 범위를 적었다"
+
+
 def test_limits_screen_names_both_refusals(data):
     """거부는 둘이다 — 섹터→섹터와 주체→주체. 하나만 적으면 나머지를 잊는다."""
     text = "\n".join(LIMITS)
@@ -504,20 +609,22 @@ def test_dump_respects_the_requested_width(data):
                 f"폭{width} 요청인데 {_cw(line.rstrip())}칸: {line.rstrip()!r}")
 
 
-def test_limits_prose_is_wrapped_not_dropped():
+def test_limits_prose_is_wrapped_not_dropped(data):
     """한계 문단은 **표를 대신하는 문장**이라 잘리면 뜻이 바뀐다.
 
     curses 경로는 `pad` 로 잘라 문장을 버렸고 평문 경로는 넘쳤다 — 같은 글을
-    두 경로가 다르게 다뤘다. 이제 둘 다 `limits_body` 를 쓴다.
+    두 경로가 다르게 다뤘다. 이제 둘 다 `limits_body` 를 쓴다. 비교 기준은
+    **값을 끼운 글**(`limits_text`)이다 — 동시성 범위는 리포트에서 잰다.
     """
-    from swing_it.tui.ledger_view import LIMITS, limits_body
+    from swing_it.tui.ledger_view import limits_body, limits_text
 
-    want = "".join(LIMITS).replace(" ", "").replace("**", "")
-    for width in (40, 80, 120):
-        body = limits_body(width)
-        assert all(_cw(ln) <= width for ln in body), f"폭{width} 에서 넘친다"
-        assert "".join(body).replace(" ", "") == want, (
-            f"폭{width} 에서 문장이 사라지거나 늘었다")
+    for mo in (None, Model(data)):
+        want = "".join(limits_text(mo)).replace(" ", "").replace("**", "")
+        for width in (40, 80, 120):
+            body = limits_body(width, mo)
+            assert all(_cw(ln) <= width for ln in body), f"폭{width} 에서 넘친다"
+            assert "".join(body).replace(" ", "") == want, (
+                f"폭{width} 에서 문장이 사라지거나 늘었다")
 
 
 def test_banner_never_loses_the_unobserved_half():
@@ -578,10 +685,22 @@ def test_ledger_help_body_is_not_truncated_at_the_default_ssh_width():
     주입: LEDGER_HELP 의 아무 설명에나 몇 글자를 붙이거나 HELP_LABEL_W 를 키우면
     원문이 80칸을 넘어 실패한다.
     """
-    from swing_it.tui.ledger_view import HELP_LABEL_W, LEDGER_HELP
+    from swing_it.tui.ledger_view import COMOVE_TOKENS, HELP_LABEL_W, LEDGER_HELP
 
-    over = [(_cw(_help_raw(e)), _help_raw(e)) for e in LEDGER_HELP
-            if _cw(_help_raw(e)) > 80]
+    # 동시성 범위 자리표는 **가장 긴 값**으로 끼워 본다 — 자리표 그대로 재면
+    # `{C3}`(4칸)이 `100~100%`(8칸)보다 짧아 오늘 넘칠 줄을 통과시킨다.
+    worst = {t: "100~100%" for t in COMOVE_TOKENS}
+    worst["{COMBOS}"] = "시장 9 × 구간 9 = 81조합"
+    worst["{ASOF}"] = "2026-12-31"
+
+    def filled(e):
+        n, d = e
+        for t, v in worst.items():
+            d = d.replace(t, v)
+        return n, d
+
+    over = [(_cw(_help_raw(filled(e))), _help_raw(filled(e))) for e in LEDGER_HELP
+            if _cw(_help_raw(filled(e))) > 80]
     assert not over, "폭 80 에서 잘리는 도움말 줄: " + repr(over)
     # 라벨도 잘리면 안 된다 — flow 는 지금 `순매수상위[억]` 이 `순매수상위` 로
     # 잘려 있다(라벨 폭 10). 원장은 그걸 반복하지 않는다.
