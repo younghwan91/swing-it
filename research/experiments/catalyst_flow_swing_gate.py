@@ -29,7 +29,7 @@ from krx_quant_core.stats.matched_null import (  # noqa: E402
     cluster_bootstrap_ci, matched_alpha, matched_control)
 from krx_quant_core.stats.trials import record_trial  # noqa: E402
 from prop_gate import prop_gate  # noqa: E402
-from prop_swing_common import gate_sim  # noqa: E402
+from prop_swing_common import gate_sim, load_env_db  # noqa: E402
 
 from research.signals.catalyst_flow import (  # noqa: E402
     PREREG, add_strata, build_events, control_pool, load_panels, simulate_events, strata_from_pool)
@@ -106,6 +106,7 @@ def _fmt_pct(x: float) -> str:
 
 
 def main() -> int:
+    load_env_db()  # .env 의 KR_QUANT_DB — 없으면 db_default() 가 로컬 sqlite 로 떨어진다
     con = connect(db_default())
     dart = read_dart()
     p = load_panels(con, start="2023-06-01")
