@@ -3,9 +3,10 @@
 
 사전등록: ``research/logs/news_persistence_swing/VERDICT.md`` (2026-10-08, 결과 보기 전 커밋).
 
-입력(판정은 daytrade-it 브랜치 ``research/news-persistence-judge`` 의 ``judge_batch.py`` 가 만든다):
-  - 쌍 파일   ``PERSIST_PAIRS`` (기본 ~/git/daytrade-it/data/eval/persistence_swing/pairs_2023-03_2026-02.jsonl)
-  - 판정 캐시 ``PERSIST_CACHE`` (기본 ~/git/daytrade-it/data/eval/cache/haiku55/persistence_v2.jsonl)
+입력(판정은 ``swing_it.news.judge`` 가 만든다 — 2026-10-08 daytrade-it 연구 브랜치에서 이식, VERDICT 의 이전 노트):
+  - 쌍 파일   ``PERSIST_PAIRS`` (기본 data/eval/persistence_swing/pairs_2023-03_2026-02_swing.jsonl)
+  - 판정 캐시 ``PERSIST_CACHE`` (기본 data/eval/cache/haiku55/persistence_v2.jsonl)
+  (daytrade-it ``data/eval/`` 에서 바이트 그대로 복사한 사본. 쌍 파일은 ``swing_it.news.pairs`` 가 DB 에서 다시 만들 수 있다.)
 
 사건 = subject main · freshness≠repeat · sentiment +1 · reports_price_move false, (종목, d) 당 최고 persistence.
 수익 = d 다음 거래일 시가 → h 거래일째 종가(손절 없음). 대조 = core matched_null(같은 d × 시장 × 전일 거래대금
@@ -39,7 +40,7 @@ from swing_it.storage import connect, db_default, read_prices  # noqa: E402
 
 OUT_DIR = Path("research/logs/news_persistence_swing")
 LABEL = "news_persistence_swing"
-DT = Path.home() / "git" / "daytrade-it" / "data" / "eval"
+DT = Path(HERE).resolve().parents[1] / "data" / "eval"
 PAIRS = Path(os.environ.get("PERSIST_PAIRS", DT / "persistence_swing" / "pairs_2023-03_2026-02_swing.jsonl"))
 CACHE = Path(os.environ.get("PERSIST_CACHE", DT / "cache" / "haiku55" / "persistence_v2.jsonl"))
 

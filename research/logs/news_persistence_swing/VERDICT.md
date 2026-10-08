@@ -90,3 +90,21 @@
 정답지에서도 structural 은 사건 85건 중 8건(9%)이고 Haiku 의 structural 판정 F1 은 split 에 따라 0.1~0.6 이다 — 그 칸 하나에
 1차 지표를 걸면 라벨 잡음이 검정력을 먹는다. 세 등급 순서(one_off < multi_quarter < structural)는 2차로 그대로 보고한다.
 합격 바 1·3·4 의 "structural" 은 "multi_quarter ∪ structural" 로 읽는다. 바 2(순서 3/4 보유기간)는 그대로.
+
+---
+
+## 이전 노트 (2026-10-08 밤 — 코드·데이터 위치만 바뀜, 판정 입력은 바이트 동일, 결과 없음)
+
+위 사전등록이 가리키는 daytrade-it 브랜치 `research/news-persistence-judge` 의 판정 도구를 swing-it 으로 옮겼다
+(그 워크트리는 지운다). 방법론·사전등록 결정은 하나도 바꾸지 않았다.
+
+- **코드:** `src/swing_it/news/` — `prompt`(운영 v2 프롬프트·스키마·입력 해시, 바이트 동일 사본), `prefilter`
+  (운영 3규칙 + 스윙 태그, 기본값 = 1단계 조합), `pairs`(쌍 생성기), `judge`(배치 판정기), `labelset`(의미 정답지).
+- **기사 원천:** daytrade-it `data/toss_universe_42m` 파일 → quant-airflow DB(`news_articles` + `news_company_feed` +
+  `news_company_feed_fetches`, migration 015 로 같은 아카이브를 옮긴 것). 쌍은 `python -m swing_it.news.pairs` 가 만든다.
+- **데이터:** `data/eval/persistence_swing/`(쌍 파일·정답지·프롬프트 r1..r5) 와 `data/eval/cache/haiku55/`(1단계 판정 캐시·상태)를
+  daytrade-it 에서 **복사**했다(44개 파일 sha256 일치). 러너 기본 입력이 이 사본을 가리킨다.
+- **입력 동일성(패리티):** DB 에서 1단계 창(2025-09-01..2026-02-28)을 다시 만들면 164,864쌍 = 옛 파일 164,864쌍(키 완전 일치),
+  1단계 판정 36,171행의 `input_hash` 를 **36,171/36,171(100%)** 재현한다. 전 구간(2023-03-20..2026-02-27)도 637,343 = 637,343.
+- **판정기 변경(모델 입력 불변):** system 프롬프트를 캐싱 블록으로 보낸다 — 모델이 읽는 텍스트·입력 해시는 같다.
+  결과마다 실제 과금 usage 를 남겨 비용을 측정한다.
