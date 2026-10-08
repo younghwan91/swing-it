@@ -40,7 +40,7 @@ from swing_it.storage import connect, db_default, read_prices  # noqa: E402
 OUT_DIR = Path("research/logs/news_persistence_swing")
 LABEL = "news_persistence_swing"
 DT = Path.home() / "git" / "daytrade-it" / "data" / "eval"
-PAIRS = Path(os.environ.get("PERSIST_PAIRS", DT / "persistence_swing" / "pairs_2023-03_2026-02.jsonl"))
+PAIRS = Path(os.environ.get("PERSIST_PAIRS", DT / "persistence_swing" / "pairs_2023-03_2026-02_swing.jsonl"))
 CACHE = Path(os.environ.get("PERSIST_CACHE", DT / "cache" / "haiku55" / "persistence_v2.jsonl"))
 
 HORIZONS = (5, 10, 20, 40)
@@ -51,7 +51,7 @@ CLASSES = ("one_off", "multi_quarter", "structural")
 UNIVERSE_N = 300
 HALVES = (("2023-03-01", "2024-08-31"), ("2024-09-01", "2026-02-28"))
 
-PREREG = {"subject": "main", "drop_repeat": True, "sentiment": 1, "drop_price_move": True,
+PREREG = {"prompt": "v2+r3", "primary": "hi_minus_lo", "subject": "main", "drop_repeat": True, "sentiment": 1, "drop_price_move": True,
           "entry": "next_open", "horizons": list(HORIZONS), "primary_h": PRIMARY_H,
           "strata": ["date", "market", "q_adv", "q_ret5"], "n_per": 5, "universe": UNIVERSE_N}
 
@@ -174,17 +174,20 @@ def excess(tr: pd.DataFrame, pl: pd.DataFrame, n_per: int) -> pd.DataFrame:
     out["ctrl"] = cm.to_numpy()
     out["ex"] = out["ret"] - out["ctrl"]
     out["month"] = out["date"].dt.to_period("M")
+    # 1차 지표(사전등록 수정 3): multi_quarter ∪ structural = "hi", one_off = "lo"
+    out["grp"] = np.where(out["persistence"] == "one_off", "lo", "hi")
     return out
 
 
-def month_boot_diff(x: pd.DataFrame, a: str, b: str, n: int = 2000, seed: int = 0) -> tuple[float, float, float]:
-    """mean(ex | a) − mean(ex | b), 월 블록 부트스트랩 95% CI."""
+def month_boot_diff(x: pd.DataFrame, a: str, b: str, n: int = 2000, seed: int = 0,
+                    col: str = "persistence") -> tuple[float, float, float]:
+    """mean(ex | col==a) − mean(ex | col==b), 월 블록 부트스트랩 95% CI."""
     months = x["month"].unique()
     by = {m: g for m, g in x.groupby("month")}
     rng = np.random.default_rng(seed)
 
     def stat(df):
-        ea, eb = df.loc[df["persistence"] == a, "ex"], df.loc[df["persistence"] == b, "ex"]
+        ea, eb = df.loc[df[col] == a, "ex"], df.loc[df[col] == b, "ex"]
         return ea.mean() - eb.mean() if len(ea) and len(eb) else np.nan
 
     point = stat(x)
@@ -215,14 +218,16 @@ def run_cfg(px: Px, cfg: dict, horizons=HORIZONS) -> dict:
         tr, pl = build(px, ev, h, cfg["entry"])
         x = excess(tr, pl, cfg["n_per"])
         cls = {c: (x.loc[x["persistence"] == c, "ex"].mean(), int((x["persistence"] == c).sum())) for c in CLASSES}
-        d, lo, hi = month_boot_diff(x, "structural", "one_off")
+        d, lo, hi = month_boot_diff(x, "hi", "lo", col="grp")
+        d_struct = month_boot_diff(x, "structural", "one_off")
         halves = []
         for a, b in HALVES:
             xx = x[(x["date"] >= a) & (x["date"] <= b)]
-            halves.append(month_boot_diff(xx, "structural", "one_off", n=500)[0] if len(xx) else np.nan)
-        s = x.loc[x["persistence"] == "structural"]
+            halves.append(month_boot_diff(xx, "hi", "lo", n=500, col="grp")[0] if len(xx) else np.nan)
+        s = x.loc[x["grp"] == "hi"]
         s_lo, s_hi = month_boot_mean(s["ex"], s["month"]) if len(s) > 10 else (np.nan, np.nan)
-        res["h"][h] = {"cls": cls, "diff": (d, lo, hi), "halves": halves, "struct_ci": (s_lo, s_hi),
+        res["h"][h] = {"cls": cls, "diff": (d, lo, hi), "diff_struct": d_struct, "halves": halves,
+                       "struct_ci": (s_lo, s_hi), "hi_mean": float(s["ex"].mean()) if len(s) else np.nan,
                        "raw_struct": float(s["ret"].mean()) if len(s) else np.nan, "n_months": int(x["month"].nunique())}
     return res
 
@@ -236,18 +241,19 @@ def main() -> int:
     record_trial(LABEL, PREREG, logs_dir=str(OUT_DIR))
     r = run_cfg(px, PREREG)
     L += ["## 사전등록 config", "", f"- 사건(종목·일) {r['n_events']:,} · 등급별 {r['by_class']}", "",
-          "| h | one_off | multi_quarter | structural | **structural − one_off** [월 블록 95%] | 전반 · 후반 | structural CI | structural − 41.5bp |",
-          "|---|---|---|---|---|---|---|---|"]
+          "| h | one_off | multi_quarter | structural | **(multi∪struct) − one_off** [월 블록 95%] | structural − one_off | 전반 · 후반 | (multi∪struct) CI | (multi∪struct) − 41.5bp |",
+          "|---|---|---|---|---|---|---|---|---|"]
     for h, v in r["h"].items():
         c = v["cls"]
         d, lo, hi = v["diff"]
         L.append(f"| {h} | {bp(c['one_off'][0])} ({c['one_off'][1]}) | {bp(c['multi_quarter'][0])} ({c['multi_quarter'][1]}) | "
                  f"{bp(c['structural'][0])} ({c['structural'][1]}) | **{bp(d)}** [{bp(lo)}, {bp(hi)}] | "
+                 f"{bp(v['diff_struct'][0])} [{bp(v['diff_struct'][1])}, {bp(v['diff_struct'][2])}] | "
                  f"{bp(v['halves'][0])} · {bp(v['halves'][1])} | [{bp(v['struct_ci'][0])}, {bp(v['struct_ci'][1])}] | "
-                 f"{bp(c['structural'][0] - COST_RT)} |")
+                 f"{bp(v['hi_mean'] - COST_RT)} |")
     L += ["", "값 = 정합 대조 초과수익 평균(괄호 = 건수). 월 수 " + str(r["h"][PRIMARY_H]["n_months"]), ""]
 
-    L += ["## 민감도 (원장 기록 · 승자선택 금지) — h=20", "", "| 칸 | 사건 | structural − one_off | structural |", "|---|---|---|---|"]
+    L += ["## 민감도 (원장 기록 · 승자선택 금지) — h=20", "", "| 칸 | 사건 | (multi∪struct) − one_off | (multi∪struct) |", "|---|---|---|---|"]
     for name, kw in (("진입 = d 종가", {"entry": "close"}), ("주가 보도 기사 포함", {"drop_price_move": False}),
                      ("repeat 포함", {"drop_repeat": False})):
         cfg = {**PREREG, **kw}
@@ -255,7 +261,7 @@ def main() -> int:
         rr = run_cfg(px, cfg, horizons=(PRIMARY_H,))
         v = rr["h"][PRIMARY_H]
         d, lo, hi = v["diff"]
-        L.append(f"| {name} | {rr['n_events']:,} | {bp(d)} [{bp(lo)}, {bp(hi)}] | {bp(v['cls']['structural'][0])} |")
+        L.append(f"| {name} | {rr['n_events']:,} | {bp(d)} [{bp(lo)}, {bp(hi)}] | {bp(v['hi_mean'])} |")
     (OUT_DIR / "RUN.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
     return 0
