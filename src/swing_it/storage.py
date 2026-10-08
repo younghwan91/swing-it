@@ -14,11 +14,14 @@ local sqlite file exactly as before.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 _PG_PREFIXES = ("postgresql://", "postgres://")
+#: daily_bars.date 를 문자열로 바꾼 모양 — market_cap_asof_bulk 의 정확 일치 조인 키.
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def load_env_db() -> str:
@@ -695,10 +698,21 @@ def market_cap_asof_bulk(con: Any, df: Any) -> Any:
     codes = df["code"].unique().tolist()
     ph = "%s" if _is_pg(con) else "?"
     placeholders = ",".join([ph] * len(codes))
+    # 종가는 아래에서 (code, 'YYYY-MM-DD') **정확 일치**로만 붙는다 — 요청 날짜 밖의 행은 읽어도
+    # 버려진다. 예전엔 호출마다 daily_bars 전체 이력(580만 행)을 읽어 sector_flow 한 번에 16회,
+    # 166초를 썼다. 정확 일치할 수 있는 날짜(형식이 맞는 문자열)만 쿼리에 넣는다 — 형식이 다른
+    # 문자열은 예전에도 어떤 행과도 일치하지 않았으므로 결과가 같다.
+    date_strs = df["date"].astype(str)
+    pd.to_datetime(date_strs)  # 날짜가 아닌 값은 예전처럼 여기서 예외(아래 같은 파싱을 앞당김)
+    wanted = sorted({s for s in date_strs.unique() if _ISO_DAY.fullmatch(s)})
+    if not wanted:
+        return pd.Series([float("nan")] * len(df), index=df.index)
+    date_ph = ",".join([ph] * len(wanted))
     bars = pd.read_sql_query(
-        f"SELECT code, date, close FROM daily_bars WHERE code IN ({placeholders})",
+        f"SELECT code, date, close FROM daily_bars WHERE code IN ({placeholders}) "
+        f"AND date IN ({date_ph})",
         con,
-        params=codes,
+        params=[*codes, *wanted],
     )
     bars["date"] = bars["date"].astype(str)
 
