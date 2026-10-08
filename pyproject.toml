@@ -19,6 +19,9 @@ dependencies = [
     # 검증 통계·성과지표·횡단면 루프·가격제한폭의 정본. 세 레포(scalp-it·daytrade-it·
     # swing-it)가 같은 수익열에서 같은 숫자를 내게 하려고 공유한다. 태그로 고정.
     "krx-quant-core==0.6.2",
+    # 뉴스 LLM 판정기(swing_it.news.judge·labelset)의 raw HTTP. SDK 를 쓰지 않는다(daytrade-it 판정기와 같은
+    # 요청을 바이트 단위로 보내려고). krx-quant-core → kiwoom-client 로 이미 깔리지만 직접 쓰므로 명시한다.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

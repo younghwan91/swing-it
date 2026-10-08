@@ -1050,6 +1050,7 @@ name = "swing-it"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "krx-quant-core" },
     { name = "pandas" },
 ]
@@ -1069,6 +1070,7 @@ viz = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
     { name = "krx-quant-core", specifier = "==0.6.2" },
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
