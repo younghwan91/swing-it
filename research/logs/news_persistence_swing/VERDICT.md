@@ -108,3 +108,15 @@
   1단계 판정 36,171행의 `input_hash` 를 **36,171/36,171(100%)** 재현한다. 전 구간(2023-03-20..2026-02-27)도 637,343 = 637,343.
 - **판정기 변경(모델 입력 불변):** system 프롬프트를 캐싱 블록으로 보낸다 — 모델이 읽는 텍스트·입력 해시는 같다.
   결과마다 실제 과금 usage 를 남겨 비용을 측정한다.
+
+## 이전 노트 2 (2026-10-09 — 판정의 정본을 DB 원장으로, 결과 없음)
+
+- 판정은 이제 quant-airflow DB 원장(`judges` · `article_judgments`, migration 016)에 있다. 이 연구의 judge 이름은
+  **`v2r3-haiku55`** (운영 v2 system + "\n\n" + r3, claude-haiku-5-5, thinking disabled, max_tokens 400) — 사전등록
+  수정 1 의 정의 그대로다. 러너는 JSONL 캐시 대신 원장을 읽는다.
+- 1단계 캐시 36,171 성공 + 43 오류를 원장으로 옮겼다(judged_at = 배치 제출 시각, exact FALSE). 입력 해시는 DB 기사로
+  36,171/36,171 재계산 일치. 러너 입력 동일성: 원장과 파일의 키→출력이 36,171 행 전부 같고, 사전등록 config 와 민감도
+  (b)(c) 의 사건 표가 두 경로에서 동일했다(수익은 보지 않았다).
+- 작업 파일 위치: 쌍 `data/eval/persistence_swing/pairs/swing_2023-03_2026-02.jsonl`, 판정 작업 상태
+  `data/eval/judge_runs/v2r3-haiku55/` (`judgments.jsonl` · `errors.jsonl` · `stage1.state.json` …). 다음 구간은
+  `python -m swing_it.news.judge ... --run stage2` 로 같은 judge 에 쌓인다.

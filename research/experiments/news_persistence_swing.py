@@ -4,9 +4,10 @@
 사전등록: ``research/logs/news_persistence_swing/VERDICT.md`` (2026-10-08, 결과 보기 전 커밋).
 
 입력(판정은 ``swing_it.news.judge`` 가 만든다 — 2026-10-08 daytrade-it 연구 브랜치에서 이식, VERDICT 의 이전 노트):
-  - 쌍 파일   ``PERSIST_PAIRS`` (기본 data/eval/persistence_swing/pairs_2023-03_2026-02_swing.jsonl)
-  - 판정 캐시 ``PERSIST_CACHE`` (기본 data/eval/cache/haiku55/persistence_v2.jsonl)
-  (daytrade-it ``data/eval/`` 에서 바이트 그대로 복사한 사본. 쌍 파일은 ``swing_it.news.pairs`` 가 DB 에서 다시 만들 수 있다.)
+  - 쌍 파일 ``PERSIST_PAIRS`` (기본 data/eval/persistence_swing/pairs/swing_2023-03_2026-02.jsonl —
+    daytrade-it 에서 바이트 그대로 복사한 사본. ``swing_it.news.pairs`` 가 DB 에서 같은 키로 다시 만든다)
+  - 판정: quant-airflow DB 판정 원장 ``article_judgments`` 의 judge ``v2r3-haiku55`` (2026-10-09 부터 — 그 전엔
+    JSONL 캐시를 읽었다. 1단계 36,171 행에서 키→출력이 파일과 완전히 같음을 확인했다, VERDICT 이전 노트 2).
 
 사건 = subject main · freshness≠repeat · sentiment +1 · reports_price_move false, (종목, d) 당 최고 persistence.
 수익 = d 다음 거래일 시가 → h 거래일째 종가(손절 없음). 대조 = core matched_null(같은 d × 시장 × 전일 거래대금
@@ -36,13 +37,15 @@ from krx_quant_core.stats.matched_null import matched_control  # noqa: E402
 from krx_quant_core.stats.trials import record_trial  # noqa: E402
 from prop_swing_common import load_env_db  # noqa: E402
 
+from swing_it.news.judgments_db import read_judgments  # noqa: E402
 from swing_it.storage import connect, db_default, read_prices  # noqa: E402
 
 OUT_DIR = Path("research/logs/news_persistence_swing")
 LABEL = "news_persistence_swing"
 DT = Path(HERE).resolve().parents[1] / "data" / "eval"
-PAIRS = Path(os.environ.get("PERSIST_PAIRS", DT / "persistence_swing" / "pairs_2023-03_2026-02_swing.jsonl"))
-CACHE = Path(os.environ.get("PERSIST_CACHE", DT / "cache" / "haiku55" / "persistence_v2.jsonl"))
+PAIRS = Path(os.environ.get("PERSIST_PAIRS", DT / "persistence_swing" / "pairs" / "swing_2023-03_2026-02.jsonl"))
+#: 판정 원장의 judge 이름(사전등록 수정 1 의 정의: 운영 v2 + r3, Haiku 5.5, 생각 끔).
+JUDGE = "v2r3-haiku55"
 
 HORIZONS = (5, 10, 20, 40)
 PRIMARY_H = 20
@@ -57,29 +60,36 @@ PREREG = {"prompt": "v2+r3", "primary": "hi_minus_lo", "subject": "main", "drop_
           "strata": ["date", "market", "q_adv", "q_ret5"], "n_per": 5, "universe": UNIVERSE_N}
 
 
-def load_events(cfg: dict) -> pd.DataFrame:
+def load_judgments(con) -> dict[str, dict]:
+    """판정 원장에서 {쌍 키: v2 출력} — 성공 행만."""
+    return {k: r["output"] for k, r in read_judgments(con, JUDGE).items()}
+
+
+JUDGED: dict[str, dict] = {}  # main() 이 원장에서 채운다
+
+
+def load_events(cfg: dict, judged: dict[str, dict] | None = None) -> pd.DataFrame:
+    judged = JUDGED if judged is None else judged
     meta = {}
     with PAIRS.open() as fh:
         for line in fh:
             p = json.loads(line)
             meta[p["key"]] = (p["code"], p["day"])
     rows = []
-    with CACHE.open() as fh:
-        for line in fh:
-            r = json.loads(line)
-            m = meta.get(r["key"])
-            v = r.get("v2") or {}
-            if m is None or not v:
-                continue
-            if v.get("subject") != cfg["subject"] or v.get("sentiment_direction") != cfg["sentiment"]:
-                continue
-            if cfg["drop_repeat"] and v.get("freshness") == "repeat":
-                continue
-            if cfg["drop_price_move"] and v.get("reports_price_move"):
-                continue
-            if v.get("persistence") not in PERSIST_RANK:
-                continue
-            rows.append({"code": m[0], "day": pd.Timestamp(m[1]), "rank": PERSIST_RANK[v["persistence"]]})
+    for key, v in judged.items():
+        m = meta.get(key)
+        v = v or {}
+        if m is None or not v:
+            continue
+        if v.get("subject") != cfg["subject"] or v.get("sentiment_direction") != cfg["sentiment"]:
+            continue
+        if cfg["drop_repeat"] and v.get("freshness") == "repeat":
+            continue
+        if cfg["drop_price_move"] and v.get("reports_price_move"):
+            continue
+        if v.get("persistence") not in PERSIST_RANK:
+            continue
+        rows.append({"code": m[0], "day": pd.Timestamp(m[1]), "rank": PERSIST_RANK[v["persistence"]]})
     ev = pd.DataFrame(rows)
     if ev.empty:
         return ev
@@ -89,8 +99,7 @@ def load_events(cfg: dict) -> pd.DataFrame:
 
 
 def n_judged() -> int:
-    with CACHE.open() as fh:
-        return sum(1 for _ in fh)
+    return len(JUDGED)
 
 
 class Px:
@@ -236,6 +245,7 @@ def run_cfg(px: Px, cfg: dict, horizons=HORIZONS) -> dict:
 def main() -> int:
     load_env_db()
     con = connect(db_default())
+    JUDGED.update(load_judgments(con))
     px = Px(con)
     L = [f"# 실행 결과 — {date.today().isoformat()} (러너 자동 생성, 판정 아님)", "",
          f"- 판정된 쌍 {n_judged():,} / 쌍 파일 {sum(1 for _ in PAIRS.open()):,}", ""]
