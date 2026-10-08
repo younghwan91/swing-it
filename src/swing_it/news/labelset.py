@@ -11,8 +11,8 @@ swing-it 스윙 2호(LLM 지속성) 판정 프롬프트를 정하는 단계. **�
     python -m swing_it.news.labelset eval --variant v2 --split train
 
 **출처:** daytrade-it ``scripts/eval/persistence_labelset.py`` (브랜치 ``research/news-persistence-judge`` @ ba0662a).
-2026-10-08 의 실행 결과(표본·교사 라벨·``runs/*.jsonl``·``runs/summary.jsonl``)는 ``data/eval/persistence_swing/``
-에 사본으로 있다 — 사전등록 수정 1 의 표가 그 숫자다. 바뀐 것: 프롬프트·채점표를 :mod:`swing_it.news.prompt`
+2026-10-08 의 실행 결과(``labelset/sample.jsonl``·``teacher.jsonl``·``runs/*.jsonl``·``runs/summary.jsonl``)는
+``data/eval/persistence_swing/labelset/`` 에 사본으로 있다 — 사전등록 수정 1 의 표가 그 숫자다. 바뀐 것: 프롬프트·채점표를 :mod:`swing_it.news.prompt`
 에서 읽고, ``sample`` 의 입력(daytrade-it 의 Haiku 4.5 판정 쌍·캐시 — swing-it 으로 옮기지 않았다)을 인자로 받는다.
 표본은 이미 뽑혀 있으므로 ``sample`` 을 다시 돌릴 일은 없다(다시 돌리면 같은 seed 로 같은 표본이 나와야 한다).
 """
@@ -44,8 +44,11 @@ D = Path("data/eval/persistence_swing")
 _DT = Path.home() / "git" / "daytrade-it" / "data" / "eval"
 PAIRS = _DT / "universe_pairs_n300_prefiltered.jsonl"
 CACHE45 = _DT / "cache" / "universe_v2.jsonl"
-SAMPLE = D / "labelset_sample.jsonl"
-TEACHER = D / "labelset_teacher.jsonl"
+LABELSET = D / "labelset"
+SAMPLE = LABELSET / "sample.jsonl"
+TEACHER = LABELSET / "teacher.jsonl"
+#: 변형별 채점 결과 ``<variant>_<split>_r<rep>.jsonl`` 과 요약 ``summary.jsonl``.
+RUNS = LABELSET / "runs"
 FIELDS = ("subject", "persistence", "sentiment_direction", "freshness", "reports_price_move")
 
 def _key() -> str:
@@ -248,11 +251,11 @@ def cmd_eval(args) -> None:
         summ = report(
             keys, teacher, {k: rules_label(sample[k]) for k in keys}, sample, f"rules {args.split}"
         )
-        (D / "runs").mkdir(parents=True, exist_ok=True)
-        with (D / "runs" / "summary.jsonl").open("a") as fh:
+        RUNS.mkdir(parents=True, exist_ok=True)
+        with (RUNS / "summary.jsonl").open("a") as fh:
             fh.write(json.dumps({"variant": "rules", "split": args.split, "rep": 1, **summ}) + "\n")
         return
-    out_path = D / "runs" / f"{args.variant}_{args.split}_r{args.rep}.jsonl"
+    out_path = RUNS / f"{args.variant}_{args.split}_r{args.rep}.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     have = {r["key"]: r["v"] for r in map(json.loads, out_path.open())} if out_path.exists() else {}
     todo = [(sample[k], args.variant) for k in keys if k not in have]
@@ -261,7 +264,7 @@ def cmd_eval(args) -> None:
             have[k] = v
             fh.write(json.dumps({"key": k, "v": v}, ensure_ascii=False) + "\n")
     summ = report(keys, teacher, have, sample, f"haiku55 {args.variant} {args.split} r{args.rep}")
-    with (D / "runs" / "summary.jsonl").open("a") as fh:
+    with (RUNS / "summary.jsonl").open("a") as fh:
         fh.write(
             json.dumps({"variant": args.variant, "split": args.split, "rep": args.rep, **summ})
             + "\n"

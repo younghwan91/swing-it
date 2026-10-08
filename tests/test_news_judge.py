@@ -844,3 +844,90 @@ def test_prefilter_is_off_by_default_and_a_parameter(tmp_path: Path) -> None:
     j.prefilter = PairFilter()
     s = j.run(pairs, sample=10, stratify=["month"], seed=1, dry_run=True)
     assert (s["sample"], s["prefiltered"]) == (1, 2)
+
+
+# --- 판정 원장(DB) 쓰기 -------------------------------------------------------------------
+
+
+class FakeLedger:
+    def __init__(self, fail: bool = False) -> None:
+        from swing_it.news.judgments_db import V2R3_HAIKU55
+
+        self.spec = V2R3_HAIKU55
+        self.fail = fail
+        self.calls: list[list[dict]] = []
+
+    def record(self, entries: list[dict]) -> dict:
+        self.calls.append(entries)
+        if self.fail:
+            raise RuntimeError("db down")
+        return {"inserted": len(entries), "updated": 0, "unchanged": 0}
+
+
+class EndedAPI(FakeAPI):
+    """종료된 배치에 ended_at 을 붙인다(실제 API 처럼)."""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        resp = super().__call__(request)
+        path = request.url.path
+        if request.method == "GET" and path.startswith("/v1/messages/batches/") and not path.endswith("/results"):
+            body = resp.json()
+            if body["processing_status"] == "ended":
+                body["ended_at"] = "2026-10-09T01:02:03Z"
+                return httpx.Response(200, json=body)
+        return resp
+
+
+def test_collect_writes_the_ledger_with_exact_result_time_and_usage(tmp_path: Path) -> None:
+    pairs = [_pair(i) for i in range(4)]
+    cids = sorted(custom_id_of(p["key"]) for p in pairs)
+
+    def result_for(cid: str) -> dict:
+        if cid == cids[0]:
+            return {"type": "succeeded", "message": _msg_usage({**FEATS, "persistence": "forever"})}
+        if cid == cids[1]:  # 크레딧 부족 — 판정 시도가 아니다
+            return {"type": "errored", "error": {"type": "error", "error": {"type": "invalid_request_error"}}}
+        return {"type": "succeeded", "message": _msg_usage(FEATS)}
+
+    led = FakeLedger()
+    j = _judge(tmp_path, EndedAPI(result_for))
+    j.ledger = led
+    j.run(pairs, sample=10, stratify=["month"], seed=1)
+    (entries,) = led.calls
+    assert len(entries) == 3  # 성공 2 + 스키마 오류 1, 크레딧 거절은 빠진다
+    ok = [e for e in entries if e["output"] is not None]
+    assert len(ok) == 2 and all(e["error"] is None for e in ok)
+    assert ok[0]["output"]["score"] == pytest.approx(ArticleFeatures(**FEATS).score())
+    assert all(e["judged_at"] == dt.datetime(2026, 10, 9, 1, 2, 3, tzinfo=dt.UTC) and e["judged_at_exact"]
+               for e in entries)
+    assert all(e["batch_id"] == "b1" for e in entries)
+    bad = [e for e in entries if e["output"] is None]
+    assert bad[0]["error"].startswith("schema:") and bad[0]["usage"] == USAGE
+    rows = {json.loads(line)["key"]: json.loads(line) for line in (tmp_path / "cache.jsonl").open()}
+    assert {e["input_hash"] for e in ok} == {rows[e["key"]]["input_hash"] for e in ok}
+
+
+def test_ledger_failure_leaves_files_untouched_and_the_batch_unprocessed(tmp_path: Path) -> None:
+    pairs = [_pair(i) for i in range(2)]
+    api = EndedAPI()
+    j = _judge(tmp_path, api)
+    j.ledger = FakeLedger(fail=True)
+    with pytest.raises(RuntimeError, match="db down"):
+        j.run(pairs, sample=10, stratify=["month"], seed=1)
+    assert not (tmp_path / "cache.jsonl").exists() and not (tmp_path / "errors.jsonl").exists()
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert [b["processed"] for b in state["batches"]] == [False]
+    # DB 가 돌아오면 같은 배치를 다시 수집한다 — 새 배치를 만들지 않는다
+    j2 = _judge(tmp_path, api)
+    j2.ledger = FakeLedger()
+    summary = j2.run(pairs, sample=10, stratify=["month"], seed=1)
+    assert len(api.created) == 1 and summary["succeeded"] == 2
+
+
+def test_run_files_are_named_after_the_run(tmp_path: Path) -> None:
+    j = BatchJudge(client=httpx.Client(), api_key=None, model="m", cache=tmp_path / "judgments.jsonl",
+                   errors=tmp_path / "errors.jsonl", state=tmp_path / "stage2.state.json", budget_usd=0)
+    assert j.batches_log.name == "stage2.batches.log" and j.usage_log.name == "stage2.usage.jsonl"
+    old = BatchJudge(client=httpx.Client(), api_key=None, model="m", cache=tmp_path / "c", errors=tmp_path / "e",
+                     state=tmp_path / "persistence_stage1_state.json", budget_usd=0)
+    assert old.batches_log.name == "persistence_stage1_state.batches.log"

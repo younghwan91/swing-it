@@ -1,8 +1,8 @@
 """판정 쌍 생성기 — quant-airflow DB 의 토스 종목별 피드에서 (기사, 종목) 쌍을 만든다.
 
     # 1단계 구간 재생성(DB 읽기 전용)
-    python -m swing_it.news.pairs --days 2025-09-01..2026-02-28 \\
-        --out data/eval/persistence_swing/pairs_stage1_db.jsonl
+    python -m swing_it.news.pairs --days 2023-03-20..2026-02-27 \\
+        --out data/eval/persistence_swing/pairs/swing_2023-03_2026-02.db.jsonl
 
 daytrade-it ``scripts/eval/build_universe_events.py --pairs-out`` (+ 스윙 태그 필터) 를 대체한다. 그쪽은
 daytrade-it 파일 아카이브(``data/toss_universe_42m/<code>.jsonl`` + ``.done``)를 읽었고, 이쪽은 같은 아카이브를
@@ -25,7 +25,7 @@ daytrade-it 파일 아카이브(``data/toss_universe_42m/<code>.jsonl`` + ``.don
    1단계 쌍 파일이 거친 장중 제약이라 재현용으로 둔다. ``--no-sweep`` 으로 끈다.
 5. 판정 전 필터(:class:`~swing_it.news.prefilter.PairFilter`, 기본 = 1단계 조합).
 
-출력 JSONL 키는 옛 파일(``pairs_2023-03_2026-02_swing.jsonl``)과 같다: key, code, name, market, sector, title,
+출력 JSONL 키는 옛 파일(``data/eval/persistence_swing/pairs/swing_2023-03_2026-02.jsonl``)과 같다: key, code, name, market, sector, title,
 body(요약, 없으면 제목), summary, category(피드에 분류가 없어 None), day, month, session, published_at, related_n.
 
 DB 는 읽기만 한다. 가격은 :func:`swing_it.storage.read_prices` 정문으로 읽는다(가드레일 g).

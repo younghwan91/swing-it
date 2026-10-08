@@ -1,9 +1,8 @@
 """(기사, 종목) 쌍을 Message Batches API 로 판정한다 — daytrade-it ``scripts/eval/judge_batch.py`` 이식.
 
     # 비용 추정만(API 호출 없음)
-    python -m swing_it.news.judge --pairs data/eval/persistence_swing/pairs_2023-03_2026-02_swing.jsonl \\
-        --days 2025-03-01..2025-08-31 --sample 29932 --seed 1 --budget-usd 8 \\
-        --state data/eval/cache/haiku55/persistence_stage2_state.json --dry-run
+    python -m swing_it.news.judge --pairs data/eval/persistence_swing/pairs/swing_2023-03_2026-02.jsonl \\
+        --days 2025-03-01..2025-08-31 --sample 29932 --seed 1 --budget-usd 8 --run stage2 --dry-run
     # 제출·폴링·캐시 기록(재개 가능: 죽으면 같은 명령을 다시 돌린다)
     python -m swing_it.news.judge ... (같은 인자, --dry-run 없이)
 
@@ -13,6 +12,12 @@
 기본값은 스윙 2호 판정 그대로다: 모델 ``claude-haiku-5-5``(``temperature`` 를 받지 않아 빼고,
 ``thinking: disabled`` — 운영 v2 를 판정한 Haiku 4.5 는 생각하지 않았다), 운영 v2 프롬프트 +
 사전등록 보충 ``research/logs/news_persistence_swing/prompt_r3.txt``.
+
+**판정의 정본은 DB 원장이다(2026-10-09).** 배치를 수집할 때마다 결과를 quant-airflow ``article_judgments`` 에
+judge 이름(:mod:`swing_it.news.judgments_db` — 모델·system·파라미터로 정해진다, 기본 = ``v2r3-haiku55``)으로 **먼저**
+쓰고(실측 usage 토큰, judged_at = 배치 종료 시각·exact TRUE), 그다음 JSONL 작업 상태를 붙인다. DB 쓰기가 실패하면
+배치를 처리 완료로 표시하지 않고 실패한다. 작업 상태 파일: ``data/eval/judge_runs/<judge>/`` 의 ``judgments.jsonl``·
+``errors.jsonl`` (judge 단위 — 재판정 건너뛰기)과 ``<run>.state.json``·``<run>.batches.log``·``<run>.usage.jsonl``.
 
 **이식하며 바뀐 것(2026-10-08):**
 
@@ -63,9 +68,11 @@ from pathlib import Path
 
 import httpx
 
+from swing_it.news.judgments_db import JudgmentLedger, connect_db, spec_for_request
 from swing_it.news.prefilter import PairFilter, add_filter_args, filter_from_args, keep_pair
 from swing_it.news.prompt import (
     _MAX_OUTPUT_TOKENS,
+    _SYSTEM,
     SchemaError,
     build_prompt,
     judgment_input_hash,
@@ -76,9 +83,9 @@ from swing_it.news.prompt import (
 
 API = "https://api.anthropic.com"
 REPO = Path(__file__).resolve().parents[3]
-CACHE = Path("data/eval/cache/haiku55/persistence_v2.jsonl")
-ERRORS = Path("data/eval/cache/haiku55/persistence_errors.jsonl")
-STATE = Path("data/eval/cache/haiku55/persistence_state.json")
+#: 판정 작업 상태(정본은 DB 원장): judge_runs/<judge>/{judgments.jsonl, errors.jsonl, <run>.state.json,
+#: <run>.batches.log, <run>.usage.jsonl}. judgments/errors 는 judge 단위(재판정 건너뛰기), 나머지는 런 단위.
+RUNS = Path("data/eval/judge_runs")
 #: 사전등록(수정 1)이 고정한 보충. data/eval/persistence_swing/prompts/r3.txt 와 바이트 동일.
 ADDENDUM = REPO / "research" / "logs" / "news_persistence_swing" / "prompt_r3.txt"
 MODEL = "claude-haiku-5-5"
@@ -177,14 +184,26 @@ def build_request(pair: dict, model: str, addendum: str | None = None, cache_sys
                 if cache_system
                 else system
             ),
-            "max_tokens": _MAX_OUTPUT_TOKENS,
             "messages": [{"role": "user", "content": user}],
-            **({} if model in NO_TEMPERATURE else {"temperature": 0}),
-            # Haiku 5.5 thinks by default and the 400-token cap went entirely to thinking (pilot 2026-10-08:
-            # 320/500 empty, 90 truncated). The live v2 judge (Haiku 4.5) never thought — disable to replicate it.
-            **({"thinking": {"type": "disabled"}} if model in NO_TEMPERATURE else {}),
+            **request_params(model),
         },
     }
+
+
+def request_params(model: str) -> dict:
+    """모델 입력 외 판정 파라미터 — judge 정의(``judges.params``)의 일부."""
+    return {
+        "max_tokens": _MAX_OUTPUT_TOKENS,
+        **({} if model in NO_TEMPERATURE else {"temperature": 0}),
+        # Haiku 5.5 thinks by default and the 400-token cap went entirely to thinking (pilot 2026-10-08:
+        # 320/500 empty, 90 truncated). The live v2 judge (Haiku 4.5) never thought — disable to replicate it.
+        **({"thinking": {"type": "disabled"}} if model in NO_TEMPERATURE else {}),
+    }
+
+
+def judge_spec(model: str, addendum: str | None):
+    """(모델, 보충) → 등록된 judge 정의. 맞는 이름이 없으면 :class:`JudgeCollision`."""
+    return spec_for_request(model, system_with_addendum(_SYSTEM, addendum), request_params(model))
 
 
 def system_text(params: dict) -> str:
@@ -362,6 +381,7 @@ class BatchJudge:
         cache_system: bool = True,
         cache_hit_rate: float = 1.0,
         prefilter: PairFilter | None = None,
+        ledger: JudgmentLedger | None = None,
         sleep: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] = print,
     ) -> None:
@@ -377,6 +397,7 @@ class BatchJudge:
         self.cache_system = cache_system
         self.cache_hit_rate = cache_hit_rate
         self.prefilter = prefilter
+        self.ledger = ledger
         self.sleep = sleep
         self.log = log
 
@@ -408,10 +429,16 @@ class BatchJudge:
     def _estimate(self, requests: list[dict]) -> dict:
         return estimate_cost(requests, self.chars_per_token, self.est_output_tokens, self.cache_hit_rate)
 
+    def _sibling(self, suffix: str) -> Path:
+        """상태 파일 옆 런 파일: ``<run>.state.json`` → ``<run><suffix>`` (옛 이름 ``x.json`` → ``x<suffix>``)."""
+        name = self.state.name
+        base = name[: -len(".state.json")] if name.endswith(".state.json") else self.state.stem
+        return self.state.with_name(base + suffix)
+
     @property
     def usage_log(self) -> Path:
         """결과별 실제 과금 usage — ``{key, batch_id, result, usage}`` 한 줄씩."""
-        return self.state.with_suffix(".usage.jsonl")
+        return self._sibling(".usage.jsonl")
 
     def failure_counts(self) -> Counter[str]:
         if not self.errors.exists():
@@ -460,7 +487,7 @@ class BatchJudge:
 
     @property
     def batches_log(self) -> Path:
-        return self.state.with_suffix(".batches.log")
+        return self._sibling(".batches.log")
 
     def submit(self, requests: list[dict], keys: dict[str, str], chunk: int) -> str:
         """Create one batch. Exactly one POST: a create is billable, so it is never retried.
@@ -638,23 +665,47 @@ class BatchJudge:
             delay = min(delay * 1.5, cap)
 
     def collect(self, entry: dict) -> tuple[int, int]:
-        """Poll one state entry to completion and write its results. -> (succeeded, failed)."""
+        """Poll one state entry to completion and write its results. -> (succeeded, failed).
+
+        순서: 결과를 전부 메모리에 모은 뒤 **판정 원장(DB)에 먼저** 쓰고(``ledger`` 가 있으면), 그다음 JSONL
+        작업 상태(캐시·오류·usage)를 붙이고 배치를 처리 완료로 표시한다. DB 쓰기가 실패하면 예외가 그대로 올라가고
+        배치는 미처리로 남는다 — 다시 돌리면 다시 수집한다(파일만 성공한 척하지 않는다).
+        원장의 judged_at = 배치 종료 시각(``ended_at`` — 결과를 알 수 있게 된 시각), judged_at_exact TRUE.
+        """
         batch = self.wait(entry["id"])
         text = self._http("GET", batch["results_url"]).text
+        ended = batch.get("ended_at")
+        judged_at = (
+            dt.datetime.fromisoformat(str(ended).replace("Z", "+00:00")) if ended else dt.datetime.now(dt.UTC)
+        )
         keys = entry["custom_ids"]
         hashes = entry.get("input_hashes") or {}
         ok = bad = 0
         seen = set()
         usage: dict = {}
         n_usage = n_cache_read = 0
+        cache_rows: list[dict] = []
+        error_rows: list[dict] = []
+        usage_rows: list[dict] = []
+        ledger_rows: list[dict] = []
+
+        def to_ledger(key: str, cid: str, u: dict | None, *, output: dict | None = None, error: str | None = None):
+            h = hashes.get(cid)
+            if h is None:  # 해시 이전 상태 파일 — 무엇을 판정했는지 모르니 원장에 넣지 않는다
+                return
+            ledger_rows.append({"key": key, "input_hash": h, "output": output, "error": error,
+                                "batch_id": entry["id"], "judged_at": judged_at, "judged_at_exact": True,
+                                "usage": u})
+
         for line in text.splitlines():
             if not line.strip():
                 continue
             row = json.loads(line)
-            key = keys.get(row["custom_id"])
+            cid = row["custom_id"]
+            key = keys.get(cid)
             if key is None:
                 continue
-            seen.add(row["custom_id"])
+            seen.add(cid)
             result = row.get("result") or {}
             # 과금은 응답이 있는 모든 결과(스키마 오류 포함)에 붙는다 — 측정은 파싱 전에 한다.
             u = (result.get("message") or {}).get("usage")
@@ -662,21 +713,16 @@ class BatchJudge:
                 add_usage(usage, u)
                 n_usage += 1
                 n_cache_read += bool(u.get("cache_read_input_tokens"))
-                self._append(
-                    self.usage_log,
+                usage_rows.append(
                     {"key": key, "batch_id": entry["id"], "result": result.get("type"),
-                     "usage": {k: int(u.get(k) or 0) for k in USAGE_FIELDS}},
+                     "usage": {k: int(u.get(k) or 0) for k in USAGE_FIELDS}}
                 )
             if result.get("type") != "succeeded":
-                self._append(
-                    self.errors,
-                    {
-                        "key": key,
-                        "reason": result.get("type") or "unknown",
-                        "detail": result.get("error"),
-                        "batch_id": entry["id"],
-                    },
-                )
+                err = {"key": key, "reason": result.get("type") or "unknown", "detail": result.get("error"),
+                       "batch_id": entry["id"]}
+                error_rows.append(err)
+                if counts_as_attempt(err):  # 계정 거절(크레딧·인증)은 판정 시도가 아니다 — 원장에 넣지 않는다
+                    to_ledger(key, cid, u, error=f"{err['reason']}: {json.dumps(err['detail'], ensure_ascii=False)}")
                 bad += 1
                 continue
             blocks = (result.get("message") or {}).get("content") or []
@@ -684,30 +730,31 @@ class BatchJudge:
             try:
                 features = parse_features(content)
             except SchemaError as exc:
-                self._append(
-                    self.errors,
-                    {"key": key, "reason": "schema", "detail": str(exc), "batch_id": entry["id"]},
-                )
+                error_rows.append({"key": key, "reason": "schema", "detail": str(exc), "batch_id": entry["id"]})
+                to_ledger(key, cid, u, error=f"schema: {exc}")
                 bad += 1
                 continue
             cached: dict = {"key": key}
             # the hash of the input actually submitted (entries from before hashing have none)
-            if (h := hashes.get(row["custom_id"])) is not None:
+            if (h := hashes.get(cid)) is not None:
                 cached["input_hash"] = h
             cached["v2"] = {**asdict(features), "score": features.score()}
-            self._append(self.cache, cached)
+            cache_rows.append(cached)
+            to_ledger(key, cid, u, output=cached["v2"])
             ok += 1
         for cid in set(keys) - seen:
-            self._append(
-                self.errors,
-                {
-                    "key": keys[cid],
-                    "reason": "missing_result",
-                    "detail": None,
-                    "batch_id": entry["id"],
-                },
-            )
+            error_rows.append({"key": keys[cid], "reason": "missing_result", "detail": None, "batch_id": entry["id"]})
+            to_ledger(keys[cid], cid, None, error="missing_result: null")
             bad += 1
+        if self.ledger is not None:
+            counts = self.ledger.record(ledger_rows)  # 실패하면 여기서 예외 — 아래 파일·상태는 건드리지 않는다
+            self.log(f"batch {entry['id']}: ledger {self.ledger.spec.judge} {counts}")
+        for r in cache_rows:
+            self._append(self.cache, r)
+        for r in error_rows:
+            self._append(self.errors, r)
+        for r in usage_rows:
+            self._append(self.usage_log, r)
         state = self._load_state()
         model = (state.get("run") or {}).get("model", self.model)
         measured = usage_cost(usage, model)
@@ -961,9 +1008,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--stratify", default="month,sector,session")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--model", default=MODEL, help="스윙 2호 = claude-haiku-5-5 (Haiku 4.5 도 허용)")
-    ap.add_argument("--cache", type=Path, default=CACHE)
-    ap.add_argument("--errors", type=Path, default=ERRORS)
-    ap.add_argument("--state", type=Path, default=STATE, help="구간(단계)마다 따로 — 끝난 런은 --new-run 없이 새 표본을 막는다")
+    ap.add_argument("--run", default=None,
+                    help="런 이름(예: stage2) → judge_runs/<judge>/<run>.state.json. 구간(단계)마다 따로 — 끝난 런은 "
+                    "--new-run 없이 새 표본을 막는다")
+    ap.add_argument("--cache", type=Path, default=None, help="기본 judge_runs/<judge>/judgments.jsonl")
+    ap.add_argument("--errors", type=Path, default=None, help="기본 judge_runs/<judge>/errors.jsonl")
+    ap.add_argument("--state", type=Path, default=None, help="기본 judge_runs/<judge>/<run>.state.json")
     ap.add_argument("--chars-per-token", type=float, default=1.0)
     ap.add_argument("--est-output-tokens", type=int, default=200)
     ap.add_argument("--cache-hit-rate", type=float, default=1.0,
@@ -1018,6 +1068,13 @@ def main(argv: list[str] | None = None) -> None:
     if not (args.model.startswith("claude-haiku-4-5") or args.model == "claude-haiku-5-5"):
         sys.exit(f"model must be Haiku 4.5 or 5.5, got {args.model}")
     addendum = None if args.no_addendum else read_addendum(args.system_addendum)
+    spec = judge_spec(args.model, addendum)
+    run_dir = RUNS / spec.judge
+    if args.state is None and args.run is None:
+        ap.error("--run NAME (또는 --state PATH) 이 필요하다")
+    state = args.state or run_dir / f"{args.run}.state.json"
+    cache = args.cache or run_dir / "judgments.jsonl"
+    errors = args.errors or run_dir / "errors.jsonl"
 
     # --collect-only touches no pair: skip reading the (large) pairs file entirely
     pairs = (
@@ -1034,9 +1091,9 @@ def main(argv: list[str] | None = None) -> None:
             client=client,
             api_key=api_key_for(args.dry_run, args.calibrate),
             model=args.model,
-            cache=args.cache,
-            errors=args.errors,
-            state=args.state,
+            cache=cache,
+            errors=errors,
+            state=state,
             budget_usd=args.budget_usd or 0.0,
             chars_per_token=args.chars_per_token,
             est_output_tokens=args.est_output_tokens,
@@ -1045,6 +1102,8 @@ def main(argv: list[str] | None = None) -> None:
             cache_system=not args.no_cache_system,
             cache_hit_rate=args.cache_hit_rate,
             prefilter=filter_from_args(args) if args.prefilter else None,
+            # 판정 원장(DB)이 정본 — 결과를 모으는 모든 실행이 쓴다. 연결이 안 되면 여기서 실패한다.
+            ledger=None if args.dry_run else JudgmentLedger(connect_db(), spec),
         )
         try:
             if args.adopt_batch:
