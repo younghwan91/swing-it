@@ -310,3 +310,29 @@ def test_control_trades_pivot_is_prior_50d_high():
     t, s = control_trades(Op, H, L, C, MA, pairs, max_hold=2, chase=0.05, limit_up_skip=False,
                           return_skipped=True)
     assert t.empty and s["pivot"].iloc[0] == 120.0 and s["skip_reason"].iloc[0] == "skip_chase"
+
+
+def test_build_skeleton_events_trend_entry_drops_breakout():
+    """``require_breakout=False`` (탐색 격자 진입 "trend") = 유니버스 ∧ 추세 템플릿 ∧ RS ∧ breadth, 돌파 무관.
+
+    기본값(키 없음)은 원래 뼈대 S 와 같아야 한다 — 판정 러너의 동작이 바뀌지 않는다."""
+    p = _random_panels(n=500, k=8, seed=3)
+    f = skeleton_features(p)
+    s_default = build_skeleton_events(p, feats=f)
+    s_explicit = build_skeleton_events(p, {"require_breakout": True}, feats=f)
+    pd.testing.assert_frame_equal(s_default, s_explicit)
+
+    tr = build_skeleton_events(p, {"require_breakout": False}, feats=f)
+    want = f["tt"] & (f["rs"] >= 70) & (f["breadth"] > 0.5)
+    assert len(tr) == int(want.to_numpy().sum()) > len(s_default)
+    got = set(zip(tr["code"], tr["event_day"], strict=True))
+    di, ci = np.nonzero(want.to_numpy())
+    assert got == set(zip(p.close.columns[ci], p.days[di], strict=True))
+    # 돌파 사건은 전부 trend 사건 안에 있다(돌파 조건만 빠졌다)
+    assert set(zip(s_default["code"], s_default["event_day"], strict=True)) <= got
+    # 피벗 열은 그대로 직전 50일 최고 고가(추격 금지 규칙의 기준)
+    pv = f["pivot"].to_numpy()[tr["day_idx"].to_numpy(), tr["col_idx"].to_numpy()]
+    np.testing.assert_allclose(tr["pivot"].to_numpy(), pv)
+    # keep_all 은 추세 템플릿 행 전부
+    allev = build_skeleton_events(p, {"require_breakout": False}, feats=f, keep_all=True)
+    assert len(allev) == int(f["tt"].to_numpy().sum()) and allev["tt"].all()

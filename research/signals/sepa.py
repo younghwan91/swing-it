@@ -127,14 +127,20 @@ def build_skeleton_events(p, cfg: "dict | None" = None, *, universe: "pd.DataFra
         keep_all: True 면 피벗 돌파 행 전부를 남기고 ``skeleton`` 열로 S 여부만 표시한다
             (catalyst_flow 의 ``passes`` 와 같은 쓰임 — 어느 조건이 얼마나 거르는지 세기용).
 
+    ``cfg["require_breakout"]`` (기본 True — :data:`PREREG_SKELETON` 에 **넣지 않는다**: 넣으면 스윙 3호 판정
+    config 의 원장 지문이 바뀐다) 가 False 면 피벗 돌파·거래량 조건을 빼고 **추세 템플릿 행**을 바탕으로 쓴다 —
+    S' = 유니버스 ∧ 추세 템플릿 ∧ RS ∧ breadth (탐색 격자 ``sepa_explore`` 의 진입 "trend"). ``pivot`` 열은 그대로
+    직전 50일 최고 고가라 시뮬레이터의 추격 금지(시가 > 피벗 × 1.05)도 같은 식으로 걸린다. ``keep_all`` 이면
+    추세 템플릿 행 전부가 남는다.
+
     Returns:
         ``code, event_day, market, pivot, close, tt, rs, breadth, universe, skeleton, day_idx, col_idx``.
     """
     cfg = {**PREREG_SKELETON, **(cfg or {})}
     f = skeleton_features(p, cfg) if feats is None else feats
     uni = _universe_panel(universe, p.close)
-    brk = f["breakout"].to_numpy(dtype=bool)
-    di, ci = np.nonzero(brk)
+    base = f["breakout"] if cfg.get("require_breakout", True) else f["tt"]
+    di, ci = np.nonzero(base.to_numpy(dtype=bool))
     ev = pd.DataFrame({"code": p.close.columns[ci], "event_day": p.days[di], "day_idx": di, "col_idx": ci})
 
     def pick(panel: pd.DataFrame) -> np.ndarray:

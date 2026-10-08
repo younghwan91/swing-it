@@ -200,3 +200,34 @@ def add_earnings_flags(panel: pd.DataFrame, *, eligible: pd.Series | None = None
     """``e_flag``·``accel``·``pead_rank`` 열을 붙인 사본(설계서 고정 수치)."""
     return panel.assign(e_flag=e_flag(panel), accel=accel_flag(panel),
                         pead_rank=pead_rank(panel, eligible=eligible))
+
+
+#: :func:`pead_cross_events` 기본 문턱 — 탐색 격자 기준선 ``pead_new`` (``research/logs/sepa_explore/EXPLORE.md``).
+PEAD_CROSS_MIN = 0.90
+
+
+def pead_cross_events(panel: pd.DataFrame, *, threshold: float = PEAD_CROSS_MIN,
+                      rank_col: str = "pead_rank") -> pd.DataFrame:
+    """PEAD 순위가 ``threshold`` 이상으로 **올라선 날** — 기술 조건 없는 PEAD 사건(탐색 기준선 ``pead_new``).
+
+    사건 = 그날 순위 ≥ ``threshold`` ∧ (직전 거래일 순위 < ``threshold`` ∨ 직전 거래일 순위 NaN ∨ 직전 행 없음).
+    "직전" 은 그 종목의 바로 앞 행이다 — :func:`earnings_leg_panel` 은 종목의 첫 공시 이후 모든 거래일에 행을
+    두므로 바로 앞 행 = 직전 거래일이다. 순위가 NaN 인 날(유니버스 밖 — :func:`pead_rank` 의 ``eligible``)은
+    "아래" 로 본다: 유니버스에 들어오면서 바로 ≥ 문턱이면 그날이 사건이다. 한 종목이 문턱을 여러 번 오르내리면
+    오를 때마다 사건이다(분기 갱신·횡단면 순위 흔들림 모두) — 겹침은 시뮬레이터의 보유 중 재진입 금지가 거른다.
+
+    Args:
+        panel: ``code``·``date`` (+ ``rank_col``) 롱 프레임. 보통 :func:`pead_rank` 를 붙인 :func:`earnings_leg_panel`.
+        threshold: 문턱(이상).
+        rank_col: 순위 열 이름.
+
+    Returns:
+        사건 행만 담은 ``panel`` 의 부분집합(원래 열 그대로, ``code, date`` 정렬, 인덱스 재설정).
+    """
+    if panel.empty:
+        return panel.iloc[:0].copy()
+    df = panel.sort_values(["code", "date"])
+    r = df[rank_col].astype(float)
+    prev = r.groupby(df["code"].to_numpy(), sort=False).shift(1)
+    up = (r >= threshold) & ~(prev >= threshold)          # NaN 비교는 False → ~False = True(직전 NaN·행 없음 = 아래)
+    return df[up.to_numpy()].reset_index(drop=True)

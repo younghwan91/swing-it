@@ -17,6 +17,7 @@ from swing_it.features.earnings_leg import (
     add_earnings_flags,
     e_flag,
     earnings_leg_panel,
+    pead_cross_events,
     pead_rank,
     period_ordinal,
 )
@@ -258,3 +259,27 @@ def test_revenue_and_op_yoy_come_from_the_same_row():
 def test_empty_input_returns_schema():
     p = earnings_leg_panel(_rows(("A", "2022Q1", "2022-05-16", "2022-05-16", 1.0, 0.0)), ["2022-06-01"])
     assert p.empty and "yoy" in p.columns
+
+
+# --- pead_cross_events (탐색 기준선 pead_new) ---
+
+def test_pead_cross_events_up_crossings_only():
+    d = [f"2024-01-0{i}" for i in range(1, 9)]
+    panel = pd.DataFrame({
+        "code": ["A"] * 8 + ["B"] * 3,
+        "date": d + d[:3],
+        #        아래  위(사건) 유지  아래  NaN  위(사건) 정확히 문턱 유지  | B: 첫 행부터 위(사건), 유지, 아래
+        "pead_rank": [0.5, 0.95, 0.99, 0.80, np.nan, 0.91, 0.90, 0.97] + [0.92, 0.93, 0.10],
+    })
+    ev = pead_cross_events(panel.sample(frac=1.0, random_state=0), threshold=0.90)   # 입력 순서 무관
+    assert list(zip(ev["code"], ev["date"], strict=True)) == [
+        ("A", "2024-01-02"), ("A", "2024-01-06"), ("B", "2024-01-01")]
+    assert list(ev.columns) == list(panel.columns)
+    assert pead_cross_events(panel.iloc[:0]).empty
+
+
+def test_pead_cross_events_threshold_is_inclusive_and_nan_is_below():
+    panel = pd.DataFrame({"code": ["A"] * 3, "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
+                          "pead_rank": [np.nan, 0.90, np.nan]})
+    ev = pead_cross_events(panel, threshold=0.90)
+    assert ev["date"].tolist() == ["2024-01-02"]
