@@ -207,3 +207,13 @@ def test_market_cap_asof_bulk_date_filter_matches_per_row(tmp_path):
     np.testing.assert_array_equal(market_cap_asof_bulk(con, month_end).to_numpy(), per_row(month_end))
     with pytest.raises(ValueError):  # 예전처럼 날짜가 아닌 값은 예외
         market_cap_asof_bulk(con, ask.assign(date="not-a-date"))
+    holiday = ask.assign(date="2026-01-03")  # 범위 안이지만 어떤 종목도 바가 없는 날(토요일)
+    assert market_cap_asof_bulk(con, holiday).isna().all()
+    ts = ask.assign(date=pd.to_datetime(ask["date"]))  # datetime64 입력도 같은 값
+    np.testing.assert_array_equal(market_cap_asof_bulk(con, ts).to_numpy(), per_row(ask))
+    with pytest.raises(TypeError):
+        market_cap_asof_bulk(con, ts.assign(date=ts["date"].dt.tz_localize("Asia/Seoul")))
+    missing = ask.copy()
+    missing.loc[missing.index[:3], "date"] = None  # 결측 날짜: 예전처럼 merge 에서 예외(종류는 pandas 가 정함)
+    with pytest.raises((ValueError, TypeError)):
+        market_cap_asof_bulk(con, missing)
