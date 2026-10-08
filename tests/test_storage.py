@@ -173,3 +173,47 @@ def test_read_supply_demand_window_scopes_the_delisted_expectation(tmp_path):
                             start="2026-08-26", end="2026-08-26")
     assert list(df["code"]) == ["005930"]
     con.close()
+
+
+
+def test_market_cap_asof_bulk_date_filter_matches_per_row(tmp_path):
+    """요청 날짜만 읽는 bulk 가 정의(행별 market_cap_asof)와 행마다 같은가 — 여러 날짜·0주·결측."""
+    import numpy as np
+    import pandas as pd
+
+    from swing_it.storage import market_cap_asof_bulk
+
+    con = connect(tmp_path / "t.db")
+    rng = np.random.default_rng(0)
+    days = [d.date().isoformat() for d in pd.bdate_range("2026-01-01", periods=60)]
+    codes = [f"{i:06d}" for i in range(12)]
+    for c in codes:
+        for d in days:
+            if rng.random() < 0.85:
+                _insert_bar(con, c, d, int(rng.integers(1000, 90000)))
+        for d in sorted(rng.choice(days, 4, replace=False)):
+            _insert_shares(con, c, d, int(rng.choice([0, 5_000_000, 12_345_678])))
+    ask = pd.DataFrame({"code": rng.choice(codes + ["999999"], 300),
+                        "date": rng.choice(days + ["2025-12-31", "2027-01-04"], 300)})
+    def per_row(frame):
+        vals = [market_cap_asof(con, c, d) for c, d in zip(frame["code"], frame["date"])]
+        return np.array([np.nan if v is None else float(v) for v in vals])
+
+    got = market_cap_asof_bulk(con, ask)
+    assert list(got.index) == list(ask.index)
+    np.testing.assert_array_equal(got.to_numpy(), per_row(ask))
+    assert got.notna().sum() > 50  # 표본이 실제로 값을 담는다(0주·결측·범위 밖 날짜 제외 97행)
+    month_end = ask.assign(date=days[-1])  # sector_flow 처럼 한 날짜
+    np.testing.assert_array_equal(market_cap_asof_bulk(con, month_end).to_numpy(), per_row(month_end))
+    with pytest.raises(ValueError):  # 예전처럼 날짜가 아닌 값은 예외
+        market_cap_asof_bulk(con, ask.assign(date="not-a-date"))
+    holiday = ask.assign(date="2026-01-03")  # 범위 안이지만 어떤 종목도 바가 없는 날(토요일)
+    assert market_cap_asof_bulk(con, holiday).isna().all()
+    ts = ask.assign(date=pd.to_datetime(ask["date"]))  # datetime64 입력도 같은 값
+    np.testing.assert_array_equal(market_cap_asof_bulk(con, ts).to_numpy(), per_row(ask))
+    with pytest.raises(TypeError):
+        market_cap_asof_bulk(con, ts.assign(date=ts["date"].dt.tz_localize("Asia/Seoul")))
+    missing = ask.copy()
+    missing.loc[missing.index[:3], "date"] = None  # 결측 날짜: 예전처럼 merge 에서 예외(종류는 pandas 가 정함)
+    with pytest.raises((ValueError, TypeError)):
+        market_cap_asof_bulk(con, missing)
