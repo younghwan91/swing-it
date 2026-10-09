@@ -79,9 +79,10 @@ class _Book:
     tradable: np.ndarray
     last_tradable: np.ndarray       # 종목별 마지막 거래 가능 행(-1 = 없음)
     present_end: np.ndarray         # 패널 마지막 날 종가가 있나
+    sma50: "np.ndarray | None" = None   # 강세 매도(청산 v2)의 MA50 — 그 조건을 켰을 때만
 
     @classmethod
-    def of(cls, panels: dict) -> "_Book":
+    def of(cls, panels: dict, *, sma50: bool = False) -> "_Book":
         c = panels["close"]
 
         def arr(x):
@@ -92,7 +93,12 @@ class _Book:
         tr = present & np.isfinite(op) & np.isfinite(lo) & (op > 0) & (vol > 0)
         n = len(c.index)
         last = np.where(tr.any(axis=0), n - 1 - np.argmax(tr[::-1], axis=0), -1)
-        return cls(c.index, c.columns, op, hi, lo, cl, ma, tr, last, present[-1])
+        sm = None
+        if sma50:
+            from swing_it.features.technical import moving_average  # noqa: PLC0415
+
+            sm = arr(panels["sma50"]) if "sma50" in panels else moving_average(c, 50).to_numpy(dtype=float)
+        return cls(c.index, c.columns, op, hi, lo, cl, ma, tr, last, present[-1], sm)
 
 
 @dataclass
@@ -145,7 +151,7 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
             가 참이고 패널을 주면 신호일에 거부된 후보를 진입에서 뺀다(``skip_news_veto``, ``result.vetoed`` 에 (신호일,
             종목, rel, rs) 기록 — 가상 진입군). 패널 밖 (날짜, 종목)은 모름 = 거부 안 함.
     """
-    b = _Book.of(panels)
+    b = _Book.of(panels, sma50=cfg.strength_ma_ext is not None)
     days, codes = b.days, b.codes
     n = len(days)
     t_lo = 0 if start is None else int(days.searchsorted(pd.Timestamp(start), side="left"))
@@ -192,9 +198,8 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
         p = o.pos
         last = p.last_exit()
         partial_px = next((x["price"] for x in p.exits if x["kind"] == "partial"), math.nan)
-        # 연구 정의 수익(정수 수량 무관): 익절이 났으면 두 절반 평균, 아니면 마지막 청산가 — REVIEW_BACKTEST m2
-        ret_half = (0.5 * (partial_px / p.entry_px - 1.0) + 0.5 * (last["price"] / p.entry_px - 1.0)
-                    if p.partial_hit else last["price"] / p.entry_px - 1.0)
+        # 연구 정의 수익(정수 수량 무관): 설정 비율(익절 partial_frac·강세 매도 ½·나머지)로 — REVIEW_BACKTEST m2
+        ret_half = p.ideal_return()
         invested = p.qty * p.entry_px
         pnl = o.proceeds - o.cost_krw - invested
         trades.append({
@@ -237,7 +242,9 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
             ci, p = o.ci, o.pos
             day_no = t - o.entry_t + 1                  # 진입일 = 1, 정지일도 센다
             tr = bool(b.tradable[t, ci])
-            acts = p.on_bar(b.op[t, ci], b.hi[t, ci], b.lo[t, ci], b.cl[t, ci], b.ma[t, ci], day_no, tradable=tr)
+            acts = p.on_bar(b.op[t, ci], b.hi[t, ci], b.lo[t, ci], b.cl[t, ci], b.ma[t, ci], day_no, tradable=tr,
+                            prev_close=float(b.cl[t - 1, ci]) if t > 0 else math.nan,
+                            sma50=float(b.sma50[t, ci]) if b.sma50 is not None else math.nan)
             sells += sell(o, acts, t)
             if p.is_open and tr and t == b.last_tradable[ci] and not b.present_end[ci]:
                 sells += sell(o, p.force_close("delisted", b.cl[t, ci], day_no), t)

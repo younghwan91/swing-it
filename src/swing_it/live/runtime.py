@@ -1252,19 +1252,31 @@ class SwingRuntime:
     # ----- 전략 상태 ---------------------------------------------------------------
 
     def _cfg_of(self, pos: PositionRec) -> StrategyConfig:
-        """이 포지션에 고정된 전략 설정(통합 검토 M3). 계획 시점 dict 에서 복원하고 해시로 캐시한다. 없으면(옛 스냅샷) 현재 설정."""
+        """이 포지션에 고정된 전략 설정(통합 검토 M3). 계획 시점 **전체** dict 에서 복원한다 — 그 뒤 추가된 필드는 현재 기본값이
+        아니라 ``config.LEGACY_DEFAULTS``(그 필드가 없던 때의 동작)로 채운다(:func:`swing_it.live.config.pinned_config`). 해시는
+        고정 dict 그대로에 대해 잰다(새 필드가 생겨도 옛 포지션의 해시는 안 바뀐다). 없으면(고정 전 스냅샷) 현재 설정."""
         if not pos.cfg:
             return self.cfg.strategy
         key = pos.cfg_hash or strategy_hash(pos.cfg)
         cfg = self._cfg_cache.get(key)
         if cfg is None:
-            cfg = _strategy_from_dict(pos.cfg)
+            from swing_it.live.config import pinned_config  # noqa: PLC0415
+
+            try:
+                cfg, warns = pinned_config(pos.cfg)
+            except ValueError as e:
+                raise StateCorrupt(f"{pos.code}: 고정 설정 복원 실패 — {e}") from e
+            for w in warns:
+                if f"pinwarn:{key}:{w}" not in self._alerted:
+                    self._alerted.add(f"pinwarn:{key}:{w}")
+                    self.alert("warn", "고정 설정 복원 경고", f"{pos.code} ({key[:8]}): {w}")
             self._cfg_cache[key] = cfg
         return cfg
 
     def _pin_cfg(self, pos: PositionRec) -> None:
-        pos.cfg = self.cfg.strategy.to_dict()
-        pos.cfg_hash = self.cfg_hash
+        """진입(계획) 시점의 StrategyConfig **전 필드**를 고정한다. 해시 = 그 dict 의 해시."""
+        pos.cfg = dict(self.cfg.strategy.to_dict())
+        pos.cfg_hash = strategy_hash(pos.cfg)
 
     def _strat(self, pos: PositionRec) -> PositionState:
         if not pos.strat:

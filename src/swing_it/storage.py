@@ -436,8 +436,43 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
 _PRICE_WIDE_COLS = ("open", "high", "low", "close", "volume")
 
 
+def trading_window(con: Any, *, end: "str | None", rows: int, table: str = PRICE_TABLE) -> "tuple[str, str] | None":
+    """``end``(없으면 테이블 최신일) 까지 마지막 ``rows`` 거래일의 ``(시작일, 끝일)``(YYYY-MM-DD). 날짜만 — 유니버스를 정하지 않는다.
+
+    라이브 그날치 패널(:func:`swing_it.live.features.load_inputs` ``last_rows``)이 전 기간을 읽지 않으려고 쓴다(통합 검토 M6).
+    """
+    ph = _ph(con)
+    if end is None:
+        cur = con.cursor()
+        cur.execute(f"SELECT MAX(date) FROM {table}")  # noqa: S608 — 테이블은 모듈 상수
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        end = str(_as_date(row[0]))
+    cur = con.cursor()
+    cur.execute(f"SELECT DISTINCT date FROM {table} WHERE date <= {ph} ORDER BY date DESC LIMIT {ph}",  # noqa: S608
+                (end, int(rows)))
+    days = [_as_date(r[0]) for r in cur.fetchall()]
+    if not days:
+        return None
+    return str(min(days)), str(max(days))
+
+
+def _assert_window_has_delisted(con: Any, codes: "set[str]", *, table: str, start: str, end: str) -> None:
+    """날짜 창 읽기용 폐지 포함 검사 — 그 창에 시세가 있는 폐지 종목(source='naver')이 결과에도 있어야 한다(없으면 요구하지 않는다)."""
+    ph = _ph(con)
+    cur = con.cursor()
+    cur.execute(f"SELECT DISTINCT code FROM {table} WHERE source = {ph} AND date >= {ph} AND date <= {ph}",  # noqa: S608
+                ("naver", start, end))
+    expected = {str(r[0]) for r in cur.fetchall()}
+    if expected and not (expected & set(codes)):
+        raise AssertionError(f"{table} {start}~{end} 창에 폐지 종목 시세 {len(expected)}개가 있는데 결과엔 하나도 없다 — "
+                             "생존편향. 유니버스를 좁히는 조건을 걷어낼 것")
+
+
 def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, table: str = PRICE_TABLE,
-                     require_delisted: bool = True, batch: int = 250_000):
+                     require_delisted: bool = True, batch: int = 250_000,
+                     start: "str | None" = None, end: "str | None" = None):
     """:func:`read_prices` 의 **메모리 절약판** — 긴 프레임을 만들지 않고 날짜×종목 와이드 패널을 바로 채운다.
 
     같은 정문 규칙이다: WHERE 없이 전 종목·전 기간을 읽고 폐지 종목 포함을 검사한다(``require_delisted``). 다른 점은
@@ -445,19 +480,34 @@ def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, ta
     긴 프레임은 pandas 객체열 때문에 RSS 가 7GB 를 넘지만(2026-10-10 실측), 이 경로는 열 5개 기준 ~0.5GB 다.
     sqlite(로컬 개발)는 :func:`read_prices` 로 읽어 피벗한다(작은 DB 전제).
 
+    ``start``/``end``(YYYY-MM-DD, 포함)를 주면 **날짜로만** 자른다(종목은 자르지 않는다 — 그 창의 전 종목, 폐지 포함). 폐지 검사도
+    그 창 기준(:func:`_assert_window_has_delisted`). 라이브 그날치 패널이 전 기간 580만 행을 읽지 않게 하려는 것이다(통합 검토 M6).
+
     Returns: ``{col: DataFrame(index=날짜 DatetimeIndex, columns=종목 Index)}`` — 없는 (날짜, 종목) 은 NaN.
     """
     import numpy as np  # noqa: PLC0415
     import pandas as pd  # noqa: PLC0415
 
+    bounded = start is not None or end is not None
+    lo, hi = (start or "0000-01-01"), (end or "9999-12-31")
     if not _is_pg(con):
-        df = read_prices(con, cols=("code", "date", *cols), table=table, require_delisted=require_delisted)
+        if bounded:
+            ph = _ph(con)
+            sel = ", ".join(cols)
+            df = pd.read_sql_query(f"SELECT code, date, {sel} FROM {table} WHERE date >= {ph} AND date <= {ph}",  # noqa: S608
+                                   con, params=(lo, hi))
+            if require_delisted:
+                _assert_window_has_delisted(con, set(df["code"].astype(str)), table=table, start=lo, end=hi)
+        else:
+            df = read_prices(con, cols=("code", "date", *cols), table=table, require_delisted=require_delisted)
         df["date"] = pd.to_datetime(df["date"])
         return {c: df.pivot(index="date", columns="code", values=c).astype(float) for c in cols}
+    where = " WHERE date >= %s AND date <= %s" if bounded else ""
+    params = (lo, hi) if bounded else ()
     with con.cursor() as cur:
-        cur.execute(f"SELECT DISTINCT date FROM {table} ORDER BY date")  # noqa: S608 — 테이블은 모듈 상수
+        cur.execute(f"SELECT DISTINCT date FROM {table}{where} ORDER BY date", params)  # noqa: S608 — 테이블은 모듈 상수
         days = pd.DatetimeIndex([r[0] for r in cur.fetchall()])
-        cur.execute(f"SELECT DISTINCT code FROM {table} ORDER BY code")  # noqa: S608
+        cur.execute(f"SELECT DISTINCT code FROM {table}{where} ORDER BY code", params)  # noqa: S608
         codes = pd.Index([str(r[0]) for r in cur.fetchall()])
     dmap = {d: i for i, d in enumerate(days.date)}
     cmap = {c: i for i, c in enumerate(codes)}
@@ -465,7 +515,7 @@ def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, ta
     sel = ", ".join(cols)
     with con.cursor(name=f"swing_it_prices_{os.getpid()}") as scur:
         scur.itersize = batch
-        scur.execute(f"SELECT code, date, {sel} FROM {table}")  # noqa: S608 — 컬럼·테이블은 모듈 상수
+        scur.execute(f"SELECT code, date, {sel} FROM {table}{where}", params)  # noqa: S608 — 컬럼·테이블은 모듈 상수
         while True:
             rows = scur.fetchmany(batch)
             if not rows:
@@ -476,7 +526,9 @@ def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, ta
             for c, v in zip(cols, vals):
                 arrays[c][di, ci] = np.array(v, dtype=float)
     con.rollback()  # 서버측 커서는 트랜잭션 안에서만 산다 — 읽기 전용이라 되돌려 닫는다
-    if require_delisted:
+    if require_delisted and bounded:
+        _assert_window_has_delisted(con, set(map(str, codes)), table=table, start=lo, end=hi)
+    elif require_delisted:
         _assert_universe_has_delisted(con, pd.DataFrame({"code": codes}), table=table)
     return {c: pd.DataFrame(arrays[c], index=days, columns=codes) for c in cols}
 

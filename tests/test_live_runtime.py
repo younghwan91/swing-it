@@ -1579,3 +1579,118 @@ def test_signal_abort_exit_codes(tmp_path):
     env.signals.batches[D1] = SignalBatch(data_date=SIGNAL_D, candidates=[cand("AAAAAA")])
     assert env.run("signal", D1, "07:38", force=True) == 0
     assert env.run("signal", D1, "07:39") == 0
+
+
+# --------------------------------------------------------------------------- 재검증: 전 필드 고정 + LEGACY_DEFAULTS · 크론 래퍼
+
+
+def test_every_field_after_pin_baseline_has_legacy_default():
+    """고정 기능 뒤에 추가한 StrategyConfig 필드는 LEGACY_DEFAULTS 에 '그 필드가 없던 때의 동작' 을 적어야 한다."""
+    from dataclasses import fields as dc_fields
+
+    from swing_it.live.config import LEGACY_DEFAULTS, PIN_BASELINE_FIELDS, StrategyConfig
+
+    names = {f.name for f in dc_fields(StrategyConfig)}
+    assert names - PIN_BASELINE_FIELDS <= set(LEGACY_DEFAULTS), names - PIN_BASELINE_FIELDS - set(LEGACY_DEFAULTS)
+
+
+def test_new_field_with_non_neutral_default_does_not_change_open_position(tmp_path, monkeypatch):
+    """필드를 추가하며 기본값을 '켜짐' 으로 둬도, 그 전에 열린 포지션은 고정 dict + LEGACY_DEFAULTS 로 옛 동작을 유지한다."""
+    import swing_it.live.config as config_mod
+
+    env = Env(tmp_path, strategy=replace(DEFAULT_STRATEGY, max_hold=3))
+    _enter(env, {"AAAAAA": {}})
+    st = env.state()
+    pinned = dict(st.positions["AAAAAA"].cfg)
+    h0 = st.positions["AAAAAA"].cfg_hash
+    assert set(pinned) == {f.name for f in __import__("dataclasses").fields(config_mod.StrategyConfig)}   # 전 필드 고정
+    from swing_it.live.state import strategy_hash
+    assert h0 == strategy_hash(pinned)
+    # '나중에 추가된 필드' 를 흉내: 고정 dict 에서 max_hold 를 빼고, 현재 기본값(120)은 다르게 둔다.
+    st.positions["AAAAAA"].cfg = {k: v for k, v in pinned.items() if k != "max_hold"}
+    st.positions["AAAAAA"].cfg_hash = None
+    StateStore(env.cfg.mode_dir, clock=env.clock).save(st)
+    # LEGACY_DEFAULTS 가 없으면: 현재 기본값으로 조용히 채우지 않고 상태 손상으로 멈춘다
+    _eod(env, D1, {"AAAAAA": 10_000})
+    env.q("AAAAAA", 10_000, prev_close=10_000)
+    assert env.run("signal", D2, "07:35") == 1
+    assert any("LEGACY_DEFAULTS" in a[2] for a in env.alerts)
+    # LEGACY_DEFAULTS 에 옛 동작(3일)을 적으면: 그 값으로 복원 → 3일째 최대 보유 매도(현재 기본값 120 이 아니다)
+    monkeypatch.setitem(config_mod.LEGACY_DEFAULTS, "max_hold", 3)
+    assert env.run("signal", D2, "07:36", force=True) == 0
+    env.run("preopen", D2, "08:35")
+    env.q("AAAAAA", 10_000, open=10_000, prev_close=10_000)
+    env.run("open_check", D2, "09:02")
+    _eod(env, D2, {"AAAAAA": 10_000})
+    env.run("signal", D3, "07:35")
+    env.run("preopen", D3, "08:35")
+    env.q("AAAAAA", 10_000, open=10_000, prev_close=10_000)
+    env.run("open_check", D3, "09:02")
+    _eod(env, D3, {"AAAAAA": 10_000})
+    env.run("signal", D4, "07:35")
+    assert env.state().positions["AAAAAA"].exit_intent["kind"] == "max_hold"
+    assert any("LEGACY_DEFAULTS 3" in a[2] for a in env.alerts)
+
+
+def test_pinned_config_drops_removed_fields_with_warning():
+    from swing_it.live.config import DEFAULT_STRATEGY as D
+    from swing_it.live.config import pinned_config
+
+    cfg, warns = pinned_config({**D.to_dict(), "old_gone_field": 1, "take_r": "inf"})
+    assert cfg.take_r == float("inf") and any("old_gone_field" in w for w in warns)
+
+
+def _cron(tmp_path, rc):
+    import os
+    import subprocess
+
+    fake = tmp_path / "fake_sw_live"
+    fake.write_text(f"#!/usr/bin/env bash\necho ran \"$@\"\nexit {rc}\n")
+    fake.chmod(0o755)
+    log = tmp_path / "alerts.txt"
+    alert = tmp_path / "fake_alert"
+    alert.write_text(f"#!/usr/bin/env bash\necho \"$1|$2\" >> {log}\n")
+    alert.chmod(0o755)
+    env = {**os.environ, "SW_LIVE_BIN": str(fake), "ALERT_CMD": str(alert)}
+    root = Path(__file__).resolve().parents[1]
+    p = subprocess.run([str(root / "deploy" / "sw-live-cron.sh"), "signal", "--paper"], env=env, capture_output=True,
+                       text=True, timeout=30)
+    return p, (log.read_text().strip() if log.exists() else "")
+
+
+@pytest.mark.parametrize("rc,level,needle", [(0, "", ""), (2, "warn", "건너뜀"), (4, "error", "신규 진입 중단"),
+                                             (1, "error", "작업 오류"), (3, "error", "상태 손상"), (7, "error", "알 수 없는")])
+def test_cron_wrapper_maps_exit_codes_to_alert_levels(tmp_path, rc, level, needle):
+    p, alerts = _cron(tmp_path, rc)
+    assert p.returncode == rc and "ran signal --paper" in p.stdout
+    if rc == 0:
+        assert alerts == ""
+    else:
+        assert alerts.startswith(f"{level}|sw-live signal rc={rc}: ") and needle in alerts
+        assert f"rc={rc} level={level}" in p.stdout
+
+
+def test_window_bounded_wide_read_sqlite_keeps_delisted_check(tmp_path):
+    """M6: 날짜 창 읽기는 종목을 자르지 않고, 창 안에 시세가 있는 폐지 종목이 결과에 있는지 검사한다."""
+    import sqlite3
+
+    from swing_it.storage import read_prices_wide, trading_window
+
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE daily_bars_adjusted (code TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, "
+                "volume REAL, trade_value REAL, source TEXT)")
+    rows = []
+    for i, d in enumerate(["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]):
+        rows.append(("AAAAAA", d, 1, 1, 1, 10 + i, 1, 1, "kiwoom"))
+        if i <= 3:
+            rows.append(("DDDDDD", d, 1, 1, 1, 5, 1, 1, "naver"))          # 10-08 에 폐지된 종목
+    con.executemany("INSERT INTO daily_bars_adjusted VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    assert trading_window(con, end=None, rows=3) == ("2026-10-07", "2026-10-09")
+    assert trading_window(con, end="2026-10-08", rows=2) == ("2026-10-07", "2026-10-08")
+    w = read_prices_wide(con, cols=("close",), start="2026-10-07", end="2026-10-09")
+    assert list(w["close"].index.strftime("%m-%d")) == ["10-07", "10-08", "10-09"]
+    assert set(w["close"].columns) == {"AAAAAA", "DDDDDD"}                      # 폐지 종목도 창 안이면 그대로
+    con.execute("UPDATE daily_bars_adjusted SET source='kiwoom' WHERE code='DDDDDD'")
+    con.execute("INSERT INTO daily_bars_adjusted VALUES ('ZZZZZZ','2026-10-01',1,1,1,1,1,1,'naver')")
+    w2 = read_prices_wide(con, cols=("close",), start="2026-10-07", end="2026-10-09")   # 창 밖 폐지 종목은 요구하지 않는다
+    assert "ZZZZZZ" not in w2["close"].columns

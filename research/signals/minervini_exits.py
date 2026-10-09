@@ -45,6 +45,15 @@
     전량(``failed_breakout``). 그날 장중 손절·익절이 먼저 났으면 그쪽. 시간 손절과 같은 날 결정이면 시간 손절(즉시 체결)이
     먼저. 다음날 시가가 손절·목표를 건드려도 시가 청산이 먼저(추적 청산과 같은 규칙 8). 다음 거래 가능일이 지평 밖이면 종료 청산.
 
+14. (선택, **청산 v2** — ``MINERVINI_EXITS_V2.md`` 2e47f59, 키워드 기본값 = 옛 동작) 본전 이동 ``be_r``(고가 ≥ 진입가 × (1 + be_r·d)
+    인 날의 **다음 거래 가능일부터** 손절선 = 진입가 × 1.005), 부분 익절 비율 ``take_frac``(남은 수량 대비), 강세 매도
+    ``strength_ret``·``strength_ma_ext``(종가 ≥ 직전 행 종가 × (1+x) 또는 종가 ≥ MA50 × (1+y) → 다음 거래 가능일 시가에 남은 수량의
+    절반, 한 번), 피벗 허용폭 ``fb_tol``(종가 < 피벗 × (1 − tol)), 연속 이탈일 ``fb_days``(정지일은 세지도 끊지도 않는다).
+    하루 순서·같은 날 우선순위(손절 > 본전 손절 > 부분 익절 > 강세 매도 > 돌파 실패 > 추적)는
+    :mod:`research.signals.exits_v2_fast` 모듈 설명 1~6 과 같다. 하나라도 기본값이 아니면 하루씩 도는 :func:`_simulate_one_v2`
+    를 쓴다(``exits_v2=True`` 면 기본값에서도 — 옛 경로와 같은 결과인지 테스트용). 트레이드 수익 = Σ 판 비율 × 매도분 수익(시간 순),
+    ``ret_half1`` = 부분 익절분 수익(없으면 마지막 청산분), ``ret_half2`` = 마지막 청산분 수익, ``R = ret / d``.
+
 비용(``korea.cost_rt``)은 여기서 빼지 않는다 — 러너 몫(사전등록: 분할 청산도 총 비용 같음).
 """
 
@@ -75,6 +84,13 @@ PREREG_MINERVINI = {
 MX_EXTRA_COLS = ["d", "stop_px", "target_px", "contraction_low", "partial_hit", "partial_day", "partial_px",
                  "ret_half1", "ret_half2", "R"]
 MX_TRADE_COLS = TRADE_COLS + MX_EXTRA_COLS
+#: 청산 v2 경로에서만 붙는 열(강세 매도 체결일·가격, 본전 이동 발동 여부, 마지막 청산 비율).
+MX_V2_COLS = ["strength_hit", "strength_day", "strength_px", "be_moved", "final_frac"]
+#: ``be_r`` 본전선 = 진입가 × (1 + BE_COST) — ``exits_v2_fast.BE_COST``·``swing_it.live.config.BE_COST`` 와 같은 값(테스트).
+BE_COST = 0.005
+#: 청산 v2 키워드 기본값(= 옛 동작).
+V2_DEFAULTS = {"take_frac": 0.5, "be_r": np.inf, "strength_ret": None, "strength_ma_ext": None, "fb_tol": 0.0,
+               "fb_days": 1}
 
 
 # --- VCP 수축 피처 ---
@@ -263,7 +279,127 @@ def _simulate_one(b: _Book, ci: int, d: int, pivot: float, c_low: float, *, stop
     return {**out, "reason": reason, "x": e + x, "px1": px1, "px2": px2}
 
 
-def _run(b: _Book, ev: pd.DataFrame, *, no_overlap: bool, rules: dict) -> "tuple[pd.DataFrame, pd.DataFrame]":
+def _simulate_one_v2(b: _Book, ci: int, d: int, pivot: float, c_low: float, *, stop_floor: float, stop_cap: float,
+                     stop_mult: float, fixed_stop: "float | None", take_r: float, time_stop_days: "int | None",
+                     max_hold: int, chase: "float | None", limit_up_skip: bool, failed_breakout: bool = False,
+                     take_frac: float = 0.5, be_r: float = np.inf, strength_ret: "float | None" = None,
+                     strength_ma_ext: "float | None" = None, fb_tol: float = 0.0, fb_days: int = 1) -> dict:
+    """청산 v2(규칙 14) — 한 사건을 하루씩 상태 전이로. 건너뛰기 규칙은 :func:`_simulate_one` 과 같다.
+
+    반환: ``{"skip": 사유}`` 또는 ``entry, d, stop_px, target_px, lots(마지막 청산 전 매도분 [(행, 최초 대비 비율, 가격, 종류)]),
+    reason, x(마지막 청산 행), fin_px, fin_frac, be_moved``.
+    """
+    n = len(b.days)
+    e = d + 1
+    if e >= n:
+        return {"skip": "skip_no_next_day"}
+    tr = b.tradable[ci, e:]
+    if not tr[0]:
+        return {"skip": "skip_no_open"}
+    op, hi, lw, cl, ma = b.O[ci, e:], b.H[ci, e:], b.L[ci, e:], b.C[ci, e:], b.MA[ci, e:]
+    m50 = b.SMA50[ci, e:] if getattr(b, "SMA50", None) is not None else np.full(len(tr), np.nan)
+    prev_cl = b.C[ci, d:n - 1]                        # 오프셋 j 의 직전 행 종가
+    entry = op[0]
+    if chase is not None and np.isfinite(pivot) and entry > pivot * (1.0 + chase):
+        return {"skip": "skip_chase"}
+    prev = b.C[ci, d]
+    if limit_up_skip and np.isfinite(prev) and prev > 0 and entry >= prev * LIMIT_UP_RATIO:
+        return {"skip": "skip_limit_up"}
+    if not np.isfinite(c_low):
+        return {"skip": "skip_no_contraction"}
+    if entry <= c_low:
+        return {"skip": "skip_below_low"}
+    if fixed_stop is None:
+        dd = float(np.clip(1.0 - c_low * stop_mult / entry, stop_floor, stop_cap))
+    else:
+        dd = float(fixed_stop)
+    stop_px = entry * (1.0 - dd)
+    tgt = entry * (1.0 + take_r * dd)
+    use_partial = bool(np.isfinite(take_r))
+    use_fb = bool(failed_breakout and np.isfinite(pivot))
+    fb_line = pivot * (1.0 - fb_tol) if use_fb else np.nan
+    be_line = entry * (1.0 + be_r * dd) if np.isfinite(be_r) else np.inf
+    be_stop = entry * (1.0 + BE_COST)
+
+    L = len(tr)
+    k_last = max_hold - 1
+    j_time = _first_from(tr, k_last, L - 1)
+    horizon = j_time if j_time is not None else L - 1
+    sig_end = min(k_last, horizon + 1)                # 다음날 시가 결정은 1 ~ max_hold−1 일째 종가에서만
+
+    st = {"rem": 1.0, "lots": [], "partial": False, "be_from": None, "be_trig": None, "ss_used": False, "fb_run": 0,
+          "ts_seen": False, "pending": None, "last": 0}
+
+    def done(reason: str, j: int, px: float) -> dict:
+        return {"entry": entry, "d": dd, "stop_px": stop_px, "target_px": tgt, "lots": st["lots"], "reason": reason,
+                "x": e + j, "fin_px": px, "fin_frac": st["rem"], "be_moved": st["be_trig"] is not None}
+
+    def sell(j: int, share: float, px: float, kind: str) -> None:
+        q = st["rem"] * share
+        st["rem"] = st["rem"] - q
+        st["lots"].append((e + j, q, px, kind))
+
+    for j in range(horizon + 1):
+        if not tr[j]:
+            continue
+        st["last"] = j
+        # (1) 전날 결정 → 시가
+        if st["pending"] in ("failed_breakout", "trail"):
+            return done(st["pending"], j, op[j])
+        if st["pending"] == "strength":
+            sell(j, 0.5, op[j], "strength")
+            st["pending"] = None
+        # (2) 손절선: 기술적 → 익절 뒤 본전(진입가) → be_r 본전(진입가 × 1.005)
+        line, why = stop_px, "stop"
+        if st["be_from"] is not None and j >= st["be_from"]:
+            line, why = entry, "breakeven"
+        if st["be_trig"] is not None and j > st["be_trig"]:
+            line, why = be_stop, "breakeven"
+        if lw[j] <= line or op[j] <= line:
+            return done(why, j, min(op[j], line))
+        # (3) 부분 익절
+        if use_partial and not st["partial"] and (hi[j] >= tgt or op[j] >= tgt):
+            gap = op[j] >= tgt
+            sell(j, take_frac, op[j] if gap else tgt, "partial")
+            st["partial"], st["be_from"] = True, j + 1
+            if gap and lw[j] <= entry:
+                return done("breakeven", j, entry)
+        # (4) be_r 발동
+        if st["be_trig"] is None and (hi[j] >= be_line or op[j] >= be_line):
+            st["be_trig"] = j
+        # (5) 종가
+        if time_stop_days is not None and not st["partial"] and not st["ts_seen"] and j >= time_stop_days - 1:
+            st["ts_seen"] = True
+            if cl[j] <= entry:
+                return done("time_stop", j, cl[j])
+        if j_time is not None and j == j_time:
+            return done("time", j, cl[j])
+        if j >= sig_end:
+            continue
+        strong = False
+        if not st["ss_used"]:
+            pc_ = prev_cl[j]
+            if strength_ret is not None and np.isfinite(pc_) and cl[j] >= pc_ * (1.0 + strength_ret):
+                strong = True
+            if strength_ma_ext is not None and np.isfinite(m50[j]) and cl[j] >= m50[j] * (1.0 + strength_ma_ext):
+                strong = True
+        failed = False
+        if use_fb and not st["partial"]:
+            st["fb_run"] = st["fb_run"] + 1 if cl[j] < fb_line else 0
+            failed = st["fb_run"] >= fb_days
+        trail = bool((st["partial"] or not use_partial) and np.isfinite(ma[j]) and cl[j] < ma[j])
+        if strong:
+            st["pending"], st["ss_used"] = "strength", True
+        elif failed:
+            st["pending"] = "failed_breakout"
+        elif trail:
+            st["pending"] = "trail"
+    reason = "data_end" if b.present[ci, n - 1] else "delisted"
+    return done(reason, st["last"], cl[st["last"]])
+
+
+def _run(b: _Book, ev: pd.DataFrame, *, no_overlap: bool, rules: dict, v2: bool = False
+         ) -> "tuple[pd.DataFrame, pd.DataFrame]":
     col_of = pd.Series(np.arange(len(b.codes)), index=b.codes)
     ev = ev[ev["code"].isin(b.codes) & ev["event_day"].isin(b.days)].copy()
     ev["sim_d"] = b.days.get_indexer(ev["event_day"])
@@ -272,7 +408,7 @@ def _run(b: _Book, ev: pd.DataFrame, *, no_overlap: bool, rules: dict) -> "tuple
     busy_until: dict[int, int] = {}
     trades, skips = [], []
     skip_extra = ("sim_d", "sim_c", "day_idx", "col_idx", "contraction_low")
-    extra = [x for x in ev.columns if x not in MX_TRADE_COLS and x not in skip_extra]
+    extra = [x for x in ev.columns if x not in MX_TRADE_COLS + MX_V2_COLS and x not in skip_extra]
     for row in ev.to_dict("records"):
         ci, d = int(row["sim_c"]), int(row["sim_d"])
         base = {"code": row["code"], "event_day": row["event_day"], "market": row.get("market", np.nan),
@@ -281,11 +417,15 @@ def _run(b: _Book, ev: pd.DataFrame, *, no_overlap: bool, rules: dict) -> "tuple
             skips.append({**base, "skip_reason": "skip_overlap"})
             continue
         c_low = float(row["contraction_low"])
-        r = _simulate_one(b, ci, d, float(base["pivot"]), c_low, **rules)
+        r = (_simulate_one_v2 if v2 else _simulate_one)(b, ci, d, float(base["pivot"]), c_low, **rules)
         if "skip" in r:
             skips.append({**base, "skip_reason": r["skip"]})
             continue
         x = r["x"]
+        if v2:
+            busy_until[ci] = x
+            trades.append({**base, **_v2_row(b, d, x, c_low, r), **{k: row[k] for k in extra}})
+            continue
         busy_until[ci] = x
         ent = r["entry"]
         h1, h2 = r["px1"] / ent - 1.0, r["px2"] / ent - 1.0
@@ -297,10 +437,36 @@ def _run(b: _Book, ev: pd.DataFrame, *, no_overlap: bool, rules: dict) -> "tuple
                        "partial_day": b.days[r["partial_j"]] if r["partial_j"] is not None else pd.NaT,
                        "partial_px": r["partial_px"], "ret_half1": h1, "ret_half2": h2, "R": ret / r["d"],
                        **{k: row[k] for k in extra}})
-    cols = MX_TRADE_COLS + extra
+    cols = MX_TRADE_COLS + (MX_V2_COLS if v2 else []) + extra
     t = pd.DataFrame(trades, columns=cols) if trades else pd.DataFrame(columns=cols)
     s = pd.DataFrame(skips, columns=SKIP_COLS) if skips else pd.DataFrame(columns=SKIP_COLS)
     return t, s
+
+
+def _v2_row(b: _Book, d: int, x: int, c_low: float, r: dict) -> dict:
+    """v2 결과 → 트레이드 행. 수익 = Σ 비율 × 매도분 수익(시간 순, 마지막 청산분 포함) — ``exits_v2_fast`` 와 같은 순서."""
+    ent = r["entry"]
+    ret = 0.0
+    part = None
+    strong = None
+    for j_abs, q, px, kind in r["lots"]:
+        ret += q * (px / ent - 1.0)
+        if kind == "partial":
+            part = (j_abs, px)
+        else:
+            strong = (j_abs, px)
+    h2 = r["fin_px"] / ent - 1.0
+    ret += r["fin_frac"] * h2
+    h1 = part[1] / ent - 1.0 if part is not None else h2
+    return {"entry_day": b.days[d + 1], "exit_day": b.days[x], "entry_px": ent, "exit_px": r["fin_px"], "ret": ret,
+            "exit_reason": r["reason"], "hold_days": x - d, "d": r["d"], "stop_px": r["stop_px"],
+            "target_px": r["target_px"], "contraction_low": c_low, "partial_hit": part is not None,
+            "partial_day": b.days[part[0]] if part is not None else pd.NaT,
+            "partial_px": part[1] if part is not None else np.nan, "ret_half1": h1, "ret_half2": h2,
+            "R": ret / r["d"], "strength_hit": strong is not None,
+            "strength_day": b.days[strong[0]] if strong is not None else pd.NaT,
+            "strength_px": strong[1] if strong is not None else np.nan, "be_moved": r["be_moved"],
+            "final_frac": r["fin_frac"]}
 
 
 def _pick(panel: pd.DataFrame, like: pd.DataFrame, ev: pd.DataFrame) -> np.ndarray:
@@ -319,7 +485,10 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
                        fixed_stop: "float | None" = None, take_r: float = 2.0,
                        time_stop_days: "int | None" = 20, max_hold: int = 120, chase: "float | None" = 0.05,
                        limit_up_skip: bool = True, no_overlap: bool = True, pivot_window: int = 50,
-                       return_skipped: bool = False, failed_breakout: bool = False):
+                       return_skipped: bool = False, failed_breakout: bool = False, take_frac: float = 0.5,
+                       be_r: float = np.inf, strength_ret: "float | None" = None,
+                       strength_ma_ext: "float | None" = None, fb_tol: float = 0.0, fb_days: int = 1,
+                       strength_ma: "pd.DataFrame | None" = None, exits_v2: "bool | None" = None):
     """사건 → 미너비니 원전 청산 트레이드(총수익, 비용 전). 규칙은 모듈 docstring 1~11.
 
     Args:
@@ -334,6 +503,9 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
         time_stop_days: ``None`` 이면 시간 손절 끔(민감도).
         failed_breakout: True 면 규칙 12(익절 전 종가 < 피벗 → 다음 거래 가능일 시가). 기본 False — 사전등록 결과 재현.
             라이브 프로토콜(설계 §6) = ``failed_breakout=True, time_stop_days=None``.
+        take_frac, be_r, strength_ret, strength_ma_ext, fb_tol, fb_days: 청산 v2(규칙 14). 기본값 = 옛 동작.
+            ``strength_ma_ext`` 의 MA50 은 ``strength_ma`` 패널(없으면 ``moving_average(c, 50)``).
+        exits_v2: None = v2 키워드가 하나라도 기본값이 아니면 v2 경로, True = 늘 v2(옛 경로와 같은지 테스트), False = 옛 경로.
         no_overlap: 같은 종목 보유 중(신호일 종가 기준, 나머지 절반 포함) 사건을 버린다. 대조에선 끈다.
         return_skipped: True 면 ``(trades, skipped)``.
 
@@ -352,7 +524,17 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
     rules = {"stop_floor": stop_floor, "stop_cap": stop_cap, "stop_mult": stop_mult, "fixed_stop": fixed_stop,
              "take_r": take_r, "time_stop_days": time_stop_days, "max_hold": max_hold, "chase": chase,
              "limit_up_skip": limit_up_skip, "failed_breakout": failed_breakout}
-    t, s = _run(b, ev, no_overlap=no_overlap, rules=rules)
+    v2kw = {"take_frac": take_frac, "be_r": be_r, "strength_ret": strength_ret, "strength_ma_ext": strength_ma_ext,
+            "fb_tol": fb_tol, "fb_days": fb_days}
+    v2 = exits_v2 if exits_v2 is not None else any(v2kw[k] != V2_DEFAULTS[k] for k in v2kw)
+    if v2:
+        rules.update(v2kw)
+        if strength_ma_ext is not None:
+            from swing_it.features.technical import moving_average  # noqa: PLC0415
+
+            sma = strength_ma if strength_ma is not None else moving_average(c, 50)
+            b.SMA50 = np.ascontiguousarray(sma.reindex(index=c.index, columns=c.columns).to_numpy(float).T)
+    t, s = _run(b, ev, no_overlap=no_overlap, rules=rules, v2=v2)
     return (t, s) if return_skipped else t
 
 

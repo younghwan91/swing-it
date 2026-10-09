@@ -18,6 +18,11 @@
 수급 유전자(``smart_min``·``foreign_pos``·``persist_min``)를 하나라도 주면 ``require_flow`` 의 F 규칙 대신 그 조건을 쓴다
 (기존 F = smart > 0 ∧ foreign > 0 은 ``smart_min=0, foreign_pos=True, persist_min=0`` 과 경계 smart = 0 한 점만 다르다).
 
+**청산 v2 유전자(``MINERVINI_EXITS_V2.md`` 2e47f59, 선택 — 기본값 = 현 동작):** ``be_r``(본전 이동 배수, ∞ = 끔)·``take_frac``
+(→ ``partial_frac``)·``strength_sell``(강세 매도 단계 0~3 → ``strength_ret``·``strength_ma_ext``)·``fb_tol``·``fb_days``. 19개 유전자와
+따로 :data:`EXIT_V2_GENE_FIELDS` 에 두고, 하나라도 주면 다섯 개 다 있어야 한다. 그때 ``take_r`` 은 v2 단계(1.0 포함)도 허용한다.
+피벗 허용폭의 "끔" 은 ``failed_breakout = 0`` 이다.
+
 둘 다 frozen dataclass 라 원장·리포트에 ``dataclasses.asdict`` 로 그대로 적을 수 있다.
 """
 
@@ -30,6 +35,8 @@ from dataclasses import asdict, dataclass, fields
 #: 여기 사본을 두는 이유: config 는 무의존(다른 에이전트·CLI 가 가볍게 import)이어야 한다.
 #: 같은 값임은 ``tests/test_live_strategy.py`` 가 못박는다.
 LIMIT_UP_REL_TOL = 0.007
+#: 본전 이동(``be_r``) 손절선 = 진입가 × (1 + BE_COST) — 설계 "진입가(+비용 0.5%)". 연구 커널(``exits_v2_fast.BE_COST``)과 같은 값(테스트).
+BE_COST = 0.005
 
 #: GA2 유전자(``research/experiments/ga2_run.py`` G2_CONT + G2_DISC 순서) → :class:`StrategyConfig` 필드. 19개.
 GENE_FIELDS: dict[str, str] = {
@@ -49,6 +56,16 @@ GENE_LEVELS: dict[str, tuple] = {
     "trail_ma": (10, 20, 50, 0), "failed_breakout": (0, 1), "max_hold": (20, 60, 120),
     "foreign_pos": (0, 1), "persist_min": (0, 8, 10, 12),
 }
+#: 청산 v2 유전자(MINERVINI_EXITS_V2.md) → 필드. ``strength_sell`` 은 단계 코드 → (``strength_ret``, ``strength_ma_ext``) 두 필드.
+EXIT_V2_GENE_FIELDS: dict[str, str] = {"be_r": "be_r", "take_frac": "partial_frac", "strength_sell": "strength_sell",
+                                       "fb_tol": "fb_tol", "fb_days": "fb_days"}
+#: 청산 v2 단계(설계 표 그대로). ``take_r`` 은 v2 유전자가 있을 때 1.0 도 허용한다.
+EXIT_V2_LEVELS: dict[str, tuple] = {
+    "be_r": (0.5, 1.0, 1.5, 2.0, math.inf), "take_frac": (1 / 3, 1 / 2), "strength_sell": (0, 1, 2, 3),
+    "fb_tol": (0.0, 0.02, 0.05), "fb_days": (1, 2), "take_r": (1.0, 1.5, 2.0, 3.0, 4.0, math.inf),
+}
+#: 강세 매도 단계 → (하루 상승률 x, MA50 이격 y). None = 그 조건 없음. 0 = 끔.
+STRENGTH_SELL: dict[int, tuple] = {0: (None, None), 1: (0.15, None), 2: (None, 0.30), 3: (0.15, 0.30)}
 #: 연속 유전자의 범위(ga2_run G2_CONT·FLOW_CONT) — 범위 밖이면 거부.
 GENE_RANGES: dict[str, tuple[float, float]] = {
     "near_high": (0.50, 0.95), "above_low": (1.00, 1.60), "rs_min": (0.0, 95.0), "vol_mult": (0.0, 2.5),
@@ -132,8 +149,19 @@ class StrategyConfig:
     stop_floor: float = 0.03            # 손절폭 하한
     stop_cap: float = 0.10              # 손절폭 상한
     take_r: float = 2.0                 # 절반 익절 = 진입가 × (1 + take_r·d). inf = 익절 없음(추적은 전량·1일째부터)
-    partial_frac: float = 0.5           # 익절 비율(보유 수량 대비)
+    partial_frac: float = 0.5           # 익절 비율(보유 수량 대비) — v2 유전자 take_frac
     trail_ma: int = 50                  # 추적 MA(나머지 절반, 익절 없음이면 전량). 0 = 추적 없음
+    #: 본전 이동(v2): 고가 ≥ 진입가 × (1 + be_r·d) 인 날의 **다음 거래일부터** 손절선 = 진입가 × (1 + BE_COST). inf = 끔(현 동작 —
+    #: 익절 뒤 본전 = 진입가만).
+    be_r: float = math.inf
+    #: 강세 매도(v2, 한 트레이드에 한 번): 종가 ≥ 전일 종가 × (1 + strength_ret) 또는 종가 ≥ MA50 × (1 + strength_ma_ext) →
+    #: 다음 거래일 시가에 남은 수량의 절반. None = 그 조건 없음(둘 다 None = 끔).
+    strength_ret: "float | None" = None
+    strength_ma_ext: "float | None" = None
+    #: 돌파 실패 피벗 허용폭(v2): 종가 < 피벗 × (1 − fb_tol). 0 = 현 동작.
+    fb_tol: float = 0.0
+    #: 돌파 실패 연속 이탈일(v2): 그 조건이 거래일 fb_days 번 연속이면 다음 거래일 시가. 1 = 현 동작.
+    fb_days: int = 1
     #: 돌파 실패(설계 §6, 2026-10-10 사용자 지시 — 미너비니 원전): 절반 익절 전 어느 날이든 **종가 < 피벗**(돌파 기준가 =
     #: 직전 pivot_window 일 최고 고가, 계획의 ``pivot``) 이면 다음 거래일 시가에 전량 청산(MA50 추적과 같은 경로: d 종가 결정 → d+1 시가).
     failed_breakout: bool = True
@@ -170,6 +198,16 @@ class StrategyConfig:
         return self.trail_ma > 0
 
     @property
+    def strength_on(self) -> bool:
+        return self.strength_ret is not None or self.strength_ma_ext is not None
+
+    @property
+    def exits_v2_default(self) -> bool:
+        """청산 v2 필드가 전부 현 동작 값인가(그러면 :meth:`to_genes` 가 v2 유전자를 넣지 않는다)."""
+        return (math.isinf(self.be_r) and self.partial_frac == 0.5 and not self.strength_on and self.fb_tol == 0.0
+                and self.fb_days == 1)
+
+    @property
     def effective_pivot_window(self) -> int:
         """피벗·거래량 평균 창 — 돌파 요구가 없으면(0) 50일(GA 커널 ``v_col = 3``·``w_idx = W50`` 과 같다)."""
         return self.pivot_window if self.pivot_window > 0 else 50
@@ -183,7 +221,7 @@ class StrategyConfig:
         사이징: ``risk_per_trade = max_position_frac`` (GA 포트폴리오 적합도의 슬롯 10% 고정과 같게 — 위험 항이 안 묶인다).
         """
         base = DEFAULT_STRATEGY if base is None else base
-        unknown = set(genes) - set(GENE_FIELDS) - set(FLOW_GENE_FIELDS)
+        unknown = set(genes) - set(GENE_FIELDS) - set(FLOW_GENE_FIELDS) - set(EXIT_V2_GENE_FIELDS)
         if unknown:
             raise ValueError(f"대응 없는 유전자: {sorted(unknown)}")
         missing = set(GENE_FIELDS) - set(genes)
@@ -192,14 +230,24 @@ class StrategyConfig:
         flow_given = set(genes) & set(FLOW_GENE_FIELDS)
         if flow_given and flow_given != set(FLOW_GENE_FIELDS):
             raise ValueError(f"수급 유전자는 셋 다 있어야 한다: 있음 {sorted(flow_given)}")
+        v2_given = set(genes) & set(EXIT_V2_GENE_FIELDS)
+        if v2_given and v2_given != set(EXIT_V2_GENE_FIELDS):
+            raise ValueError(f"청산 v2 유전자는 다섯 개 다 있어야 한다: 있음 {sorted(v2_given)}")
+        levels = {**GENE_LEVELS, **(EXIT_V2_LEVELS if v2_given else {})}
         kw: dict = {}
-        for gene, fld in {**GENE_FIELDS, **FLOW_GENE_FIELDS}.items():
+        for gene, fld in {**GENE_FIELDS, **FLOW_GENE_FIELDS, **EXIT_V2_GENE_FIELDS}.items():
             if gene not in genes:
                 continue
             v = _num(gene, genes[gene])
-            if gene in GENE_LEVELS:
-                if v is None or v not in GENE_LEVELS[gene]:
-                    raise ValueError(f"유전자 {gene}: 허용 단계 {GENE_LEVELS[gene]} 밖 {genes[gene]!r}")
+            if gene in levels:
+                if v is None or v not in levels[gene]:
+                    raise ValueError(f"유전자 {gene}: 허용 단계 {levels[gene]} 밖 {genes[gene]!r}")
+                if gene == "strength_sell":
+                    kw["strength_ret"], kw["strength_ma_ext"] = STRENGTH_SELL[int(v)]
+                    continue
+                if gene == "fb_days":
+                    kw[fld] = int(v)
+                    continue
                 if gene in ("eps_accel", "failed_breakout", "foreign_pos"):
                     v = bool(v)
                 elif gene in ("ma_stack", "ma200_slope_days", "pivot_window", "trail_ma", "max_hold", "persist_min"):
@@ -223,7 +271,10 @@ class StrategyConfig:
         return replace(base, **kw)
 
     def to_genes(self, *, flow: "bool | None" = None) -> dict:
-        """설정 → GA2 유전자 dict(:meth:`from_genes` 의 역 — 왕복 동일). ``flow`` None 이면 수급 유전자가 설정돼 있을 때만 넣는다."""
+        """설정 → GA2 유전자 dict(:meth:`from_genes` 의 역 — 왕복 동일). ``flow`` None 이면 수급 유전자가 설정돼 있을 때만 넣는다.
+
+        청산 v2 유전자는 v2 필드가 현 동작 값이 아닐 때만 넣는다(강세 매도 조합이 :data:`STRENGTH_SELL` 단계가 아니면 예외).
+        """
         out: dict = {}
         for gene, fld in GENE_FIELDS.items():
             v = getattr(self, fld)
@@ -234,11 +285,19 @@ class StrategyConfig:
             out["smart_min"] = self.smart_min
             out["foreign_pos"] = int(bool(self.foreign_pos))
             out["persist_min"] = int(self.persist_min)
+        if not self.exits_v2_default:
+            code = [k for k, v in STRENGTH_SELL.items() if v == (self.strength_ret, self.strength_ma_ext)]
+            if not code:
+                raise ValueError(f"강세 매도 ({self.strength_ret}, {self.strength_ma_ext}) 는 유전자 단계가 아니다")
+            out.update({"be_r": self.be_r, "take_frac": self.partial_frac, "strength_sell": code[0],
+                        "fb_tol": self.fb_tol, "fb_days": int(self.fb_days)})
         return out
 
     def describe_genes(self) -> list[tuple[str, str, object]]:
         """(유전자, 필드, 값) 표 — 리포트용."""
-        return [(g, f, getattr(self, f)) for g, f in {**GENE_FIELDS, **FLOW_GENE_FIELDS}.items()]
+        rows = [(g, f, getattr(self, f)) for g, f in {**GENE_FIELDS, **FLOW_GENE_FIELDS}.items()]
+        return rows + [("strength_sell", "strength_ret·strength_ma_ext", (self.strength_ret, self.strength_ma_ext))
+                       if g == "strength_sell" else (g, f, getattr(self, f)) for g, f in EXIT_V2_GENE_FIELDS.items()]
 
 
 FIELD_NAMES = tuple(f.name for f in fields(StrategyConfig))
@@ -274,3 +333,65 @@ class RiskConfig:
 
 DEFAULT_STRATEGY = StrategyConfig()
 DEFAULT_RISK = RiskConfig()
+
+
+# ---------------------------------------------------------------------------
+# 포지션별 설정 고정(라이브 런타임 · 통합 검토 M3 재검증)
+# ---------------------------------------------------------------------------
+#
+# 라이브는 열린 포지션마다 **진입 시점의 StrategyConfig 전체 dict** 를 원장에 고정하고, 청산 판단 때 그 dict 로 설정을 다시 만든다
+# (``swing_it.live.runtime.SwingRuntime._cfg_of``). 나중에 필드를 **추가**하면 옛 dict 엔 그 키가 없다 — 그때 현재 코드 기본값을 넣으면
+# 기본값이 "켜짐" 인 새 규칙이 열린 포지션에 소급 적용된다. 그래서:
+#
+# 1. :data:`PIN_BASELINE_FIELDS` — 고정 기능이 들어온 날(2026-10-10)의 필드 이름. **손으로 적은 상수**다(자동으로 늘지 않는다).
+# 2. 그 뒤에 추가하는 필드는 반드시 :data:`LEGACY_DEFAULTS` 에 "그 필드가 없던 때의 동작을 내는 값"을 적는다 — 보통 규칙을 끄는 값.
+#    고정 dict 에 없는 필드는 이 값으로 채운다. 적지 않으면 :func:`pinned_config` 가 예외를 낸다(조용히 기본값을 넣지 않는다).
+#    ``tests/test_live_runtime.py::test_every_field_after_pin_baseline_has_legacy_default`` 가 이 규칙을 못박는다.
+# 3. 필드를 **지우면** 고정 dict 에 남은 키는 버리고 경고 목록으로 돌려준다(동작이 바뀌었다는 뜻 — 런타임이 경보한다).
+
+PIN_BASELINE_FIELDS: frozenset[str] = frozenset((
+    "adv_floor", "adv_window", "min_price", "min_history", "near_high", "above_low", "ma_stack", "ma200_slope_days",
+    "rs_min", "breadth_min", "pivot_window", "vol_mult", "pead_rank_min", "rel_max", "require_flow", "smart_min",
+    "foreign_pos", "persist_min", "rel_window", "rel_med_window", "rel_min_periods", "rel_gap", "eps_yoy_min",
+    "eps_accel", "rev_yoy_min", "news_veto", "chase", "limit_up_ratio", "contraction_window", "stop_mult", "stop_floor",
+    "stop_cap", "take_r", "partial_frac", "trail_ma", "be_r", "strength_ret", "strength_ma_ext", "fb_tol", "fb_days",
+    "failed_breakout", "time_stop_days", "max_hold", "stop_slippage_bps", "risk_per_trade", "max_position_frac",
+    "max_positions",
+))
+
+#: 필드 이름 → 그 필드가 **없던 시절의 동작**을 내는 값(위 2). 고정 기능 이후 추가된 필드만 여기 온다.
+LEGACY_DEFAULTS: dict[str, object] = {}
+
+
+def pinned_config(pinned: dict, *, legacy: "dict | None" = None) -> "tuple[StrategyConfig, list[str]]":
+    """고정 dict → ``(StrategyConfig, 경고 목록)``. 없는 필드는 :data:`LEGACY_DEFAULTS` 로(없으면 ``ValueError``), 지워진 필드는 버린다.
+
+    ``"inf"`` 문자열은 ``math.inf`` 로 읽는다(JSON 직렬화 규약). **현재 코드 기본값은 절대 쓰지 않는다** — 고정의 뜻이 그것이다.
+    """
+    import math  # noqa: PLC0415
+    from dataclasses import fields as _fields  # noqa: PLC0415
+
+    legacy = LEGACY_DEFAULTS if legacy is None else legacy
+    names = [f.name for f in _fields(StrategyConfig)]
+    warnings: list[str] = []
+    dropped = sorted(set(pinned) - set(names))
+    if dropped:
+        warnings.append(f"고정 설정의 필드가 코드에서 사라졌다(버림): {dropped}")
+    kw: dict = {}
+    missing_no_legacy = []
+    for n in names:
+        if n in pinned:
+            v = pinned[n]
+        elif n in legacy:
+            v = legacy[n]
+            warnings.append(f"고정 설정에 없는 필드 {n} ← LEGACY_DEFAULTS {v!r}")
+        else:
+            missing_no_legacy.append(n)
+            continue
+        if isinstance(v, str) and v.strip().lower() in ("inf", "infinity", "+inf"):
+            v = math.inf
+        kw[n] = v
+    if missing_no_legacy:
+        raise ValueError(f"고정 설정에 없는 필드 {missing_no_legacy} 의 LEGACY_DEFAULTS 가 없다 — config.py 에 적을 것"
+                         "(현재 기본값으로 채우면 열린 포지션 규칙이 소급해 바뀐다)")
+    return StrategyConfig(**kw), warnings

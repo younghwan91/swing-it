@@ -40,6 +40,14 @@
   장중 폴링(60초) 사이의 터치는 놓칠 수 있다. 시간 손절·최대 보유는 15:20 종가
   동시호가 — 판단 가격은 호출부가 넘기는 가격(보통 15:20 직전 현재가)이다.
 
+**청산 v2(설정 ``be_r``·``partial_frac``·``strength_ret``·``strength_ma_ext``·``fb_tol``·``fb_days`` — 기본값 = 위 동작 그대로):**
+연구 커널 :mod:`research.signals.exits_v2_fast` 모듈 설명 1~6 의 하루 순서를 그대로 따른다 — 전날 결정 시가 실행(강세 매도는 남은
+수량의 절반, 그 뒤 그날 판단을 계속) → 손절선(``be_r`` 발동 다음 거래일부터 진입가 × 1.005, 익절 뒤 본전 = 진입가, 높은 쪽) →
+부분 익절(남은 수량 × ``partial_frac``) → ``be_r`` 발동 기록 → 종가 판단(시간 손절 → 최대 보유 → 다음날 시가 결정 하나: 강세 매도 >
+돌파 실패(종가 < 피벗 × (1 − fb_tol) 이 ``fb_days`` 거래일 연속, 익절 전) > 추적). 강세 매도는 전일 종가·MA50 이 필요하다 —
+:meth:`PositionState.on_bar`·:meth:`PositionState.on_close` 의 ``prev_close``·``sma50`` 를 안 주면 예외(조용히 꺼지지 않게; 데몬
+배선은 아직 없다 — 라이브 기본은 끔).
+
 수익 기록: 트레이드 총수익 = Σ (매도 수량 / 최초 수량) × (매도가 / 진입가 − 1). 소수 수량(자본 무제한 패리티 모드)
 에서 익절 비율 0.5 면 연구의 ``0.5 × (ret_half1 + ret_half2)`` 와 같다. 정수 수량에서 1주는 나눌 수 없어 익절 매도가
 0주가 된다 — 그래도 상태는 익절 뒤 단계로 넘어간다(손절 → 본전, MA50 추적).
@@ -54,7 +62,7 @@ from typing import Literal, Mapping
 import numpy as np
 import pandas as pd
 
-from swing_it.live.config import DEFAULT_STRATEGY, StrategyConfig
+from swing_it.live.config import BE_COST, DEFAULT_STRATEGY, StrategyConfig
 from swing_it.live.sizing import position_size, stop_width
 
 #: :func:`scan` 이 읽는 패널 이름(날짜×종목 DataFrame) — :func:`swing_it.live.features.build_signal_panels` 가 만든다.
@@ -66,14 +74,14 @@ FLOW_KEYS = ("smart", "foreign", "persist")
 #: 실적 문(GA2 유전자)이 켜졌을 때만 읽는 패널 — :func:`swing_it.live.features.earnings_panels`.
 EARNINGS_KEYS = ("eps_yoy", "accel", "rev_yoy")
 
-ActionKind = Literal["stop", "partial", "breakeven", "trail_next_open", "failed_breakout_next_open", "time_close",
-                     "max_hold", "below_low", "delisted", "data_end"]
+ActionKind = Literal["stop", "partial", "breakeven", "trail_next_open", "failed_breakout_next_open",
+                     "strength_next_open", "time_close", "max_hold", "below_low", "delisted", "data_end"]
 ActionAt = Literal["open", "intraday", "close", "next_open"]
 
 #: 마지막 청산 Action 종류 → 연구 ``exit_reason`` (패리티·리포트용). ``partial`` 은 마지막 청산이 될 수 없다.
 RESEARCH_REASON: dict[str, str] = {
     "stop": "stop", "breakeven": "breakeven", "trail_next_open": "trail", "failed_breakout_next_open": "failed_breakout",
-    "time_close": "time_stop",
+    "time_close": "time_stop", "strength_next_open": "strength",
     "max_hold": "time", "below_low": "below_low", "delisted": "delisted", "data_end": "data_end",
 }
 
@@ -308,9 +316,12 @@ class PositionState:
     day_no: int = 0
     partial_day_no: "int | None" = None
     breakeven_from: "int | None" = None    # 본전 손절이 걸리는 첫 day_no
-    trail_pending: bool = False            # 다음 거래일 시가 매도 결정(MA50 추적 또는 돌파 실패)
-    pending_kind: "str | None" = None      # 그 결정의 종류: trail_next_open / failed_breakout_next_open
+    trail_pending: bool = False            # 다음 거래일 시가 매도 결정(MA50 추적·돌파 실패 = 전량, 강세 매도 = 절반)
+    pending_kind: "str | None" = None      # 그 결정의 종류: trail_next_open / failed_breakout_next_open / strength_next_open
     time_checked: bool = False             # 시간 손절은 한 번만 본다
+    be_trig_day: "int | None" = None       # 청산 v2: be_r 발동 day_no(본전선은 그 다음 거래일부터)
+    strength_done: bool = False            # 청산 v2: 강세 매도는 한 번
+    fb_count: int = 0                      # 청산 v2: 돌파 실패 조건 연속 거래일 수
     exits: list = field(default_factory=list)  # [{day_no, kind, qty, price}]
 
     # --- 직렬화 ---
@@ -346,6 +357,26 @@ class PositionState:
         if not self.exits or not np.isfinite(self.entry_px) or self.qty <= 0:
             return math.nan
         return float(sum((x["qty"] / self.qty) * (x["price"] / self.entry_px - 1.0) for x in self.exits))
+
+    def ideal_return(self) -> float:
+        """연구 정의 수익(정수 수량 무관) — 매도 종류별 **설정 비율**(익절 ``partial_frac``·강세 매도 ½·나머지 전량)을 남은 비율에
+        곱해 Σ 비율 × (매도가 / 진입가 − 1). 소수 수량이면 :meth:`gross_return` 과 같다(연구 커널과 같은 연산 순서)."""
+        if not self.exits or not np.isfinite(self.entry_px):
+            return math.nan
+        rem, out = 1.0, 0.0
+        last = len(self.exits) - 1
+        for k, x in enumerate(self.exits):
+            if k == last and self.phase == "closed":
+                q = rem
+            elif x["kind"] == "partial":
+                q = rem * self.cfg.partial_frac
+            elif x["kind"] == "strength_next_open":
+                q = rem * 0.5
+            else:
+                q = rem
+            rem = rem - q
+            out += q * (x["price"] / self.entry_px - 1.0)
+        return float(out)
 
     def last_exit(self) -> "dict | None":
         return self.exits[-1] if self.exits else None
@@ -396,6 +427,34 @@ class PositionState:
     def _breakeven_active(self) -> bool:
         return self.phase == "half" and self.breakeven_from is not None and self.day_no >= self.breakeven_from
 
+    def _stop_line(self) -> "tuple[float, str]":
+        """오늘의 손절선과 사유 — 기술적 손절가 → 익절 뒤 본전(진입가) → ``be_r`` 본전(진입가 × (1 + BE_COST), 발동 다음 거래일부터)."""
+        line, kind = self.stop_px, "stop"
+        if self._breakeven_active():
+            line, kind = self.entry_px, "breakeven"
+        if self.be_trig_day is not None and self.day_no > self.be_trig_day:
+            line, kind = self.entry_px * (1.0 + BE_COST), "breakeven"
+        return line, kind
+
+    def _note_be(self, high: float, open_: float = math.nan) -> None:
+        """``be_r`` 발동 기록(고가 또는 시가 ≥ 진입가 × (1 + be_r·d)) — 본전선은 다음 거래일부터."""
+        if self.be_trig_day is not None or not math.isfinite(self.cfg.be_r):
+            return
+        lvl = self.entry_px * (1.0 + self.cfg.be_r * self.d)
+        if high >= lvl or open_ >= lvl:
+            self.be_trig_day = self.day_no
+
+    def _strength_fill(self, open: float, at: str = "open") -> Action:
+        """전날 강세 매도 결정 → 시가에 남은 수량의 절반(소수 수량이 아니면 내림). 결정은 소진된다."""
+        q = self.qty_open * 0.5
+        q = q if self.fractional else float(math.floor(q + 1e-9))
+        self.trail_pending = False
+        self.pending_kind = None
+        a = self._sell("strength_next_open", q, open, at)
+        if self.qty_open <= 0:
+            self.phase = "closed"
+        return a
+
     # --- 체결 ---
     def on_fill_open(self, price: float, *, day_no: int = 1, entry_day=None) -> list[Action]:
         """장전 지정가가 시가 ``price`` 에 체결됐다 → 손절·목표 확정. 시가 ≤ 수축 저점이면 그날 전량 청산.
@@ -424,37 +483,39 @@ class PositionState:
 
     # --- 일봉(백테스트) ---
     def on_bar(self, open: float, high: float, low: float, close: float, ma50: float, day_no: int, *,
-               tradable: bool = True) -> list[Action]:
+               tradable: bool = True, prev_close: "float | None" = None, sma50: "float | None" = None) -> list[Action]:
         """하루 일봉으로 상태 전이(연구 시뮬레이터와 같은 비관적 일봉 순서). 진입일엔 체결 뒤 같은 봉으로 부른다.
 
         ``tradable=False`` (정지·시세 없음)면 날짜만 센다. 반환 Action 의 ``price`` 는 체결가이고, ``next_open`` 은
-        다음 거래일 시가 매도 결정(그날 :meth:`on_bar` 가 시가로 체결한다).
+        다음 거래일 시가 매도 결정(그날 :meth:`on_bar` 가 시가로 체결한다). ``ma50`` = 추적 MA(설정 ``trail_ma``).
+        ``prev_close``(직전 행 종가)·``sma50``(MA50) 은 강세 매도(청산 v2)를 켰을 때만 쓴다 — 켰는데 안 주면 예외.
         """
         self.day_no = day_no
         if not self.is_open or not tradable:
             return []
         acts: list[Action] = []
-        if self.trail_pending:                                           # 전날 결정(추적·돌파 실패) → 시가
-            return self._pending_exit(open)
-        if self.phase == "full":
-            if low <= self.stop_px or open <= self.stop_px:              # 같은 날이면 손절 먼저
-                return [self._exit_all("stop", min(open, self.stop_px), "intraday")]
-            if self.cfg.partial_on and (high >= self.target_px or open >= self.target_px):
-                gap = open >= self.target_px
-                acts.append(self._take_partial(open if gap else self.target_px, "open" if gap else "intraday",
-                                               gap=gap))
-                if not self.is_open:
-                    return acts
-                if gap and low <= self.entry_px:                          # 갭 익절일: 그날 본전 체결 확정
-                    acts.append(self._exit_all("breakeven", self.entry_px, "intraday"))
-                    return acts
-                acts.extend(self._close_half(close, ma50))
+        if self.trail_pending:                                           # 전날 결정 → 시가
+            if self.pending_kind != "strength_next_open":
+                return self._pending_exit(open)                          # 추적·돌파 실패 = 전량
+            acts.append(self._strength_fill(open))                       # 강세 매도 = 절반, 그날 판단 계속
+            if not self.is_open:
                 return acts
-            return self._close_full(close, ma50)
-        # 익절 뒤 나머지
-        if self._breakeven_active() and (low <= self.entry_px or open <= self.entry_px):
-            return [self._exit_all("breakeven", min(open, self.entry_px), "intraday")]
-        return self._close_half(close, ma50)
+        line, kind = self._stop_line()
+        # 같은 날이면 손절(본전선) 먼저. 익절 뒤인데 본전이 아직 안 걸린 날(장중 익절 직후 같은 날 봉 — 일봉 경로엔 없다)은 옛 동작대로 안 본다.
+        if (self.phase == "full" or kind == "breakeven") and (low <= line or open <= line):
+            acts.append(self._exit_all(kind, min(open, line), "intraday"))
+            return acts
+        if self.phase == "full" and self.cfg.partial_on and (high >= self.target_px or open >= self.target_px):
+            gap = open >= self.target_px
+            acts.append(self._take_partial(open if gap else self.target_px, "open" if gap else "intraday", gap=gap))
+            if not self.is_open:
+                return acts
+            if gap and low <= self.entry_px:                              # 갭 익절일: 그날 본전 체결 확정
+                acts.append(self._exit_all("breakeven", self.entry_px, "intraday"))
+                return acts
+        self._note_be(high, open)
+        acts.extend(self._close_decide(close, ma50, prev_close, sma50))
+        return acts
 
     def _pending_exit(self, open: float) -> list[Action]:
         """전날 결정(MA50 추적·돌파 실패)을 시가에 실행 — 그날 손절·목표보다 먼저."""
@@ -464,12 +525,14 @@ class PositionState:
     def _decide_next_open(self, kind: str) -> list[Action]:
         self.trail_pending = True
         self.pending_kind = kind
-        return [self._sell(kind, self.qty_open, None, "next_open")]
+        q = self.qty_open * 0.5 if kind == "strength_next_open" else self.qty_open
+        return [self._sell(kind, q, None, "next_open")]
 
-    def _close_full(self, close: float, ma: float = math.nan) -> list[Action]:
-        """전량 단계의 종가 판단: 시간 손절(켜져 있으면, 한 번) → 최대 보유 → 돌파 실패(종가 < 피벗 → 다음 거래일 시가)
-        → (익절 없음 ∧ 추적 있음) 전량 추적: 종가 < MA → 다음 거래일 시가(GA 커널 ``j_t1`` — 같은 날이면 돌파 실패가 먼저)."""
-        if self.time_stop_due():
+    def _close_decide(self, close: float, ma: float, prev_close: "float | None", sma50: "float | None") -> list[Action]:
+        """종가 판단: (전량 단계) 시간 손절(켜져 있으면, 한 번) → 최대 보유 → 다음 거래일 시가 결정 하나 — 강세 매도(한 번) > 돌파 실패
+        (익절 전, 종가 < 피벗 × (1 − fb_tol) 이 fb_days 거래일 연속) > 추적(익절 뒤, 또는 익절 없음이면 전량 — GA 커널 ``j_t1``)."""
+        cfg = self.cfg
+        if self.phase == "full" and self.time_stop_due():
             self.time_checked = True
             if close <= self.entry_px:
                 return [self._exit_all("time_close", close, "close")]
@@ -477,61 +540,79 @@ class PositionState:
             return [self._exit_all("max_hold", close, "close")]
         if self.trail_pending:
             return []
-        if self.cfg.failed_breakout and close < self.pivot:
+        strong = False
+        if cfg.strength_on and not self.strength_done:
+            if (cfg.strength_ret is not None and prev_close is None) or (cfg.strength_ma_ext is not None and sma50 is None):
+                raise ValueError(f"{self.code}: 강세 매도에 전일 종가·MA50 이 필요하다(prev_close·sma50)")
+            if (cfg.strength_ret is not None and np.isfinite(prev_close)
+                    and close >= prev_close * (1.0 + cfg.strength_ret)):
+                strong = True
+            if cfg.strength_ma_ext is not None and np.isfinite(sma50) and close >= sma50 * (1.0 + cfg.strength_ma_ext):
+                strong = True
+        failed = False
+        if self.phase == "full" and cfg.failed_breakout:
+            self.fb_count = self.fb_count + 1 if close < self.pivot * (1.0 - cfg.fb_tol) else 0
+            failed = self.fb_count >= cfg.fb_days
+        trail = ((self.phase == "half" or not cfg.partial_on) and cfg.has_trail and np.isfinite(ma) and close < ma)
+        if strong:
+            self.strength_done = True
+            return self._decide_next_open("strength_next_open")
+        if failed:
             return self._decide_next_open("failed_breakout_next_open")
-        if not self.cfg.partial_on and self.cfg.has_trail and np.isfinite(ma) and close < ma:
+        if trail:
             return self._decide_next_open("trail_next_open")
         return []
 
+    def _close_full(self, close: float, ma: float = math.nan) -> list[Action]:
+        """전량 단계의 종가 판단(강세 매도 끔일 때의 옛 진입점 — :meth:`_close_decide` 와 같다)."""
+        return self._close_decide(close, ma, None, None)
+
     def _close_half(self, close: float, ma50: float) -> list[Action]:
-        """익절 뒤 나머지의 종가 판단: 최대 보유 → 그 종가, 아니면 종가 < MA → 다음 거래일 시가 결정."""
-        if self.max_hold_due():
-            return [self._exit_all("max_hold", close, "close")]
-        if self.cfg.has_trail and np.isfinite(ma50) and close < ma50 and not self.trail_pending:
-            return self._decide_next_open("trail_next_open")
-        return []
+        """익절 뒤 나머지의 종가 판단(옛 진입점 — :meth:`_close_decide` 와 같다)."""
+        return self._close_decide(close, ma50, None, None)
 
     # --- 라이브 이벤트(장전 시가 / 장중 현재가 / 종가) ---
     def on_open(self, open: float, day_no: int) -> list[Action]:
-        """거래일 시작(시가 확인). 전일 결정(MA50 추적·돌파 실패)이면 시가 매도, 갭 하락 ≤ 손절이면 손절, 갭 상승 ≥ 목표면 익절,
-        본전 활성 중 시가 ≤ 진입가면 본전. 진입일엔 부르지 않는다(:meth:`on_fill_open` 이 그 몫)."""
+        """거래일 시작(시가 확인). 전일 결정(MA50 추적·돌파 실패)이면 시가 매도(강세 매도면 절반 뒤 계속), 갭 하락 ≤ 손절선(본전선)이면
+        손절·본전, 갭 상승 ≥ 목표면 익절. 진입일엔 부르지 않는다(:meth:`on_fill_open` 이 그 몫)."""
         self.day_no = day_no
         if not self.is_open:
             return []
+        acts: list[Action] = []
         if self.trail_pending:
-            return self._pending_exit(open)
-        if self.phase == "full":
-            if open <= self.stop_px:
-                return [self._exit_all("stop", open, "open")]
-            if self.cfg.partial_on and open >= self.target_px:
-                return [self._take_partial(open, "open", gap=True)]
-            return []
-        if self._breakeven_active() and open <= self.entry_px:
-            return [self._exit_all("breakeven", open, "open")]
-        if open <= self.stop_px:                                  # 본전 전(익절일) — 원래 손절이 남아 있다
-            return [self._exit_all("stop", open, "open")]
-        return []
+            if self.pending_kind != "strength_next_open":
+                return self._pending_exit(open)
+            acts.append(self._strength_fill(open))
+            if not self.is_open:
+                return acts
+        line, kind = self._stop_line()
+        if open <= line:
+            acts.append(self._exit_all(kind, open, "open"))
+            return acts
+        if self.phase == "full" and self.cfg.partial_on and open >= self.target_px:
+            acts.append(self._take_partial(open, "open", gap=True))
+        self._note_be(open)
+        return acts
 
     def on_quote(self, last: float) -> list[Action]:
-        """장중 현재가. 손절가 이하 → 손절, 목표가 이상 → 절반 익절(본전은 다음 거래일부터), 본전 활성 중 진입가
-        이하 → 본전. ``price`` 는 판단 기준가(현재가)다 — 실제 체결가는 브로커 체결로 확정한다."""
+        """장중 현재가. 손절선 이하 → 손절(본전선이면 본전), 목표가 이상 → 부분 익절(본전은 다음 거래일부터), ``be_r`` 발동 기록.
+        ``price`` 는 판단 기준가(현재가)다 — 실제 체결가는 브로커 체결로 확정한다.
+
+        익절일 나머지: 본전은 다음 거래일부터지만 **원래 손절은 그날 내내 산다**(REVIEW_BACKTEST M1 — 일봉 모형의 "같은 날 손절 먼저"
+        와 같은 보호. 라이브는 이미 일부를 팔았으므로 남은 수량만 손절선에 판다)."""
         if not self.is_open or not np.isfinite(last):
             return []
-        if self.phase == "full":
-            if last <= self.stop_px:
-                return [self._exit_all("stop", last, "intraday")]
-            if self.cfg.partial_on and last >= self.target_px:
-                return [self._take_partial(last, "intraday", gap=False)]
-            return []
-        if self._breakeven_active() and last <= self.entry_px:
-            return [self._exit_all("breakeven", last, "intraday")]
-        # 익절일 나머지 절반: 본전은 다음 거래일부터지만 **원래 손절은 그날 내내 산다**(REVIEW_BACKTEST M1 — 일봉 모형의
-        # "같은 날 손절 먼저" 와 같은 보호. 라이브는 이미 절반을 팔았으므로 남은 절반만 손절가에 판다).
-        if last <= self.stop_px:
-            return [self._exit_all("stop", last, "intraday")]
-        return []
+        line, kind = self._stop_line()
+        if last <= line:
+            return [self._exit_all(kind, last, "intraday")]
+        acts: list[Action] = []
+        if self.phase == "full" and self.cfg.partial_on and last >= self.target_px:
+            acts.append(self._take_partial(last, "intraday", gap=False))
+        self._note_be(last)
+        return acts
 
-    def on_close(self, close: float, ma50: float, day_no: "int | None" = None) -> list[Action]:
+    def on_close(self, close: float, ma50: float, day_no: "int | None" = None, *, prev_close: "float | None" = None,
+                 sma50: "float | None" = None) -> list[Action]:
         """종가 판단(라이브: 15:20 종가 동시호가 = 시간 손절·최대 보유, 장후/다음날 아침 = MA50 추적·돌파 실패 결정).
 
         전량 단계: 시간 손절(켜져 있으면, 한 번) → 최대 보유 → **돌파 실패**(종가 < 피벗 → ``failed_breakout_next_open``,
@@ -542,9 +623,7 @@ class PositionState:
             self.day_no = day_no
         if not self.is_open:
             return []
-        if self.phase == "full":
-            return self._close_full(close, ma50)
-        return self._close_half(close, ma50)
+        return self._close_decide(close, ma50, prev_close, sma50)
 
     # --- 백테스트 전용 ---
     def force_close(self, kind: str, price: float, day_no: "int | None" = None) -> list[Action]:

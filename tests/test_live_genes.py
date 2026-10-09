@@ -1,5 +1,7 @@
-"""GA2 → 라이브 인계 — 유전자 19개(+ 수급 3개) 1:1 대응, 인계 파일, 3자 적재 패리티(백테스트 = 연구 시뮬 = GA 커널), EPS 정의 패리티."""
+"""GA2 → 라이브 인계 — 유전자 19개(+ 수급 3개 + 청산 v2 5개) 1:1 대응, 인계 파일, 3자 적재 패리티(백테스트 = 연구 시뮬 = GA 커널 —
+청산 v2 칸은 v2 커널 ``exits_v2_fast``; 모든 칸에서 v2 커널도 같이 대조), EPS 정의 패리티."""
 
+import contextlib
 import json
 import math
 
@@ -7,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from research.signals import exits_v2_fast as xv
 from research.signals import ga_fast as gf
 from research.signals.minervini_exits import contraction_low_level, simulate_minervini
 from research.signals.sepa import LIMIT_UP_RATIO, _Book
@@ -14,7 +17,14 @@ from swing_it.features.minervini import pivot_level
 from swing_it.features.technical import moving_average
 from swing_it.live import candidate as cd
 from swing_it.live.backtest import run_backtest
-from swing_it.live.config import FLOW_GENE_FIELDS, GENE_FIELDS, GENE_LEVELS, DEFAULT_STRATEGY, StrategyConfig
+from swing_it.live.config import (
+    DEFAULT_STRATEGY,
+    EXIT_V2_GENE_FIELDS,
+    FLOW_GENE_FIELDS,
+    GENE_FIELDS,
+    GENE_LEVELS,
+    StrategyConfig,
+)
 from swing_it.live.strategy import scan
 from tests.test_live_parity import _synthetic
 
@@ -96,6 +106,43 @@ def test_from_genes_raises_on_unmapped_or_bad_level(bad):
         StrategyConfig.from_genes({k: v for k, v in DEFAULT_GENES.items() if k != "max_hold"})
 
 
+#: 청산 v2 유전자 — 현 동작 값 / 원전 대표 칸(MINERVINI_EXITS_V2.md 미리 고정).
+V2_OFF = {"be_r": INF, "take_frac": 0.5, "strength_sell": 0, "fb_tol": 0.0, "fb_days": 1}
+V2_REP = {**DEFAULT_GENES, "be_r": 1.0, "take_r": 2.0, "take_frac": 0.5, "strength_sell": 3, "fb_tol": 0.02, "fb_days": 2,
+          "stop_cap": 0.08, "trail_ma": 20}
+
+
+def test_from_genes_exit_v2_genes():
+    cfg = StrategyConfig.from_genes(V2_REP)
+    assert (cfg.be_r, cfg.partial_frac, cfg.strength_ret, cfg.strength_ma_ext, cfg.fb_tol, cfg.fb_days) == (
+        1.0, 0.5, 0.15, 0.30, 0.02, 2)
+    assert cfg.stop_cap == 0.08 and cfg.trail_ma == 20 and cfg.strength_on and not cfg.exits_v2_default
+    assert cfg.to_genes() == V2_REP and StrategyConfig.from_genes(cfg.to_genes()) == cfg
+    # v2 유전자를 현 동작 값으로 주면 설정이 기본과 같고, to_genes 는 v2 를 넣지 않는다
+    same = StrategyConfig.from_genes({**DEFAULT_GENES, **V2_OFF})
+    assert same == StrategyConfig.from_genes(DEFAULT_GENES) and same.exits_v2_default and "be_r" not in same.to_genes()
+    # take_r 1.0 은 v2 유전자가 있을 때만, 1/3 은 JSON 왕복 그대로
+    one = StrategyConfig.from_genes({**DEFAULT_GENES, **V2_OFF, "take_r": 1.0, "take_frac": json.loads(json.dumps(1 / 3))})
+    assert one.take_r == 1.0 and one.partial_frac == 1 / 3
+    with pytest.raises(ValueError):
+        StrategyConfig.from_genes({**DEFAULT_GENES, "take_r": 1.0})
+    for bad in ({"be_r": 0.7}, {"take_frac": 0.4}, {"strength_sell": 4}, {"fb_tol": 0.03}, {"fb_days": 3}):
+        with pytest.raises(ValueError):
+            StrategyConfig.from_genes({**V2_REP, **bad})
+    with pytest.raises(ValueError, match="다섯"):
+        StrategyConfig.from_genes({**DEFAULT_GENES, "be_r": 1.0})
+    with pytest.raises(ValueError, match="강세"):
+        StrategyConfig(strength_ret=0.2).to_genes()
+    assert set(EXIT_V2_GENE_FIELDS) == set(V2_OFF)
+
+
+def test_be_cost_same_everywhere():
+    from research.signals import minervini_exits as mx
+    from swing_it.live import config
+
+    assert xv.BE_COST == mx.BE_COST == config.BE_COST == 0.005
+
+
 # ---------------------------------------------------------------------------
 # 인계 파일
 # ---------------------------------------------------------------------------
@@ -143,6 +190,44 @@ def test_candidate_write_load_and_validation(tmp_path):
 # 3자 적재 패리티 — run_backtest(unlimited) = simulate_minervini = ga_fast.engine_events
 # ---------------------------------------------------------------------------
 
+def _synthetic_v2(seed: int):
+    """``_synthetic`` + 급등일(종목·날짜 1.5%: 시가 뒤 종가가 +16~24%) — 강세 매도(전일 대비 +15%, MA50 × 1.3)가 실제로 걸리게.
+
+    급등일 이후 가격은 같은 배수로 이어지고(OHLC 일관), 정지일·폐지·시세 없음 구간은 ``_synthetic`` 그대로 둔다.
+    """
+    frame, ev_mask = _synthetic(seed)
+    rng = np.random.default_rng(100 + seed)
+    o, h, lo, c, v = (frame[k].to_numpy().copy() for k in ("open", "high", "low", "close", "volume"))
+    n_days, n_codes = c.shape
+    for j in range(n_codes):
+        for t in np.flatnonzero(rng.random(n_days) < 0.015):
+            if t == 0 or not (np.isfinite(c[t, j]) and v[t, j] > 0):
+                continue
+            k = float(np.exp(rng.uniform(0.15, 0.22)))
+            c[t, j] *= k
+            h[t, j] = max(h[t, j] * k, c[t, j])
+            o[t + 1:, j] *= k
+            h[t + 1:, j] *= k
+            lo[t + 1:, j] *= k
+            c[t + 1:, j] *= k
+    idx, cols = frame["close"].index, frame["close"].columns
+    mk = lambda a: pd.DataFrame(a, index=idx, columns=cols)  # noqa: E731
+    return {"open": mk(o), "high": mk(h), "low": mk(lo), "close": mk(c), "volume": mk(v)}, ev_mask
+
+
+@contextlib.contextmanager
+def _pure_v2():
+    """v2 커널의 순수 파이썬 경로가 JIT 보조 함수를 부르지 않게(리뷰 A-M2) — numba 가 있어도 진짜 파이썬으로."""
+    saved = {n: getattr(xv, n) for n in xv.HELPERS}
+    try:
+        for n, f in saved.items():
+            setattr(xv, n, getattr(f, "py_func", f))
+        yield
+    finally:
+        for n, f in saved.items():
+            setattr(xv, n, f)
+
+
 def _panels(frame, ev_mask, cfg: StrategyConfig):
     c = frame["close"]
     piv = pivot_level(frame["high"], cfg.effective_pivot_window)
@@ -175,45 +260,95 @@ GENE_CASES = {
     "fb_off_pw30_tm10": {**DEFAULT_GENES, "failed_breakout": 0, "pivot_window": 30, "trail_ma": 10, "take_r": 1.5,
                          "stop_cap": 0.06, "max_hold": 20},
     "all_off": OFF_GENES,
+    # 청산 v2(MINERVINI_EXITS_V2.md) — 원전 대표 칸 + 축마다 극단 단계
+    "v2_rep": V2_REP,
+    "v2_be05_fulltrail_x15": {**DEFAULT_GENES, "be_r": 0.5, "take_r": INF, "take_frac": 0.5, "strength_sell": 1,
+                              "fb_tol": 0.05, "fb_days": 1, "stop_cap": 0.06, "trail_ma": 10},
+    "v2_take1_third_y30_fboff": {**DEFAULT_GENES, "be_r": 2.0, "take_r": 1.0, "take_frac": 1 / 3, "strength_sell": 2,
+                                 "fb_tol": 0.0, "fb_days": 1, "failed_breakout": 0, "trail_ma": 50},
+    "v2_take3_third_days2": {**DEFAULT_GENES, "be_r": INF, "take_r": 3.0, "take_frac": 1 / 3, "strength_sell": 0,
+                             "fb_tol": 0.0, "fb_days": 2, "stop_cap": 0.10, "trail_ma": 20},
+    "v2_be15_take15_both_hold20": {**DEFAULT_GENES, "be_r": 1.5, "take_r": 1.5, "take_frac": 0.5, "strength_sell": 3,
+                                   "fb_tol": 0.02, "fb_days": 1, "max_hold": 20, "trail_ma": 10},
+    "v2_be1_nopartial_notrail": {**DEFAULT_GENES, "be_r": 1.0, "take_r": INF, "take_frac": 0.5, "strength_sell": 3,
+                                 "fb_tol": 0.05, "fb_days": 2, "trail_ma": 0, "pivot_window": 30},
+    "v2_be2_x15_chase_inf": {**DEFAULT_GENES, "be_r": 2.0, "take_r": 2.0, "take_frac": 1 / 3, "strength_sell": 1,
+                             "fb_tol": 0.02, "fb_days": 2, "chase": INF, "stop_cap": 0.15, "max_hold": 60},
+    "v2_off_given": {**DEFAULT_GENES, **V2_OFF},
 }
+V2_FEATURES = {"v2_rep": ("be", "strength", "fb2"), "v2_be05_fulltrail_x15": ("be", "strength"),
+               "v2_take1_third_y30_fboff": ("be", "strength"), "v2_take3_third_days2": ("fb2",),
+               "v2_be15_take15_both_hold20": ("be", "strength"), "v2_be1_nopartial_notrail": ("be", "strength", "fb2"),
+               "v2_be2_x15_chase_inf": ("be", "strength", "fb2")}
+
+
+def v2_params(cfg: StrategyConfig) -> dict:
+    """설정 → v2 커널 인자(``exits_v2_fast.EXIT_V2_DEFAULT`` 모양)."""
+    nz = lambda v: np.nan if v is None else float(v)  # noqa: E731
+    return {"stop_floor": cfg.stop_floor, "stop_cap": cfg.stop_cap, "stop_mult": cfg.stop_mult, "take_r": cfg.take_r,
+            "take_frac": cfg.partial_frac, "be_r": cfg.be_r, "ss_x": nz(cfg.strength_ret), "ss_y": nz(cfg.strength_ma_ext),
+            "fb": cfg.failed_breakout, "fb_tol": cfg.fb_tol, "fb_days": cfg.fb_days, "ts_days": cfg.time_stop_days or 0,
+            "max_hold": cfg.max_hold, "has_trail": cfg.has_trail, "lu_skip": True}
 
 
 @pytest.mark.parametrize("name", list(GENE_CASES))
 @pytest.mark.parametrize("seed", [0, 1])
 def test_three_way_parity_for_loaded_gene_config(name, seed):
     cfg = StrategyConfig.from_genes(GENE_CASES[name])
-    frame, ev_mask = _synthetic(seed)
+    frame, ev_mask = (_synthetic_v2 if name.startswith("v2_") else _synthetic)(seed)
     panels = _panels(frame, ev_mask, cfg)
     ev = _events(panels)
     # 1. 라이브 백테스트(자본·슬롯 무제한)
     bt = run_backtest(panels, cfg, unlimited=True)
     live = bt.trades[bt.trades["exit_reason"] != "below_low"]
     # 2. 연구 시뮬레이터(같은 프로토콜)
+    v2 = not cfg.exits_v2_default
     rs = simulate_minervini(frame["open"], frame["high"], frame["low"], frame["close"], panels["ma50"], ev,
                             volume=frame["volume"], stop_cap=cfg.stop_cap, take_r=cfg.take_r,
                             time_stop_days=cfg.time_stop_days, max_hold=cfg.max_hold,
-                            chase=None if math.isinf(cfg.chase) else cfg.chase, failed_breakout=cfg.failed_breakout)
-    # 3. GA 커널(설정을 고른 엔진 자체, 순수 파이썬 경로)
+                            chase=None if math.isinf(cfg.chase) else cfg.chase, failed_breakout=cfg.failed_breakout,
+                            take_frac=cfg.partial_frac, be_r=cfg.be_r, strength_ret=cfg.strength_ret,
+                            strength_ma_ext=cfg.strength_ma_ext, fb_tol=cfg.fb_tol, fb_days=cfg.fb_days)
+    # 3. GA 커널(설정을 고른 엔진 자체, 순수 파이썬 경로) — v2 칸은 v2 커널, 모든 칸에서 v2 커널도 같이
     book = _Book(frame["open"], frame["high"], frame["low"], frame["close"], panels["ma50"], frame["volume"])
-    params = {"stop_floor": cfg.stop_floor, "stop_cap": cfg.stop_cap, "stop_mult": cfg.stop_mult, "fixed_stop": np.nan,
-              "take_r": cfg.take_r, "ts_days": cfg.time_stop_days, "max_hold": cfg.max_hold, "has_trail": cfg.has_trail,
-              "lu_skip": True, "fb": cfg.failed_breakout}
-    ga = gf.engine_events(book, ev, params, chase=cfg.chase, py=True)
+    ma50 = moving_average(frame["close"], 50).to_numpy(float).T
+    with _pure_v2():
+        g2 = xv.engine_events_v2(book, ev, v2_params(cfg), ma50=ma50, chase=cfg.chase, py=True)
+    if v2:
+        ga = g2
+    else:
+        params = {"stop_floor": cfg.stop_floor, "stop_cap": cfg.stop_cap, "stop_mult": cfg.stop_mult, "fixed_stop": np.nan,
+                  "take_r": cfg.take_r, "ts_days": cfg.time_stop_days, "max_hold": cfg.max_hold,
+                  "has_trail": cfg.has_trail, "lu_skip": True, "fb": cfg.failed_breakout}
+        ga = gf.engine_events(book, ev, params, chase=cfg.chase, py=True)
     assert LIMIT_UP_RATIO == cfg.limit_up_ratio
 
     key = ["code", "event_day"]
-    a, b, g = (x.set_index(key).sort_index() for x in (live, rs, ga))
-    assert list(a.index) == list(b.index) == list(g.index), (name, len(a), len(b), len(g))
+    a, b, g, g2 = (x.set_index(key).sort_index() for x in (live, rs, ga, g2))
+    assert list(a.index) == list(b.index) == list(g.index) == list(g2.index), (name, len(a), len(b), len(g), len(g2))
     for col in ("entry_day", "exit_day", "exit_reason", "hold_days"):
-        assert (a[col] == b[col]).all() and (b[col] == g[col]).all(), (name, col)
-    for x, tol_d in ((b, 1e-12), (g, 1e-7)):                       # GA 커널의 d 는 float32
+        assert (a[col] == b[col]).all() and (b[col] == g[col]).all() and (g[col] == g2[col]).all(), (name, col)
+    for x, tol_d in ((b, 1e-12), (g, 1e-7), (g2, 1e-12)):            # GA 커널의 d 는 float32
         np.testing.assert_allclose(a["ret"].to_numpy(float), x["ret"].to_numpy(float), rtol=0, atol=1e-9)
         np.testing.assert_allclose(a["d"].to_numpy(float), x["d"].to_numpy(float), rtol=0, atol=tol_d)
+    np.testing.assert_allclose(a["ret_half"].to_numpy(float), a["ret"].to_numpy(float), rtol=0, atol=1e-12)
     assert (a["partial_hit"].astype(bool) == g["partial_hit"].astype(bool)).all()
+    assert (g2["partial_hit"] == g["partial_hit"].astype(bool)).all()
+    if not v2:                                                       # v2 커널(전부 끔) = 옛 GA 커널, 비트 단위
+        assert (g["ret"].to_numpy() == g2["ret"].to_numpy()).all(), name
+    else:
+        assert (b["strength_hit"].astype(bool) == g2["strength_hit"]).all()
+        assert (b["be_moved"].astype(bool) == g2["be_moved"]).all()
+        np.testing.assert_allclose(b["final_frac"].to_numpy(float), g2["fin_frac"].to_numpy(float), rtol=0, atol=1e-12)
+        feats = V2_FEATURES.get(name, ())
+        if "strength" in feats:
+            assert g2["strength_hit"].sum() >= 3, (name, int(g2["strength_hit"].sum()))
+        if "be" in feats:
+            assert (g2["be_moved"] & (g2["exit_reason"] == "breakeven")).sum() >= 3, name
     assert len(a) > 50
     reasons = set(a["exit_reason"])
     if not cfg.partial_on and cfg.has_trail:
-        assert "trail" in reasons and "breakeven" not in reasons
+        assert "trail" in reasons and ("breakeven" not in reasons or math.isfinite(cfg.be_r))   # 본전은 be_r 로만
     if not cfg.has_trail:
         assert "trail" not in reasons
     if cfg.failed_breakout:

@@ -343,11 +343,19 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
         last_rows: 주면 ``end`` 까지의 마지막 ``last_rows`` 거래일만(``start`` 무시) — 그날치 라이브.
         patch_nxt: 2026-09-14~ 행을 정규장(분봉) 값으로 바꾼다(:mod:`swing_it.krx_session`).
     """
-    from swing_it.krx_session import NXT_START, patch_prices, read_session_bars  # noqa: PLC0415
-    from swing_it.storage import read_earnings, read_prices_wide, read_supply_demand  # noqa: PLC0415
+    from swing_it.krx_session import NXT_START, patch_prices, read_session_bars, read_session_bars_agg  # noqa: PLC0415
+    from swing_it.storage import _is_pg  # noqa: PLC0415
+    from swing_it.storage import read_earnings, read_prices_wide, read_supply_demand, trading_window  # noqa: PLC0415
 
-    # 정문의 와이드판(서버측 커서 — 긴 프레임 580만 행을 만들지 않는다; 통합 검토 M6). 폐지 포함 검사는 그대로.
-    wide = read_prices_wide(con, cols=PRICE_COLS)
+    # 정문의 와이드판, **날짜 창만** 읽는다(통합 검토 M6 — 전 기간 580만 행 대신 그날치 330행 × 전 종목; 폐지 포함 검사는 창 기준).
+    if last_rows is not None:
+        win = trading_window(con, end=end, rows=last_rows)
+        if win is None:
+            raise ValueError("가격 테이블이 비어 있다")
+        q_lo, q_hi = win
+    else:
+        q_lo, q_hi = start, end
+    wide = read_prices_wide(con, cols=PRICE_COLS, start=q_lo, end=q_hi)
     days_all = wide["close"].index
     hi = pd.Timestamp(end) if end is not None else days_all.max()
     upto = days_all[days_all <= hi]
@@ -356,15 +364,17 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
     else:
         lo = pd.Timestamp(start) if start is not None else upto.min()
     prices = _long_window(wide, PRICE_COLS, lo, hi)
-    raw = _long_window(read_prices_wide(con, cols=("open", "close"), table="daily_bars"), ("open", "close"), lo, hi)
+    raw = _long_window(read_prices_wide(con, cols=("open", "close"), table="daily_bars",
+                                        start=str(lo.date()), end=str(hi.date())), ("open", "close"), lo, hi)
 
     # 정수 열(거래량·거래대금)에 정규장 float 를 덮어쓰면 pandas 가 거부한다 — 먼저 float 로.
     prices = prices.astype({c: float for c in PRICE_COLS})
     raw = raw.astype({"open": float, "close": float})
     info: dict = {"nxt_rows": 0, "nxt_patched": 0}
     if patch_nxt and hi >= pd.Timestamp(NXT_START):
-        sess = read_session_bars(con, start=max(lo, pd.Timestamp(NXT_START)).strftime("%Y-%m-%d"),
-                                 end=hi.strftime("%Y-%m-%d"))
+        # 정규장 일봉은 Postgres 에서 집계해 받는다(분봉 수천만 행을 pandas 로 끌어오면 80 s · RSS 4.7 GB — 2026-10-10 실측).
+        reader = read_session_bars_agg if _is_pg(con) else read_session_bars
+        sess = reader(con, start=max(lo, pd.Timestamp(NXT_START)).strftime("%Y-%m-%d"), end=hi.strftime("%Y-%m-%d"))
         prices = patch_prices(prices, sess, adjusted=True)
         raw = patch_prices(raw, sess, adjusted=False)
         late = prices["date"] >= pd.Timestamp(NXT_START)
