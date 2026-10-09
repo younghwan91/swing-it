@@ -146,6 +146,21 @@ set -a; . ../quant-airflow/.env; set +a  # KIWOOM_APP_KEY / KIWOOM_APP_SECRET / 
    `SWING_KIWOOM_IS_MOCK=true` 로 모의계좌에서 먼저 하루 돌려볼 수 있다.
 7. simnode `deploy/crontab.simnode` 에 옮겨 커밋·푸시(cron-install 이 반영). 첫날은 08:35·09:02·15:40 로그를 직접 본다.
 
+## 6b. 뉴스 거부권 섀도(설계 §7 · `research/logs/sepa_explore/NEWS_VETO.md`)
+
+`signal` 이 받은 `SignalBatch.vetoed`(거부된 후보)와 `veto_info`(코드 → `neg5`/`neg20` 악재 수·사유)는 **주문 없이** 섀도 포지션
+(`state.shadow`)으로 추적한다 — 실포지션과 같은 사이징·같은 상태기계(`PositionState`)·같은 비용 모델(섀도 `PositionBook`,
+`shadow_book.jsonl`)이고, 사건은 별도 원장 `data/live_swing/<mode>/shadow.jsonl` 에 거부 사유와 함께 적는다.
+
+- 가상 진입: 09:02 `open-check` 의 시가(ka10001 `open_pric`)로, 실포지션과 같은 규칙(시가 ≤ 지정가 → 시가 체결, 아니면 `missed`).
+- 가상 청산: 15:40 `eod` 가 종목당 시세 1건(시가·고가·저가·현재가)으로 `on_bar` 를 돌린다 — 손절·절반 익절·본전·돌파 실패·MA50 추적·
+  최대 보유를 백테스트와 같은 비관적 일봉 순서로. MA50 은 DB 보정 종가 + 그날 현재가. "다음날 시가" 결정은 다음 09:02 시가에 가상 체결.
+  **근사다**: ka10001 일중 필드는 미검증이고 15:40 현재가는 KRX 종가로 검증되지 않았다(L5) — 섀도는 거부군 vs 진입군 비교용이지
+  실포지션 판단에는 쓰지 않는다. 세션이 확정되지 않은 날(휴장 의심)엔 섀도도 건드리지 않는다.
+- `sw-live status` 의 `뉴스 거부권:` 줄이 합격 바를 그대로 보여 준다 — `거부군(섀도) n·평균순수익·손절률 | 진입군(실제) n·평균순수익·
+  손절률 → 합격 바 충족/미충족(거부 n/30건)`. 순수익률 = 장부 실현 순손익 / (진입 수량 × 진입가), 닫힌 포지션만. 합격 바(NEWS_VETO.md):
+  전진 6개월 또는 거부 30건 이상에서 거부군 평균 순수익 < 진입군 **그리고** 거부군 손절률 ≥ 진입군.
+
 ## 7. 라이브-백테스트 차이
 
 **손절 체결가(감사 L1).** 백테스트(`swing_it.live.backtest`)는 손절을 손절가 그대로(갭이면 시가) 체결한다. 라이브는 60초 폴링으로

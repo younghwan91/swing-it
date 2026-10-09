@@ -21,7 +21,7 @@ from swing_it.live import cli
 from swing_it.live.brokers import REF_CODE, BrokerBundle, DailyBar, FakeQuoteProvider, build_bundle
 from swing_it.live.config import DEFAULT_STRATEGY
 from swing_it.live.runtime import RuntimeConfig, SignalBatch, SwingRuntime
-from swing_it.live.state import StateStore
+from swing_it.live.state import PositionRec, StateStore
 from swing_it.live.strategy import Candidate
 
 SIGNAL_D = date(2026, 10, 9)                      # 금
@@ -956,3 +956,178 @@ def test_any_next_open_action_kind_becomes_preopen_auction_sell(tmp_path):
                                            at="next_open", qty=100, day_no=1)], session="open_auction")
     assert pos.exit_intent == {"kind": "failed_breakout_next_open", "qty": 100, "session": "open_auction",
                                "created": D2.isoformat()}
+
+
+# --------------------------------------------------------------------------- 뉴스 거부권 섀도(설계 §7)
+
+
+def _veto_batch(codes, *, d=SIGNAL_D, real=()):
+    return SignalBatch(data_date=d, candidates=[cand(c, d=d) for c in real],
+                       vetoed=[cand(c, d=d) for c in codes],
+                       veto_info={c: {"neg5": 1, "neg20": 2, "reason": "직전 5일 악재 1건"} for c in codes},
+                       trail_closes={c: [9_000.0] * 49 for c in list(codes) + list(real)})
+
+
+def test_vetoed_candidate_becomes_shadow_position_without_orders(tmp_path):
+    env = Env(tmp_path)
+    env.signals.batches[D1] = _veto_batch(["VVVVVV"], real=["AAAAAA"])
+    for c in ("VVVVVV", "AAAAAA"):
+        env.q(c, 10_000, prev_close=10_000)
+    assert env.run("signal", D1, "07:35") == 0
+    st = env.state()
+    assert "VVVVVV" in st.shadow and "VVVVVV" not in st.positions and st.shadow["VVVVVV"].status == "planned"
+    assert st.shadow["VVVVVV"].plan["veto"] == {"neg5": 1, "neg20": 2, "reason": "직전 5일 악재 1건"}
+    assert st.last_signal["n_vetoed"] == 1 and st.last_signal["shadow_planned"] == 1
+    [ev] = StateStore(env.cfg.mode_dir, clock=env.clock).shadow_events()
+    assert ev["event"] == "shadow_planned" and ev["veto"]["neg20"] == 2 and ev["limit_px"] == 10_290
+    assert env.run("preopen", D1, "08:35") == 0
+    assert [o.code for o in st.live_orders()] == [] and [o.code for o in env.state().live_orders()] == ["AAAAAA"]
+    env.q("VVVVVV", 10_150, open=10_100, prev_close=10_000)
+    env.q("AAAAAA", 10_150, open=10_100, prev_close=10_000)
+    assert env.run("open_check", D1, "09:02") == 0
+    st = env.state()
+    sh = st.shadow["VVVVVV"]
+    assert sh.status == "open" and sh.entry_price == 10_100 and sh.qty == 100 and sh.stop == pytest.approx(9_207)
+    assert [o.code for o in st.orders.values()] == ["AAAAAA"]                       # 섀도는 주문이 없다
+    store = StateStore(env.cfg.mode_dir, clock=env.clock)
+    assert store.load_shadow_book(st).position("VVVVVV").qty == 100
+    assert env.book().positions().keys() == {"AAAAAA"}                                 # 실장부와 섞이지 않는다
+    assert [e["event"] for e in store.shadow_events()] == ["shadow_planned", "shadow_fill"]
+    # 15:40: 일중 저가가 손절가 아래 → 섀도 손절(비용 포함 순손익), 실포지션은 그대로
+    env.q("VVVVVV", 9_500, open=10_100, high=10_200, low=9_100, prev_close=10_000)
+    env.q("AAAAAA", 10_400, open=10_100, high=10_450, low=10_050, prev_close=10_000)
+    assert env.run("close", D1, "15:21") == 0
+    assert env.run("eod", D1, "15:40") == 0
+    st = env.state()
+    assert "VVVVVV" not in st.shadow
+    [h] = st.shadow_history
+    assert h.exit_reason == "stop" and h.status == "closed" and h.realized < 0 and h.qty == 0
+    assert st.positions["AAAAAA"].status == "open"
+    assert store.load_shadow_book(st).positions() == {} and env.book().position("AAAAAA").qty == 100
+    close_ev = [e for e in store.shadow_events() if e["event"] == "shadow_close"]
+    assert close_ev and close_ev[0]["reason"] == "stop" and close_ev[0]["veto"]["neg5"] == 1
+
+
+def test_shadow_trail_next_open_and_missed(tmp_path):
+    env = Env(tmp_path)
+    b = _veto_batch(["VVVVVV", "WWWWWW"])
+    b.trail_closes["VVVVVV"] = [11_800.0] * 49                                  # MA50 높음 → 추적 청산이 금방 걸린다
+    env.signals.batches[D1] = b
+    for c in ("VVVVVV", "WWWWWW"):
+        env.q(c, 10_000, prev_close=10_000)
+    env.run("signal", D1, "07:35")
+    env.run("preopen", D1, "08:35")
+    env.q("VVVVVV", 10_150, open=10_100, prev_close=10_000)
+    env.q("WWWWWW", 10_400, open=10_350, prev_close=10_000)                      # 시가 > 지정가 → 가상 미체결
+    env.run("open_check", D1, "09:02")
+    st = env.state()
+    assert st.shadow["VVVVVV"].status == "open" and "WWWWWW" not in st.shadow
+    assert [p.status for p in st.shadow_history] == ["missed"]
+    # 15:40: 고가 ≥ 목표 → 절반 익절; 종가 < MA50 → 다음날 시가 매도 의도
+    env.q("VVVVVV", 11_500, open=10_100, high=11_950, low=10_050, prev_close=10_000)
+    env.run("eod", D1, "15:40")
+    sh = env.state().shadow["VVVVVV"]
+    assert sh.qty == 50 and sh.partial_done and sh.exit_intent["kind"] == "trail_next_open"
+    env.q("VVVVVV", 11_200, open=11_300, prev_close=11_500)
+    env.run("signal", D2, "07:35")
+    env.run("preopen", D2, "08:35")
+    env.run("open_check", D2, "09:02")
+    st = env.state()
+    assert "VVVVVV" not in st.shadow
+    v = [p for p in st.shadow_history if p.code == "VVVVVV"][0]
+    assert v.exit_reason == "trail_next_open" and v.realized > 0
+    fills = [e for e in StateStore(env.cfg.mode_dir, clock=env.clock).shadow_events() if e["event"] == "shadow_fill"]
+    assert [(e["side"], e["qty"], e["price"]) for e in fills] == [("buy", 100, 10_100), ("sell", 50, 11_886),
+                                                                  ("sell", 50, 11_300)]
+    assert not st.live_orders() and not st.orders                                  # 주문은 끝까지 없다
+
+
+def test_shadow_not_created_when_code_is_a_real_position_and_live_mode_places_nothing(tmp_path):
+    fk = FakeKiwoom({})
+    env = Env(tmp_path, mode="live", broker=fk)
+    env.signals.batches[D1] = _veto_batch(["VVVVVV"])
+    env.q("VVVVVV", 10_000, prev_close=10_000)
+    env.run("signal", D1, "07:35")
+    env.run("preopen", D1, "08:35")
+    env.q("VVVVVV", 10_150, open=10_100, prev_close=10_000)
+    env.run("open_check", D1, "09:02")
+    assert env.state().shadow["VVVVVV"].status == "open" and fk.submitted == [] and fk.holdings() == {}
+    _eod(env, D1, {"VVVVVV": 10_200})
+    env.signals.batches[D2] = _veto_batch(["VVVVVV"], d=D1)                       # 다시 거부돼도 이미 추적 중 → 중복 없음
+    env.run("signal", D2, "07:35")
+    assert len(env.state().shadow) == 1 and env.state().last_signal["shadow_planned"] == 0
+
+
+def test_status_prints_shadow_vs_real_line(tmp_path, capsys):
+    from swing_it.live.runtime import shadow_vs_real_line
+    from swing_it.live.state import LiveState
+
+    st = LiveState(mode="paper", capital=1e7)
+    assert shadow_vs_real_line(st).endswith("n=0 | 진입군(실제) n=0")
+
+    def rec(code, realized, reason):
+        return PositionRec(code=code, market="KOSPI", signal_date="2026-10-09", trade_date="2026-10-12",
+                           status="closed", entered_qty=100, entry_price=10_000.0, realized=realized, exit_reason=reason)
+
+    st.shadow_history = [rec("V1", -80_000, "stop"), rec("V2", 20_000, "trail_next_open")]
+    st.history = [rec("A1", 150_000, "trail_next_open"), rec("A2", -70_000, "stop"), rec("A3", 50_000, "max_hold")]
+    line = shadow_vs_real_line(st)
+    assert "거부군(섀도) n=2 평균순수익=-3.00% 손절률=50%" in line
+    assert "진입군(실제) n=3 평균순수익=+4.33% 손절률=33%" in line and "합격 바 충족(거부 2/30건)" in line
+    env = Env(tmp_path)
+    StateStore(env.cfg.mode_dir, clock=env.clock).save(st)
+    assert env.run("status", D1, "10:00") == 0
+    out = capsys.readouterr().out
+    assert "뉴스 거부권" in out and "합격 바 충족" in out
+
+
+def test_features_signal_source_applies_news_veto(monkeypatch):
+    """신호 원천이 전략 에이전트의 ``news_veto.apply_live_veto`` 를 거쳐 kept/vetoed 를 나누고 사유·경고를 싣는다."""
+    import swing_it.live.features as features
+    import swing_it.live.news_veto as news_veto
+    import swing_it.live.strategy as strategy
+    import swing_it.storage as storage
+    from swing_it.live.runtime import FeaturesSignalSource
+
+    days = pd.bdate_range("2026-01-05", "2026-10-09")
+    close = pd.DataFrame({"AAAAAA": 1.0, "VVVVVV": 2.0}, index=days, dtype=float)
+    panels = {"close": close, "patch_info": {"nxt_rows": 1, "nxt_patched": 1, "nxt_unpatched": pd.DataFrame(columns=["code", "date"])}}
+    seen = {}
+
+    class _Con:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    con = _Con()
+    monkeypatch.setattr(storage, "connect", lambda db=None: con)
+    monkeypatch.setattr(storage, "db_default", lambda: "x")
+    monkeypatch.setattr(features, "signal_panels_for", lambda c, d, cfg: (panels, days[-1]))
+    monkeypatch.setattr(strategy, "scan", lambda p, d, cfg: [cand("AAAAAA"), cand("VVVVVV")])
+
+    def fake_veto(c, cands, d, trading_days, **kw):
+        seen.update(con=c, d=d, n_days=len(trading_days), con_open=not c.closed)
+        v = [x for x in cands if x.code == "VVVVVV"]
+        return news_veto.VetoResult(kept=[x for x in cands if x.code != "VVVVVV"], vetoed=v,
+                                    news={"VVVVVV": news_veto.CodeNews(code="VVVVVV", neg5=1, neg20=2, judged=4, unknown=1)},
+                                    info={"vetoed": {"VVVVVV": {"neg5": 1, "neg20": 2}}, "alerts": ["판정 상한 초과 — 3쌍 모름"]})
+
+    monkeypatch.setattr(news_veto, "apply_live_veto", fake_veto)
+    b = FeaturesSignalSource().load(D1, held=[])
+    assert seen["con"] is con and seen["con_open"] and con.closed       # 거부권은 연결이 열린 동안 돌았고, 끝에 닫혔다
+    assert seen["d"] == SIGNAL_D and seen["n_days"] == len(days)
+    assert [c.code for c in b.candidates] == ["AAAAAA"] and [c.code for c in b.vetoed] == ["VVVVVV"]
+    assert b.veto_info["VVVVVV"] == {"neg5": 1, "neg20": 2, "judged": 4, "unknown": 1}
+    assert "VVVVVV" in b.trail_closes and b.alerts == ["판정 상한 초과 — 3쌍 모름"]
+    # 거부권 층이 죽으면 전 후보 진입 + 경고(신호를 막지 않는다)
+    monkeypatch.setattr(news_veto, "apply_live_veto", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))
+    b2 = FeaturesSignalSource().load(D1, held=[])
+    assert [c.code for c in b2.candidates] == ["AAAAAA", "VVVVVV"] and b2.vetoed == [] and "db down" in b2.alerts[0]
+
+
+def test_signal_forwards_source_alerts(tmp_path):
+    env = Env(tmp_path)
+    env.signals.batches[D1] = SignalBatch(data_date=SIGNAL_D, candidates=[], alerts=["뉴스 거부권: 키 없음 — 모름"])
+    env.run("signal", D1, "07:35")
+    assert any(a[0] == "warn" and "신호 원천 경고" in a[1] and "키 없음" in a[2] for a in env.alerts)

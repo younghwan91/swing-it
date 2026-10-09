@@ -198,6 +198,8 @@ class SignalBatch:
     vetoed: list[Candidate] = field(default_factory=list)
     #: 코드 → 거부 사유 {"neg5": 직전 5거래일 악재 수, "neg20": 20거래일 악재 수, ...}. 섀도 원장에 그대로 적는다.
     veto_info: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: 신호 원천이 전하는 경고(거부권 층의 모름 처리·판정 상한·실패 등) — signal 작업이 warn 경보로 보낸다.
+    alerts: list[str] = field(default_factory=list)
 
 
 #: signal 결손 따라잡기용으로 MA 창 위에 더 받는 거래일 수의 **하한**(검토 M5·m10). 실제 배치 크기는 마지막 평가일 이후
@@ -239,14 +241,20 @@ class FeaturesSignalSource:
         if signal_panels_for is None:
             raise RuntimeError("swing_it.live.features.signal_panels_for 가 없다(전략 모듈 미완) — 신호를 내지 않는다")
         con = connect(self.db or db_default())
+        vetoed: list[Candidate] = []
+        veto_info: dict = {}
+        alerts: list[str] = []
         try:
             panels, d = signal_panels_for(con, None, self.cfg)
+            d = pd.Timestamp(d)
+            cands = scan(panels, d, self.cfg)
+            if getattr(self.cfg, "news_veto", True) and cands:
+                cands, vetoed, veto_info, alerts = self._apply_veto(con, cands, d, panels["close"].index)
         finally:
             try:
                 con.close()
             except Exception:  # noqa: BLE001
                 pass
-        d = pd.Timestamp(d)
         if d.date() >= asof:
             raise RuntimeError(f"DB 최신일 {d.date()} ≥ 거래일 {asof} — 오늘 봉(잠정치)이 들어 있다")
         close = panels["close"]
@@ -261,17 +269,41 @@ class FeaturesSignalSource:
                 unp_d = set(map(str, unp.loc[pd.to_datetime(unp["date"]) == d, "code"]))
             patched_codes = have - unp_d
             krx_patched = bool(info.get("nxt_patched", 0)) and bool(patched_codes)
-        cands = scan(panels, d, self.cfg)
         gap = int(np.busday_count(since, asof)) if since is not None else 0
         n = self.cfg.trail_ma + max(CATCHUP_DAYS, gap + 5)      # m10: 결손 길이만큼 늘린다(상한 없음)
         trail, dates = {}, {}
-        for code in {c.code for c in cands} | set(held):
+        for code in {c.code for c in cands} | {c.code for c in vetoed} | set(held):
             if code in close.columns:
                 ser = close[code].loc[:d].dropna().iloc[-n:]
                 trail[code] = [float(x) for x in ser]
                 dates[code] = [str(pd.Timestamp(i).date()) for i in ser.index]
         return SignalBatch(data_date=d.date(), candidates=cands, trail_closes=trail, trail_dates=dates,
-                           krx_patched=krx_patched, patched_codes=patched_codes)
+                           krx_patched=krx_patched, patched_codes=patched_codes, vetoed=vetoed, veto_info=veto_info,
+                           alerts=alerts)
+
+    def _apply_veto(self, con: Any, cands: list[Candidate], d: pd.Timestamp, trading_days: Any
+                    ) -> tuple[list[Candidate], list[Candidate], dict[str, dict[str, Any]], list[str]]:
+        """뉴스 거부권(설계 §7, :mod:`swing_it.live.news_veto`) → (진입 후보, 거부 후보, 코드→사유, 경고).
+
+        거부권 층의 어떤 실패도 신호를 막지 않는다: 모듈이 없거나 예외면 **전 후보 진입(모름)** + 경고 한 줄. 사유는 코드별
+        ``{"neg5", "neg20", "judged", "unknown"}`` 로 펴서 섀도 원장에 적는다.
+        """
+        try:
+            from swing_it.live import news_veto  # noqa: PLC0415 — 전략 에이전트 모듈(지연 import)
+        except ImportError as e:
+            return cands, [], {}, [f"뉴스 거부권 모듈 없음({e}) — 전 후보 모름(거부 없음)"]
+        try:
+            days = [pd.Timestamp(x).date() for x in trading_days]
+            res = news_veto.apply_live_veto(con, cands, d.date(), days)
+        except Exception as e:  # noqa: BLE001 — 거부권이 죽으면 모름으로 접는다
+            return cands, [], {}, [f"뉴스 거부권 실패({type(e).__name__}: {e}) — 전 후보 모름(거부 없음)"]
+        info: dict[str, dict[str, Any]] = {k: dict(v) for k, v in ((res.info or {}).get("vetoed") or {}).items()}
+        for c in res.vetoed:
+            info.setdefault(c.code, {})
+            n = res.news.get(c.code)
+            if n is not None:
+                info[c.code].update({"neg5": n.neg5, "neg20": n.neg20, "judged": n.judged, "unknown": n.unknown})
+        return list(res.kept), list(res.vetoed), info, list(res.alerts)
 
 
 # --------------------------------------------------------------------------- 설정
@@ -1215,6 +1247,8 @@ class SwingRuntime:
             self._abort_signal(ctx, f"DB 최신일 {batch.data_date} ≠ 직전 거래일 {prev} (daily_finalize 미완?)", batch)
             return
         # 2) NXT 보정 확인(2026-09-14 이후 일봉은 보정본이 아니면 쓰지 않는다)
+        for msg in batch.alerts:
+            self.alert("warn", "신호 원천 경고", msg)
         if not batch.krx_patched:
             self._abort_signal(ctx, f"{batch.data_date} KRX 정규장 보정이 돌지 않았다(krx_patched=False)", batch)
             return

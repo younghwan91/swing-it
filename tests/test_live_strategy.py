@@ -593,3 +593,59 @@ def test_window_below_floor_changes_rel_silently():
     pd.testing.assert_series_equal(ok, full["rel"].loc[d], check_names=False)
     short = window(min_lookback_rows(cfg) - 9)["rel"].loc[d]
     assert not np.allclose(short.to_numpy(float), full["rel"].loc[d].to_numpy(float), equal_nan=True)
+
+
+# ---------------------------------------------------------------------------
+# 실적 문(GA2 유전자) — 기본 끔, 켜면 eps_yoy(PIT 주식수)·가속·매출 YoY 로 거른다
+# ---------------------------------------------------------------------------
+
+def test_earnings_gates_off_by_default_and_panels_present():
+    from swing_it.live.features import build_signal_panels
+
+    assert CFG.eps_yoy_min is None and not CFG.eps_accel and CFG.rev_yoy_min is None
+    got = build_signal_panels(_raw_inputs(), StrategyConfig(adv_floor=1.0))
+    for k in ("eps_yoy", "accel", "rev_yoy", "eps_from_netinc"):
+        assert got[k].shape == got["close"].shape
+    assert got["eps_from_netinc"].stack().dropna().eq(1.0).all()   # 주식수 없음 → 전부 순이익 YoY 대체
+    pd.testing.assert_frame_equal(got["eps_yoy"], got["eps_yoy"].where(got["eps_from_netinc"] == 1))
+
+
+def test_eps_yoy_uses_pit_shares_and_falls_back():
+    from swing_it.live.features import earnings_panels
+
+    days = pd.bdate_range("2025-01-01", periods=5)
+    codes = pd.Index(["A", "B"])
+    ep = pd.DataFrame({"code": ["A"] * 5 + ["B"] * 5, "date": [d.strftime("%Y-%m-%d") for d in days] * 2,
+                       "yoy": [0.5] * 5 + [-0.2] * 5, "yoy_prev": [0.1] * 5 + [np.nan] * 5,
+                       "netinc": [150.0] * 5 + [80.0] * 5, "netinc_prior": [100.0] * 5 + [100.0] * 5,
+                       "rev_yoy": [0.3] * 5 + [-0.1] * 5})
+    # A: 주식수 100(2023-06-30 기준, 지식일 2023-08-14) → 200(2024-12-31 기준, 지식일 2025-01-02).
+    # days[1] = 2025-01-02: 올해 200, 전년(2024-01-02 as-of) 100 → 주당 YoY = 1.5 × 100/200 − 1 = −0.25.
+    # days[0] = 2025-01-01: 200 은 아직 모름(지식일 전) → 100/100 → 순이익 YoY 0.5 와 같다(PIT).
+    shares = pd.DataFrame({"code": ["A", "A"], "date": ["2023-06-30", "2024-12-31"], "shares_outstanding": [100, 200],
+                           "knowledge_date": ["2023-08-14", "2025-01-02"]})
+    out = earnings_panels(ep, days, codes, shares)
+    assert out["eps_yoy"].loc[days[0], "A"] == pytest.approx(0.5)                 # 지식일 전 → 100/100 → 순이익 YoY 와 같다
+    assert out["eps_yoy"].loc[days[1], "A"] == pytest.approx(1.5 * 100 / 200 - 1)
+    assert out["eps_from_netinc"].loc[days[1], "A"] == 0.0
+    assert out["eps_yoy"].loc[days[1], "B"] == pytest.approx(-0.2) and out["eps_from_netinc"].loc[days[1], "B"] == 1.0
+    assert out["accel"].loc[days[0], "A"] == 1.0 and np.isnan(out["accel"].loc[days[0], "B"])
+    assert out["rev_yoy"].loc[days[0], "B"] == pytest.approx(-0.1)
+
+
+def test_scan_applies_earnings_gates_when_on():
+    days, pn = _scan_panels()
+
+    def P(vals):
+        return pd.DataFrame([vals] * 3, index=days, columns=pn["close"].columns, dtype=float)
+
+    pn["eps_yoy"] = P([0.5, 0.1, np.nan, 0.9, 0.9])
+    pn["accel"] = P([1, 0, 1, 1, 1])
+    pn["rev_yoy"] = P([0.2, 0.2, -0.3, 0.2, 0.2])
+    base = [c.code for c in scan(pn, days[1], CFG)]
+    assert base == ["000030", "000020", "000010"]                                 # 끔 = 그대로
+    assert [c.code for c in scan(pn, days[1], StrategyConfig(eps_yoy_min=0.3))] == ["000010"]   # NaN 탈락
+    assert [c.code for c in scan(pn, days[1], StrategyConfig(eps_accel=True))] == ["000030", "000010"]
+    assert [c.code for c in scan(pn, days[1], StrategyConfig(rev_yoy_min=0.0))] == ["000020", "000010"]
+    both = StrategyConfig(eps_yoy_min=0.0, eps_accel=True, rev_yoy_min=0.0)
+    assert [c.code for c in scan(pn, days[1], both)] == ["000010"]

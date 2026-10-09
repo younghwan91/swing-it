@@ -61,6 +61,8 @@ from swing_it.live.sizing import position_size, stop_width
 #: ``market`` 은 code → 시장 Series.
 SCAN_KEYS = ("close", "pivot", "tt", "rs", "breakout", "breadth", "universe", "pead_rank", "rel", "F",
              "contraction_low", "adv20")
+#: 실적 문(GA2 유전자)이 켜졌을 때만 읽는 패널 — :func:`swing_it.live.features.earnings_panels`.
+EARNINGS_KEYS = ("eps_yoy", "accel", "rev_yoy")
 
 ActionKind = Literal["stop", "partial", "breakeven", "trail_next_open", "failed_breakout_next_open", "time_close",
                      "max_hold", "below_low", "delisted", "data_end"]
@@ -169,7 +171,8 @@ def scan(panels: Mapping[str, "pd.DataFrame | pd.Series"], d, cfg: StrategyConfi
         cfg: 전략 설정. ``rel_max=None`` 이면 rel 조건, ``require_flow=False`` 면 F 조건을 끈다.
 
     조건(전부 AND, NaN 은 통과하지 않는다): ``universe`` ∧ ``tt`` ∧ ``breakout`` ∧ ``rs ≥ rs_min`` ∧
-    ``breadth > breadth_min`` ∧ ``pead_rank ≥ pead_rank_min`` ∧ ``rel ≤ rel_max`` ∧ ``F == 1`` ∧ 수축 저점·피벗·종가 유한.
+    ``breadth > breadth_min`` ∧ ``pead_rank ≥ pead_rank_min`` ∧ ``rel ≤ rel_max`` ∧ ``F == 1`` ∧ 수축 저점·피벗·종가 유한
+    ∧ (켜진 실적 문: ``eps_yoy ≥ eps_yoy_min`` · ``accel == 1`` · ``rev_yoy ≥ rev_yoy_min`` — :data:`EARNINGS_KEYS` 패널).
     수축 저점이 없으면 연구는 ``skip_no_contraction`` 으로 버린다 — 여기선 후보에서 뺀다(결과 같음).
     """
     close = panels["close"]
@@ -187,6 +190,12 @@ def scan(panels: Mapping[str, "pd.DataFrame | pd.Series"], d, cfg: StrategyConfi
             ok &= r["rel"] <= cfg.rel_max
         if cfg.require_flow:
             ok &= r["F"] == 1
+        if cfg.eps_yoy_min is not None:
+            ok &= _row(panels["eps_yoy"], i) >= cfg.eps_yoy_min
+        if cfg.eps_accel:
+            ok &= _row(panels["accel"], i) == 1
+        if cfg.rev_yoy_min is not None:
+            ok &= _row(panels["rev_yoy"], i) >= cfg.rev_yoy_min
     idx = np.flatnonzero(ok)
     codes = close.columns
     market = panels["market"]

@@ -73,6 +73,20 @@ class StrategyConfig:
     time_stop_days: "int | None" = None
     max_hold: int = 120                 # 최대 보유(진입일 = 1일째) — 안전 상한(신호 아님)
 
+    # --- 실적 문(GA2.md 유전자 — 전부 기본 끔 = 현 동작 그대로; GA2 가 고른 설정을 1:1 로 싣는다) ---
+    #: 최신 분기 **주당** 순이익 YoY 하한 = (netinc/주식수) / (netinc_prior/주식수_전년) − 1 (주식수 = PIT as-of). None = 끔.
+    #: 주식수가 없는 종목-일은 순이익 YoY 로 대체(``eps_from_netinc`` 플래그).
+    eps_yoy_min: "float | None" = None
+    #: 가속: 이번 분기 YoY > 직전 분기 YoY(둘 다 유한). False = 끔.
+    eps_accel: bool = False
+    #: 매출 YoY 하한. None = 끔.
+    rev_yoy_min: "float | None" = None
+
+    # --- 뉴스 거부권(설계 §7, NEWS_VETO.md) ---
+    #: 신호 작업에서 후보의 최근 20거래일 악재(5일 ≥ 1 또는 20일 ≥ 2)를 거부한다(:mod:`swing_it.live.news_veto`). 모름은 거부 안 함.
+    #: 백테스트는 ``run_backtest(veto=패널)`` 로 과거 원장(2025-09~)에서만 적용한다.
+    news_veto: bool = True
+
     # --- 백테스트 체결 모형(라이브 주문엔 쓰지 않는다) ---
     #: 손절·본전 체결 미끄러짐(bp). 일봉 백테스트는 손절가·진입가에 정확히 판다고 보지만, 라이브는 60초 REST 폴링으로
     #: 터치를 보고 나서 주문을 내므로 그보다 불리하게 체결된다(감사 AUDIT.md). 백테스트는 stop·breakeven 매도가에

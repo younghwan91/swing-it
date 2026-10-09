@@ -55,7 +55,7 @@ E_MAX_AGE_DAYS = 90
 
 #: :func:`earnings_leg_panel` 출력 열(순서 고정).
 LEG_COLS = ("code", "date", "period", "yoy", "yoy_prev", "rev_yoy", "op_yoy",
-            "netinc", "netinc_pos", "age_days", "age_tdays")
+            "netinc", "netinc_prior", "netinc_pos", "age_days", "age_tdays")
 
 
 def _to_dt(s: pd.Series) -> pd.Series:
@@ -87,7 +87,7 @@ def _prepare(earnings: pd.DataFrame, avail_col: str, knowledge_col: str | None) 
     # 같은 (종목, 분기) 에서 같은 날 보이기 시작하는 버전이 여럿이면 가장 늦게 안 것 하나만.
     ea = (ea.sort_values(["code", "_pord", "_valid_from", "_know"])
             .drop_duplicates(subset=["code", "_pord", "_valid_from"], keep="last"))
-    return ea[["code", "period", "_pord", "_avail", "_valid_from", "netinc",
+    return ea[["code", "period", "_pord", "_avail", "_valid_from", "netinc", "netinc_prior",
                "yoy", "rev_yoy", "op_yoy"]].reset_index(drop=True)
 
 
@@ -100,7 +100,7 @@ def _states_at_events(ea: pd.DataFrame) -> pd.DataFrame:
             [["code", "_valid_from", "_latest"]].rename(columns={"_valid_from": "t"}))
     ev["_prev"] = ev["_latest"] - 1
 
-    right = ea[["code", "_pord", "_valid_from", "period", "_avail", "netinc",
+    right = ea[["code", "_pord", "_valid_from", "period", "_avail", "netinc", "netinc_prior",
                 "yoy", "rev_yoy", "op_yoy"]].sort_values("_valid_from")
     ev = ev.sort_values("t")
     # (종목, 분기) 의 버전을 그 순간 기준 as-of 로 고른다 — 이중 시간축의 버전 축.
@@ -140,7 +140,8 @@ def earnings_leg_panel(
         - ``yoy_prev``: *바로 앞 분기*(``period`` − 1)의 순이익 YoY, 그날 알던 버전. 앞 분기가 없거나
           YoY 계산 불가면 NaN(더 옛 분기로 건너뛰지 않는다).
         - ``rev_yoy``·``op_yoy``: 같은 행의 매출·영업이익 YoY(같은 공식, 계산 불가면 NaN).
-        - ``netinc``·``netinc_pos``: 같은 행의 당기 순이익과 ``> 0`` 여부.
+        - ``netinc``·``netinc_prior``·``netinc_pos``: 같은 행의 당기·전년 동기 순이익과 당기 ``> 0`` 여부
+          (``netinc_prior`` 는 주당 YoY — ``swing_it.live.features.eps_yoy`` — 의 분모).
         - ``age_days``: ``date − avail_date`` 달력일. ``age_tdays``: ``avail_date`` 당일(휴일이면 다음
           거래일)을 0 으로 센 거래일 수.
     """
@@ -162,7 +163,7 @@ def earnings_leg_panel(
     offs = np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)
     di = np.repeat(start, count) + offs
 
-    out = ev.iloc[rep][["code", "period", "yoy", "yoy_prev", "rev_yoy", "op_yoy", "netinc"]]
+    out = ev.iloc[rep][["code", "period", "yoy", "yoy_prev", "rev_yoy", "op_yoy", "netinc", "netinc_prior"]]
     out = out.reset_index(drop=True)
     avail = ev["_avail"].to_numpy()[rep]
     out.insert(1, "date", np.asarray(dates.strftime("%Y-%m-%d"))[di])

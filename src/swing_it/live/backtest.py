@@ -48,7 +48,8 @@ from swing_it.live.strategy import RESEARCH_REASON, PositionState, plan_entry, s
 TRADE_COLS = ["code", "market", "event_day", "entry_day", "exit_day", "entry_px", "exit_px", "ret", "exit_reason",
               "hold_days", "d", "stop_px", "target_px", "contraction_low", "partial_hit", "partial_day", "partial_px",
               "ret_half", "qty", "cost_krw", "slip_krw", "pnl_krw", "net_ret", "rel", "rs"]
-SKIP_KEYS = ("skip_no_next_day", "skip_no_open", "skip_chase", "skip_limit_up", "skip_slots_cash", "skip_held")
+SKIP_KEYS = ("skip_no_next_day", "skip_no_open", "skip_chase", "skip_limit_up", "skip_slots_cash", "skip_held",
+             "skip_news_veto")
 
 
 def default_cost(day, market) -> float:
@@ -114,6 +115,7 @@ class BacktestResult:
     daily: pd.DataFrame              # date, equity, cash, invested, n_pos, buys, sells
     skips: dict = field(default_factory=dict)
     params: dict = field(default_factory=dict)
+    vetoed: "pd.DataFrame | None" = None      # 뉴스 거부권으로 뺀 후보(가상 진입군)
 
     @property
     def equity(self) -> pd.Series:
@@ -123,7 +125,8 @@ class BacktestResult:
 def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=None, end=None,
                  initial_equity: float = 100_000_000.0, unlimited: bool = False,
                  cost_fn: "Callable | None" = default_cost, dd_kill: "float | None" = None,
-                 kill_resume_days: int = 60, kill_resume_recovery: float = 0.05) -> BacktestResult:
+                 kill_resume_days: int = 60, kill_resume_recovery: float = 0.05,
+                 veto: "pd.DataFrame | None" = None) -> BacktestResult:
     """포트폴리오 백테스트(모듈 설명의 하루 순서).
 
     Args:
@@ -138,6 +141,9 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
             ``kill_resume_days`` 거래일 경과 **또는** 자산 ≥ 고점 × (1 − ``kill_resume_recovery``) 중 먼저 오는 것
             (:class:`swing_it.live.config.RiskConfig`); 재개 때 고점을 그때 자산으로 다시 잰다. 기본 None = 끔.
             ``params["kills"]`` 에 (킬일, 재개일) 목록.
+        veto: 날짜×종목 bool 패널(뉴스 거부권, :func:`swing_it.live.news_veto.veto_panel_from_ledger`). ``cfg.news_veto``
+            가 참이고 패널을 주면 신호일에 거부된 후보를 진입에서 뺀다(``skip_news_veto``, ``result.vetoed`` 에 (신호일,
+            종목, rel, rs) 기록 — 가상 진입군). 패널 밖 (날짜, 종목)은 모름 = 거부 안 함.
     """
     b = _Book.of(panels)
     days, codes = b.days, b.codes
@@ -159,6 +165,10 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
     killed_on = None
     kill_t = None
     kills: list = []
+    vetoed_log: list[dict] = []
+    veto_arr = None
+    if veto is not None and cfg.news_veto:
+        veto_arr = veto.reindex(index=days, columns=codes).fillna(False).astype(bool).to_numpy()
 
     def sell(o: _Open, acts, t: int) -> float:
         nonlocal cash
@@ -262,6 +272,13 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
         held = set(opened)
         skips["skip_held"] += sum(c.code in held for c in cands)
         cands = [c for c in cands if c.code not in held]
+        if veto_arr is not None:
+            vet = [c for c in cands if veto_arr[t, col_of[c.code]]]
+            if vet:
+                skips["skip_news_veto"] += len(vet)
+                vetoed_log.extend({"event_day": day, "code": c.code, "market": c.market, "pivot": c.pivot,
+                                   "contraction_low": c.contraction_low, "rel": c.rel, "rs": c.rs} for c in vet)
+                cands = [c for c in cands if not veto_arr[t, col_of[c.code]]]
         if not cands:
             continue
         if unlimited:
@@ -298,7 +315,9 @@ def run_backtest(panels: dict, cfg: StrategyConfig = DEFAULT_STRATEGY, *, start=
               "end": None if end is None else str(pd.Timestamp(end).date()), "initial_equity": initial_equity,
               "unlimited": unlimited, "dd_kill": dd_kill, "kills": kills,
               "kill_resume_days": kill_resume_days, "kill_resume_recovery": kill_resume_recovery}
-    return BacktestResult(trades=tdf, daily=daily, skips=skips, params=params)
+    res = BacktestResult(trades=tdf, daily=daily, skips=skips, params=params)
+    res.vetoed = pd.DataFrame(vetoed_log, columns=["event_day", "code", "market", "pivot", "contraction_low", "rel", "rs"])
+    return res
 
 
 def _with_qty(plan, qty: float):

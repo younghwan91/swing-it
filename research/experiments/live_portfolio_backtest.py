@@ -25,6 +25,7 @@ Run:  export $(grep -v '^#' ~/git/quant-airflow/.env | xargs)
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import sys
@@ -51,6 +52,7 @@ from swing_it.features.korea import load_listing_meta, universe_mask  # noqa: E4
 from swing_it.krx_session import NXT_START  # noqa: E402
 from swing_it.live.backtest import default_cost, drawdown, perf_stats, run_backtest  # noqa: E402
 from swing_it.live.config import DEFAULT_RISK, StrategyConfig  # noqa: E402
+from swing_it.live.news_veto import veto_panel_from_ledger  # noqa: E402
 from swing_it.live.features import (  # noqa: E402
     EARN_COLS,
     PANEL_START,
@@ -63,6 +65,7 @@ from swing_it.live.strategy import scan  # noqa: E402
 from swing_it.storage import connect, db_default, read_earnings, read_supply_demand  # noqa: E402
 
 OUT_DIR = os.path.join(ROOT, "research", "logs", "live_swing")
+KST = dt.timezone(dt.timedelta(hours=9))
 FLOW_LO = "2024-02-19"
 EVENT_LO = "2017-09-15"
 INDEX_LO = "2024-01-26"
@@ -70,6 +73,7 @@ INITIAL = 100_000_000.0
 SLIP_BPS = 50.0
 RISK = DEFAULT_RISK                      # 손절·본전 미끄러짐(주 결과). 0bp 도 같이 적는다.
 PARITY_LO = "2025-01-01"
+VETO_LO = "2025-09-01"                      # 판정 원장이 있는 구간 — 뉴스 거부권 변형의 신호 하한
 #: 그날치 창 대조 날짜 — 고정 2개 + 실행 때 라이브 사건이 있는 날 4개(변형 a 2 · b 2)를 더한다.
 WINDOW_CHECK_DAYS = ("2021-06-15", "2026-09-11")
 #: 청산 프로토콜 — new = 라이브 기본(설계 §6: 돌파 실패 켬, 시간 손절 끔) / old = 사전등록 원전(시간 손절 20일).
@@ -81,6 +85,27 @@ VARIANTS = {
     "a": {"label": "(a) 규칙 전부(F 포함)", "cfg": StrategyConfig(), "start": FLOW_LO},
     "b": {"label": "(b) F 없음(규칙 A − F)", "cfg": StrategyConfig(require_flow=False), "start": EVENT_LO},
 }
+
+
+_CON = {"con": None}
+
+
+def db():
+    """살아 있는 DB 연결. 긴 계산 뒤 서버가 끊은 연결(psycopg2 OperationalError)은 다시 연다."""
+    con = _CON["con"]
+    if con is not None:
+        try:
+            cur = con.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            return con
+        except Exception:  # noqa: BLE001 — 끊긴 연결
+            try:
+                con.close()
+            except Exception:  # noqa: BLE001
+                pass
+    _CON["con"] = connect(db_default())
+    return _CON["con"]
 
 
 def _scaled_cost(mult: float):
@@ -259,12 +284,11 @@ def main(argv=None) -> int:
     warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
     t0 = time.time()
     load_env_db()
-    con = connect(db_default())
 
     if args.cache and os.path.exists(args.cache):
         inp = pd.read_pickle(args.cache)
     else:
-        inp = load_inputs(con, start=PANEL_START, patch_nxt=True)
+        inp = load_inputs(db(), start=PANEL_START, patch_nxt=True)
         if args.cache:
             pd.to_pickle(inp, args.cache)
     pinfo = inp.patch_info
@@ -294,7 +318,7 @@ def main(argv=None) -> int:
     checks: dict = {}
     if not args.skip_checks:
         # --- 1. 피처 대조: 전 기간 사건 집합 ---
-        ms, rp = research_events(con, base_cfg, t0)
+        ms, rp = research_events(db(), base_cfg, t0)
         cut = pd.Timestamp(NXT_START)
         for key, v in VARIANTS.items():
             cfg = v["cfg"]
@@ -323,7 +347,7 @@ def main(argv=None) -> int:
             dd = pd.Timestamp(d)
             if dd not in inp.days:
                 continue
-            wp, _ = signal_panels_for(con, dd, base_cfg, patch_nxt=False)
+            wp, _ = signal_panels_for(db(), dd, base_cfg, patch_nxt=False)
             for key, v in VARIANTS.items():
                 lk = {(c.code, c.signal_day) for c in scan(wp, dd, v["cfg"])}
                 rk = {k for k in _keys(ms[research_mask(ms, v["cfg"])]) if k[1] == dd}
@@ -367,7 +391,7 @@ def main(argv=None) -> int:
         checks["parity"] = par
 
     # --- 3. 지수 ---
-    bench, binfo = kospi_series(con, t0)
+    bench, binfo = kospi_series(db(), t0)
 
     # --- 4. 백테스트 ---
     results = {}
@@ -383,6 +407,45 @@ def main(argv=None) -> int:
             out[tag] = res
             _log(f"백테스트 {key}/{pk}/{tag}: 트레이드 {len(res.trades)} · 최종 {res.equity.iloc[-1]:,.0f}", t0)
         results[(key, pk)] = out
+
+    # --- 뉴스 거부권(설계 §7): (a)/new, 신호 2025-09-01~ — 거부권 있음/없음 + 거부군의 가상 결과 ---
+    veto_res = {}
+    try:
+        tdays = [pd.Timestamp(x).date() for x in inp.days]
+        vlo = dt.datetime.combine(dt.date.fromisoformat(VETO_LO) - dt.timedelta(days=45), dt.time(0), tzinfo=KST)
+        vhi = dt.datetime.combine(data_end.date() + dt.timedelta(days=1), dt.time(0), tzinfo=KST)
+        vpanel = veto_panel_from_ledger(db(), vlo, vhi, tdays, panels["close"].columns)
+        cfg_v = replace(VARIANTS["a"]["cfg"], **{k: PROTOCOLS["new"][k] for k in ("failed_breakout", "time_stop_days")})
+        with_v = run_backtest(panels, cfg_v, start=VETO_LO, initial_equity=INITIAL, cost_fn=_scaled_cost(1.0), veto=vpanel)
+        without = run_backtest(panels, replace(cfg_v, news_veto=False), start=VETO_LO, initial_equity=INITIAL,
+                               cost_fn=_scaled_cost(1.0))
+        vt = with_v.vetoed
+        shadow = pd.DataFrame()
+        if vt is not None and len(vt):
+            shadow, _ = simulate_minervini(panels["open"], panels["high"], panels["low"], panels["close"], panels["ma50"],
+                                           vt[["code", "event_day", "market", "pivot", "contraction_low"]],
+                                           volume=panels["volume"], return_skipped=True, failed_breakout=True,
+                                           time_stop_days=None, no_overlap=False)
+        entered = without.trades
+        veto_res = {"with": perf_stats(with_v.daily, with_v.trades, bench=bench),
+                    "without": perf_stats(without.daily, without.trades, bench=bench),
+                    "n_vetoed": int(len(vt)) if vt is not None else 0, "skips_with": with_v.skips,
+                    "veto_days": int(vpanel.loc[vpanel.index >= pd.Timestamp(VETO_LO)].to_numpy().sum()),
+                    "shadow": {"n": int(len(shadow)),
+                               "mean_ret": float(shadow["ret"].mean()) if len(shadow) else float("nan"),
+                               "stop_rate": float((shadow["exit_reason"] == "stop").mean()) if len(shadow) else float("nan"),
+                               "win": float((shadow["ret"] > 0).mean()) if len(shadow) else float("nan")},
+                    "entered": {"n": int(len(entered)),
+                                "mean_ret": float(entered["ret"].mean()) if len(entered) else float("nan"),
+                                "stop_rate": float((entered["exit_reason"] == "stop").mean()) if len(entered) else float("nan"),
+                                "win": float((entered["ret"] > 0).mean()) if len(entered) else float("nan")},
+                    "vetoed_list": vt[["event_day", "code"]].astype(str).values.tolist() if vt is not None else []}
+        _log(f"뉴스 거부권 (a)/new {VETO_LO}~: 거부 후보 {veto_res['n_vetoed']} · 거부군 n {veto_res['shadow']['n']} "
+             f"평균 {veto_res['shadow']['mean_ret']:+.3f} · 진입군 n {veto_res['entered']['n']} "
+             f"평균 {veto_res['entered']['mean_ret']:+.3f}", t0)
+    except Exception as exc:  # noqa: BLE001 — 원장이 없으면 거부권 표만 비운다
+        veto_res = {"error": f"{type(exc).__name__}: {exc}"}
+        _log(f"뉴스 거부권 변형 실패: {veto_res['error']}", t0)
 
     stats = {}
     for (key, pk), out in results.items():
@@ -417,15 +480,15 @@ def main(argv=None) -> int:
 
     png = plot_equity(results, bench, os.path.join(args.out, "equity.png"))
     elapsed = time.time() - t0
-    write_md(args.out, stats, results, checks, binfo, nxt, png, data_end, elapsed)
+    write_md(args.out, stats, results, checks, binfo, nxt, png, data_end, elapsed, veto_res)
     with open(os.path.join(args.out, "stats.json"), "w", encoding="utf-8") as f:
         json.dump({"stats": {f"{k}/{pk}": v for (k, pk), v in stats.items()}, "checks": checks, "bench": binfo,
-                   "nxt": nxt}, f, ensure_ascii=False, indent=1, default=str)
+                   "nxt": nxt, "veto": veto_res}, f, ensure_ascii=False, indent=1, default=str)
     _log(f"완료 → {args.out}", t0)
     return 0
 
 
-def write_md(out_dir, stats, results, checks, binfo, nxt, png, data_end, elapsed) -> None:
+def write_md(out_dir, stats, results, checks, binfo, nxt, png, data_end, elapsed, veto_res=None) -> None:
     L = ["# 스윙 라이브 v0 포트폴리오 백테스트 — 러너 자동 생성, 표본 내 — 판정 아님", "",
          f"러너 `research/experiments/live_portfolio_backtest.py` · 데이터 끝 {data_end.date()} · {elapsed / 60:.1f}분.",
          "전략 코드 = `src/swing_it/live/` (라이브 데몬과 같은 `scan`·`plan_entry`·`allocate`·`PositionState.on_bar`).",
@@ -502,6 +565,24 @@ def write_md(out_dir, stats, results, checks, binfo, nxt, png, data_end, elapsed
         L += ["체결·후보 탈락(new): " + " · ".join(f"{k} {v}" for k, v in res.skips.items()),
               f"NXT 구간(new): 신호 {sn['nxt']['signals_late']}건(그 신호 종목-일 중 미보정 {sn['nxt']['signals_late_unpatched']}) · "
               f"보유 종목-일 {sn['nxt']['held_days_late']}(미보정 {sn['nxt']['held_days_late_unpatched']}).", ""]
+    if veto_res:
+        L += [f"## 뉴스 거부권(설계 §7) — 변형 (a)/new, 신호 {VETO_LO} ~ {data_end.date()} (판정 원장이 있는 구간, 표본 내)", ""]
+        if "error" in veto_res:
+            L += [f"원장에서 거부 패널을 만들지 못했다: {veto_res['error']}", ""]
+        else:
+            w, wo = veto_res["with"], veto_res["without"]
+            cols = [("거부권 켬", w), ("거부권 끔", wo)]
+            L += ["과거 원장(judge 우선순위 v2r3-haiku55 → v2-haiku45)으로 같은 규칙(5거래일 악재 ≥ 1 또는 20거래일 ≥ 2)을 신호일에 "
+                  "적용. 모름(판정 없음)은 거부 안 함 — 원장 커버리지(전일 거래대금 상위 300 종목, 2026-03 판정 단절)만큼만 걸린다.", "",
+                  "| 지표 | " + " | ".join(n for n, _ in cols) + " | 코스피 |", "|---|---|---|---|",
+                  *stats_rows(cols, w.get("bench", {})), "",
+                  f"거부된 후보 {veto_res['n_vetoed']}건(구간 안 거부 패널 참 종목-일 {veto_res['veto_days']:,}). "
+                  f"**거부군(가상 진입, 같은 프로토콜, 겹침 허용)** n {veto_res['shadow']['n']} · 평균 총수익 "
+                  f"{_pct(veto_res['shadow']['mean_ret'], 2)} · 승률 {_pct(veto_res['shadow']['win'], 0)} · 손절 비율 "
+                  f"{_pct(veto_res['shadow']['stop_rate'], 0)} vs **진입군(거부권 끔 트레이드)** n {veto_res['entered']['n']} · "
+                  f"평균 {_pct(veto_res['entered']['mean_ret'], 2)} · 승률 {_pct(veto_res['entered']['win'], 0)} · 손절 비율 "
+                  f"{_pct(veto_res['entered']['stop_rate'], 0)}. 합격 바(NEWS_VETO.md)는 전진 데이터에서 본다 — 여기는 사후.",
+                  "거부 목록: " + (", ".join(f"{d[:10]} {c}" for d, c in veto_res["vetoed_list"]) or "없음"), ""]
     if checks:
         L += ["## 검증", "", "### 사건 집합 — 라이브 `scan` vs 연구 경로(CONVERGENCE A 조립, ADV20 ≥ 5,000)", "",
               f"NXT 보정 전 날짜(< {NXT_START})는 두 경로 입력이 같아야 하므로 집합이 같아야 한다. 그 뒤는 라이브만 보정한다.", "",
