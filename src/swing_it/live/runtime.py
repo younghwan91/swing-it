@@ -80,6 +80,7 @@ from swing_it.live.sizing import allocate
 from swing_it.live.state import (
     LIVE_ORDER_STATUSES,
     LiveState,
+    trade_stats,
     OrderRec,
     PositionRec,
     StateCorrupt,
@@ -193,6 +194,10 @@ class SignalBatch:
     #: 코드 → ``trail_closes`` 와 같은 길이의 날짜(ISO). 있으면 signal 이 **마지막 평가일 이후 모든 거래일**을 차례로 평가한다
     #: (검토 M5 — signal 을 하루 놓쳐도 추적 청산·자산 행이 빠지지 않는다). 없으면 d 하나만 평가한다.
     trail_dates: dict[str, list[str]] = field(default_factory=dict)
+    #: 뉴스 거부권(설계 §7 · ``NEWS_VETO.md``)에 걸린 후보 — 주문 없이 **섀도 포지션**으로 추적한다(``trail_closes`` 에도 넣을 것).
+    vetoed: list[Candidate] = field(default_factory=list)
+    #: 코드 → 거부 사유 {"neg5": 직전 5거래일 악재 수, "neg20": 20거래일 악재 수, ...}. 섀도 원장에 그대로 적는다.
+    veto_info: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 #: signal 결손 따라잡기용으로 MA 창 위에 더 받는 거래일 수의 **하한**(검토 M5·m10). 실제 배치 크기는 마지막 평가일 이후
@@ -328,6 +333,7 @@ class _Ctx:
     book: PositionBook
     oms: OrderManager
     kill: KillSwitch
+    shadow_book: PositionBook | None = None
     last_px: dict[str, float] = field(default_factory=dict)
     auction_px: dict[str, float] = field(default_factory=dict)
     quotes: dict[str, QuoteSnap] = field(default_factory=dict)
@@ -348,6 +354,26 @@ def _plan_from_dict(d: dict[str, Any]) -> EntryPlan:
     kw = {k: v for k, v in d.items() if k in names}
     kw["signal_day"] = pd.Timestamp(kw["signal_day"])
     return EntryPlan(**kw)
+
+
+def shadow_vs_real_line(state: LiveState) -> str:
+    """``sw-live status`` 한 줄: 거부군(섀도) vs 진입군(실제) — n·평균 순수익·손절 비율(``NEWS_VETO.md`` 합격 바).
+
+    합격 바: 거부군 평균 순수익 < 진입군 **그리고** 거부군 손절 비율 ≥ 진입군(전진 6개월 또는 거부 30건 이상).
+    """
+    sh = trade_stats(list(state.shadow_history))
+    re_ = trade_stats(list(state.history))
+
+    def fmt(d: dict[str, Any]) -> str:
+        if d["n"] == 0:
+            return "n=0"
+        return f"n={d['n']} 평균순수익={d['mean_net']:+.2%} 손절률={d['stop_rate']:.0%}"
+
+    verdict = ""
+    if sh["n"] and re_["n"]:
+        ok = sh["mean_net"] < re_["mean_net"] and sh["stop_rate"] >= re_["stop_rate"]
+        verdict = f" → 합격 바 {'충족' if ok else '미충족'}(거부 {sh['n']}/30건)"
+    return f"뉴스 거부권: 거부군(섀도) {fmt(sh)} | 진입군(실제) {fmt(re_)}{verdict}"
 
 
 def _tick_down(px: float) -> int:
@@ -504,7 +530,8 @@ class SwingRuntime:
         oms = _LedgerOMS(self.bundle.broker, guard=OrderGuard(clock=self.clock), book=book, kill=kill,
                          clock=self.clock, order_log=self.store.order_log_path, own_orders_only=True)
         oms.own_orders = set(state.own_ord_nos)
-        ctx = _Ctx(job=job, asof=asof, state=state, book=book, oms=oms, kill=kill)
+        ctx = _Ctx(job=job, asof=asof, state=state, book=book, oms=oms, kill=kill,
+                   shadow_book=self.store.load_shadow_book(state))
         oms.pending_sell_of = lambda code: self._pending_sell(ctx, code)
         return ctx
 
@@ -1165,7 +1192,7 @@ class SwingRuntime:
         if self.signal_source is None:
             self.signal_source = FeaturesSignalSource(self.cfg.strategy)
         self._expire_stale(ctx)
-        held = [p.code for p in st.open_positions()]
+        held = [p.code for p in st.open_positions()] + [p.code for p in st.shadow.values() if p.status == "open"]
         since_s = [p.last_eod or p.entry_date for p in st.open_positions() if (p.last_eod or p.entry_date)]
         since = date.fromisoformat(min(since_s)) if since_s else None
         if since is not None and int(np.busday_count(since, ctx.asof)) > CATCHUP_DAYS + 1:
@@ -1215,14 +1242,16 @@ class SwingRuntime:
             )
             st.market_of[c.code] = c.market
             n_new += 1
+        n_shadow = self._shadow_plan(ctx, batch, equity, n_keep)
         st.last_signal = {"asof": ctx.day, "data_date": batch.data_date.isoformat(), "n_candidates": len(cands),
-                          "codes": [c.code for c in cands]}
+                          "codes": [c.code for c in cands], "n_vetoed": len(batch.vetoed), "shadow_planned": n_shadow}
         st.jobs_done["signal"] = ctx.day
         self.store.event("signal", asof=ctx.day, data_date=batch.data_date.isoformat(),
                          candidates=[c.code for c in cands], planned=n_new)
         log.info("signal: %s(d=%s) 후보 %d · 새 계획 %d", ctx.day, batch.data_date, len(cands), n_new)
         self.alert("info", f"신호 {ctx.day}", self._report(ctx, row) + (
-            f"\n후보 {len(cands)}: {', '.join(c.code for c in cands[:20])}" if cands else "\n후보 없음"))
+            f"\n후보 {len(cands)}: {', '.join(c.code for c in cands[:20])}" if cands else "\n후보 없음") + (
+            f"\n거부(섀도) {len(batch.vetoed)}: {', '.join(c.code for c in batch.vetoed[:20])}" if batch.vetoed else ""))
 
     def _settle_equity(self, ctx: _Ctx, batch: SignalBatch) -> dict[str, Any]:
         """보유 종목 종가 결정(따라잡기 포함) + 날짜별 자산 행·낙폭 킬. 마지막 행을 돌려준다."""
@@ -1438,6 +1467,7 @@ class SwingRuntime:
         self._confirm_session(ctx)
         self._resolve_open(ctx, allow_proxy=False)
         self._sync_fills(ctx)
+        self._shadow_open(ctx)
         if st.sessions.get(ctx.day) == "open":
             for pos in list(st.open_positions()):
                 self._start_day(ctx, pos, ctx.auction_px.get(pos.code))
@@ -1579,6 +1609,7 @@ class SwingRuntime:
                 self._start_day(ctx, pos, q.open or q.last)
             if pos.code in st.positions and pos.exit_intent:
                 pos.exit_intent["session"] = "open_auction"   # 못 판 의도는 내일 시가에
+        self._shadow_eod(ctx)
         st.jobs_done["eod"] = ctx.day
         equity, cash, mv = self._equity(ctx, ctx.last_px)
         row = {"date": ctx.day, "equity": round(equity, 2), "cash": round(cash, 2), "mv": round(mv, 2),
@@ -1639,6 +1670,143 @@ class SwingRuntime:
                 by_date.setdefault(d, {}).setdefault(pos.code, hist[-1])
         return by_date
 
+    # ----- 뉴스 거부권 섀도(설계 §7) ----------------------------------------------------
+    #
+    # 거부된 후보는 **주문 없이** 같은 전략 상태기계로 추적한다. 가상 진입 = 09:02 시가(실포지션과 같은 규칙: 시가 ≤ 지정가).
+    # 청산 판단 = 15:40 eod 의 ka10001 일중 시가·고가·저가·현재가로 ``PositionState.on_bar``(손절·절반 익절·본전·돌파 실패·MA50
+    # 추적·최대 보유 — 백테스트와 같은 비관적 일봉 순서), MA50 은 DB 보정 종가(trail_closes) + 그날 현재가. "다음날 시가" 결정은
+    # 다음 09:02 시가에 가상 체결. 하루 종목당 시세 1건이라 싸다. 가격은 ka10001 일중 필드(미검증·KRX 종가 아님)라 **근사**다 —
+    # 거부군 vs 진입군 비교(NEWS_VETO 합격 바)에 쓰는 용도이고, 실포지션 판단에는 쓰지 않는다. 비용은 실장부와 같은 모델
+    # (섀도 ``PositionBook``). 실포지션과 코드가 겹치면 섀도를 만들지 않는다.
+
+    def _shadow_plan(self, ctx: _Ctx, batch: SignalBatch, equity: float, n_keep: int) -> int:
+        st = ctx.state
+        n = 0
+        for c in batch.vetoed:
+            if c.code in st.shadow or c.code in st.positions:
+                continue
+            plan = plan_entry(c, equity, c.close, self.cfg.strategy)
+            info = dict(batch.veto_info.get(c.code) or {})
+            st.shadow[c.code] = PositionRec(
+                code=c.code, market=c.market, signal_date=batch.data_date.isoformat(), trade_date=ctx.day,
+                status="planned", name=batch.names.get(c.code, ""), plan={**_plan_to_dict(plan), "veto": info},
+                trail_closes=[float(x) for x in batch.trail_closes.get(c.code, [])][-n_keep:],
+            )
+            st.market_of[c.code] = c.market
+            self.store.shadow_event("shadow_planned", code=c.code, signal_date=batch.data_date.isoformat(),
+                                    trade_date=ctx.day, limit_px=plan.limit_px, qty=plan.qty, veto=info)
+            n += 1
+        for p in st.shadow.values():            # 보유 중 섀도의 MA50 종가 갱신
+            closes = batch.trail_closes.get(p.code)
+            if closes:
+                p.trail_closes = [float(x) for x in closes][-n_keep:]
+        return n
+
+    def _shadow_fill(self, ctx: _Ctx, pos: PositionRec, side: str, qty: int, price: float, *, kind: str) -> None:
+        assert ctx.shadow_book is not None
+        f = Fill(ord_no=f"S{pos.code}{ctx.day}{side[0]}{len(ctx.state.shadow_history)}", code=pos.code, side=side,
+                 qty=int(qty), price=int(round(price)), ts=self._now())
+        realized = ctx.shadow_book.apply(f)
+        self.store.shadow_event("shadow_fill", code=pos.code, side=side, qty=int(qty), price=int(round(price)),
+                                kind=kind, realized=realized, veto=pos.plan.get("veto"))
+        if side == "buy":
+            pos.qty += int(qty)
+            pos.entered_qty += int(qty)
+        else:
+            pos.qty -= int(qty)
+            pos.realized += float(realized)
+
+    def _shadow_close(self, ctx: _Ctx, pos: PositionRec, reason: str) -> None:
+        st = ctx.state
+        st.shadow.pop(pos.code, None)
+        if pos.status == "open" or pos.entered_qty > 0:
+            pos.status = "closed"
+        pos.closed_date = ctx.day
+        pos.exit_reason = pos.exit_reason or reason
+        pos.exit_intent = None
+        st.shadow_history.append(pos)
+        self.store.shadow_event("shadow_close", code=pos.code, reason=pos.exit_reason, realized=pos.realized,
+                                entered_qty=pos.entered_qty, entry_price=pos.entry_price, veto=pos.plan.get("veto"))
+
+    def _shadow_open(self, ctx: _Ctx) -> None:
+        """09:02: 오늘 계획된 섀도의 가상 진입(시가 ≤ 지정가 → 시가) + 전일 '다음날 시가' 결정의 가상 매도. 세션 확정 뒤에만."""
+        st = ctx.state
+        if st.sessions.get(ctx.day) != "open":
+            return
+        for pos in list(st.shadow.values()):
+            if pos.status == "planned" and pos.trade_date < ctx.day:
+                pos.status = "expired"
+                self._shadow_close(ctx, pos, "stale_plan")
+                continue
+            if pos.status not in ("planned", "open"):
+                continue
+            q = ctx.quotes.get(pos.code) or self._quote(ctx, pos.code)
+            if q is None or not q.open:
+                continue
+            open_px = float(q.open)
+            if pos.status == "planned":
+                plan = _plan_from_dict(pos.plan)
+                if plan.fills_at(open_px) and int(plan.qty) >= 1:
+                    pos.status, pos.entry_date, pos.entry_price, pos.last_day = "open", ctx.day, open_px, ctx.day
+                    s = PositionState.from_plan(plan, self.cfg.strategy, qty=float(int(plan.qty)))
+                    acts = s.on_fill_open(open_px, day_no=1, entry_day=ctx.asof)
+                    self._shadow_fill(ctx, pos, "buy", int(plan.qty), open_px, kind="entry")
+                    self._store_strat(pos, s)
+                    for a in acts:                      # below_low: 체결 직후 청산(실포지션과 같은 규칙)
+                        if a.price is not None:
+                            self._shadow_fill(ctx, pos, "sell", pos.qty, a.price, kind=a.kind)
+                            pos.exit_reason = a.kind
+                    if pos.qty <= 0:
+                        self._shadow_close(ctx, pos, pos.exit_reason or "exit")
+                else:
+                    pos.status = "missed"
+                    pos.exit_reason = f"open {open_px} > limit {plan.limit_px}"
+                    self._shadow_close(ctx, pos, pos.exit_reason)
+                continue
+            if pos.last_day == ctx.day:
+                continue
+            s = self._strat(pos)
+            acts = s.on_open(open_px, s.day_no + 1)
+            pos.last_day = ctx.day
+            self._shadow_apply(ctx, pos, s, acts, open_px)
+
+    def _shadow_apply(self, ctx: _Ctx, pos: PositionRec, s: PositionState, acts: list[Action], px_next_open: float | None) -> None:
+        for a in acts:
+            if a.price is None:                         # 다음날 시가 결정 → 의도로 남긴다
+                pos.exit_intent = {"kind": a.kind, "qty": pos.qty, "session": "open_auction", "created": ctx.day}
+                continue
+            q = min(int(math.floor(a.qty + 1e-9)), pos.qty) if a.kind == "partial" else pos.qty
+            if q >= 1:
+                self._shadow_fill(ctx, pos, "sell", q, a.price, kind=a.kind)
+            if a.kind != "partial":
+                pos.exit_reason = a.kind
+                pos.exit_intent = None
+        self._store_strat(pos, s)
+        if pos.qty <= 0 or not s.is_open:
+            self._shadow_close(ctx, pos, pos.exit_reason or "exit")
+
+    def _shadow_eod(self, ctx: _Ctx) -> None:
+        """15:40: 섀도 보유 종목마다 시세 1건 → ``on_bar``(시가·고가·저가·현재가, MA50 = DB 종가 + 오늘). 세션 확정 뒤에만."""
+        st = ctx.state
+        if st.sessions.get(ctx.day) != "open":
+            return
+        n = self.cfg.strategy.trail_ma
+        for pos in list(st.shadow.values()):
+            if pos.status != "open" or pos.last_eod == ctx.day:
+                continue
+            q = self._quote(ctx, pos.code)
+            if q is None or not (q.open and q.high and q.low):
+                self.store.shadow_event("shadow_skip", code=pos.code, date=ctx.day, reason="quote_incomplete")
+                continue
+            s = self._strat(pos)
+            day_no = s.day_no + (0 if pos.last_day == ctx.day else 1)
+            pos.last_day = ctx.day
+            hist = list(pos.trail_closes)[-(n - 1):]
+            ma = (sum(hist) + float(q.last)) / n if len(hist) >= n - 1 else math.nan
+            acts = s.on_bar(float(q.open), float(q.high), float(q.low), float(q.last), ma, day_no)
+            pos.last_eod = ctx.day
+            self._shadow_apply(ctx, pos, s, acts, None)
+
     def _report(self, ctx: _Ctx, row: dict[str, Any]) -> str:
         head = f"자산 {row['equity']:,.0f} (현금 {row['cash']:,.0f} · 평가 {row['mv']:,.0f})"
         if "peak" in row:
@@ -1676,6 +1844,10 @@ class SwingRuntime:
                   f"partial={p.partial_done} intent={p.exit_intent}")
         for o in state.live_orders():
             print(f"  주문 {o.oid} {o.side} {o.code} {o.qty}@{o.price} {o.purpose}/{o.session} {o.status} {o.ord_no}")
+        print("  " + shadow_vs_real_line(state))
+        for p in state.shadow.values():
+            print(f"  섀도 {p.code} {p.status:13s} qty={p.qty} entry={p.entry_price} veto={p.plan.get('veto')} "
+                  f"intent={p.exit_intent}")
         return 0
 
     def _job_status(self, ctx: _Ctx) -> None:  # pragma: no cover — run() 이 잠금 없이 _status 로 보낸다

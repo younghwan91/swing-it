@@ -147,6 +147,9 @@ class LiveState:
     jobs_done: dict[str, str] = field(default_factory=dict)           # 작업 → 마지막 완료 거래일
     last_signal: dict[str, Any] = field(default_factory=dict)
     sessions: dict[str, str] = field(default_factory=dict)            # 거래일 → "open"|"closed"|"suspect"(휴장 판정 결과)
+    #: 뉴스 거부권(설계 §7)에 걸린 후보의 **가상** 포지션 — 주문 없음. 실포지션과 같은 상태기계로 추적해 "거부군 vs 진입군" 을 비교한다.
+    shadow: dict[str, PositionRec] = field(default_factory=dict)
+    shadow_history: list[PositionRec] = field(default_factory=list)
     blocked_codes: dict[str, str] = field(default_factory=dict)       # 코드 → 사유. 미해결 주문이 있는 종목(신규 진입 금지, 사람이 해제)
     market_of: dict[str, str] = field(default_factory=dict)           # 코드 → KOSPI/KOSDAQ(세금 계산용, 닫힌 것도 유지)
 
@@ -197,6 +200,8 @@ class LiveState:
         data["positions"] = {k: _make(PositionRec, v) for k, v in (data.get("positions") or {}).items()}
         data["history"] = [_make(PositionRec, v) for v in (data.get("history") or [])]
         data["orders"] = {k: _make(OrderRec, v) for k, v in (data.get("orders") or {}).items()}
+        data["shadow"] = {k: _make(PositionRec, v) for k, v in (data.get("shadow") or {}).items()}
+        data["shadow_history"] = [_make(PositionRec, v) for v in (data.get("shadow_history") or [])]
         return _make(cls, data)
 
 
@@ -212,6 +217,21 @@ def _fsync_append(path: Path, row: dict[str, Any]) -> None:
         f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
         f.flush()
         os.fsync(f.fileno())
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
 
 
 def atomic_write_json(path: Path, obj: Any) -> None:
@@ -263,6 +283,15 @@ class StateStore:
         return self.root / "paper_broker.json"
 
     @property
+    def shadow_path(self) -> Path:
+        """거부권 섀도 원장(설계 §7) — 가상 진입·청산 사건. 실원장과 섞지 않는다."""
+        return self.root / "shadow.jsonl"
+
+    @property
+    def shadow_book_path(self) -> Path:
+        return self.root / "shadow_book.jsonl"
+
+    @property
     def lock_path(self) -> Path:
         return self.root / "swing_live.lock"
 
@@ -312,20 +341,21 @@ class StateStore:
         _fsync_append(self.ledger_path, row)
         return row
 
+    def shadow_event(self, event: str, **fields_: Any) -> dict[str, Any]:
+        row = {"ts": self._clock().isoformat(timespec="seconds"), "event": event, **fields_}
+        _fsync_append(self.shadow_path, row)
+        return row
+
+    def shadow_events(self) -> list[dict[str, Any]]:
+        return _read_jsonl(self.shadow_path)
+
+    def load_shadow_book(self, state: LiveState) -> PositionBook:
+        """섀도 장부 — 실장부와 같은 비용 모델(수수료·세금)로 가상 체결의 순손익을 낸다."""
+        return PositionBook.load(self.shadow_book_path, market_of=market_lookup(state))
+
     def events(self) -> list[dict[str, Any]]:
         """사건 원장 전체. 마지막 줄이 쓰다 만 줄이면(크래시) 건너뛴다."""
-        if not self.ledger_path.exists():
-            return []
-        out = []
-        for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return out
+        return _read_jsonl(self.ledger_path)
 
     # ----- 포지션 장부 ---------------------------------------------------------
 
@@ -406,6 +436,20 @@ def drawdown_check(
         if on_trigger is not None:
             on_trigger(f"다일 낙폭 킬: {dd:.2%} (자산 {equity:,.0f}, 고점 {state.equity_peak:,.0f})")
     return row
+
+
+def trade_stats(records: list[PositionRec]) -> dict[str, Any]:
+    """진입이 있었던 포지션들의 ``n``·평균 순수익률·손절 비율(``NEWS_VETO.md`` 합격 바: 거부군 vs 진입군).
+
+    순수익률 = 장부 실현 순손익(수수료·세금 차감) / (진입 수량 × 진입가). 열린 포지션은 실현분만(미실현 제외) — 비교는 닫힌 것끼리.
+    손절 = exit_reason ∈ {stop, below_low}.
+    """
+    done = [p for p in records if p.entered_qty > 0 and p.entry_price and p.status == "closed"]
+    if not done:
+        return {"n": 0, "mean_net": float("nan"), "stop_rate": float("nan")}
+    rets = [p.realized / (p.entered_qty * p.entry_price) for p in done]
+    stops = sum(1 for p in done if p.exit_reason in ("stop", "below_low"))
+    return {"n": len(done), "mean_net": sum(rets) / len(rets), "stop_rate": stops / len(done)}
 
 
 def fill_record(fill: Fill, **extra: Any) -> dict[str, Any]:
