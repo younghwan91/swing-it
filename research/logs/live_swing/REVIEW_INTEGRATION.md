@@ -245,3 +245,63 @@ GA2 가 고른 설정을 "1:1 로 싣는다"(config.py 주석)는 **지금 참�
 
 실DB 3거래일 체인 27작업 rc 0(§1.3)·손절 강제 틱 체결·C1 의도 저장 순서·자산 행 다음날 확정·30일 유니버스 분봉 보정 100%·F/PEAD 결측 0·거부권 PIT 15:30·모름≠거부·
 키 미노출·원장 멱등·섀도 생애주기·시계 주입 테스트·가드레일 린트 통과(`scripts/check_guardrails.py`)·`krx-quant-core==0.6.2` 고정·`pivot_window≠50` 일관성·`failed_breakout` 정의 일치.
+
+---
+
+## 재검증 — `7084b8f`(+ `4b1bc69`) + 검토 중 워킹트리 (2026-10-10 05:30~06:05)
+
+대상: 커밋 `7084b8f`("GA→라이브 인계 …")·`4b1bc69`, 그리고 재검증 **도중** 다른 에이전트가 고친 워킹트리(`runtime.py`·`cli.py`·`brokers.py`·`features.py`
+— 재생 시계 `SimClock`·신선도 `≤ d` 비교·인계 파일 라우팅·종료 코드 4; 이어서 `config.py`·`strategy.py` — 청산 v2 필드 5개, 기본값 = 현 동작).
+CRITICAL/MAJOR 만 다시 본다. 방법은 같다(코드 읽기 + 실DB 재생, DB 읽기만, 키움·Anthropic 키를 **환경에서 지운 채**, 3코어). 파일 수정 없음(이 절만 덧붙임).
+
+### 실 CLI 3거래일 재생 — `sw-live <job> --paper --asof <d> --quotes db`
+
+스크립트 `scratchpad/review_integration/cli_rehearse.sh`: 거래일마다 `signal → preopen → open-check → monitor --once → close → eod → status`, 상태 디렉터리 공유,
+`KIWOOM_APP_KEY/SECRET`·`ANTHROPIC_API_KEY` 를 `unset` 한 뒤 실행(키움이 한 번이라도 불렸으면 `make_kiwoom_api` 가 예외를 냈을 것이다).
+
+| 실행 | 코드 | 결과 |
+|---|---|---|
+| 1차(05:31~05:39) | 커밋 `7084b8f` 그대로 | 21작업 전부 rc 0 이지만 **1·2일째 `signal` 이 매번 중단**: `입력 신선도 실패: supply_demand 최신일 2026-10-08 ≠ 신호일 2026-10-01` — 신선도 검사가 전역 `MAX(date)` 와 재생 신호일을 비교해 **과거일 재생은 항상 진입 0**. 또 중단이 rc 0 이라 크론이 못 본다. 2일째 `preopen` 부터 다른 에이전트의 워킹트리 수정이 들어와 3일째 `signal` 은 통과(혼합 버전 — 결과로 쓰지 않음). 원장 시각도 그 지점에서 벽시계(10-10 05:3x) → 재생 시각(10-06 08:35)으로 바뀐다(`SimClock` 도입). |
+| **최종(05:43~06:01)** | 워킹트리(신선도 `≤ d`·`SimClock`·rc 4) | **21작업 전부 rc 0, 경보 error/warn 0, 예외 0.** 아래 표. |
+
+최종 실행 원장(재생 시계, 발췌):
+
+| asof | 사건 |
+|---|---|
+| 10-02 | 07:35 `config_changed`(— → `f3f6a99b`) · `equity` 10-01 1억 · `signal` 후보 [096530] 계획 1 → 08:35 `baseline` · `order_intent` 096530 268@37,500 → `order` submitted → 09:02 `fill` 268@**37,300**(DB 정규장 시가) · `position_open`(손절 33,570 · 목표 44,760 · `cfg_hash f3f6a99b`) → 15:40 `eod` 잠정 99,892,800 |
+| 10-06 | 07:35 `equity` 10-02 확정 99,892,800(dd −0.11%) · `signal` 후보 0(보유 종목 DB 종가 결정 — 돌파 실패·MA 없음) → `baseline` → `eod` 잠정 99,986,600 |
+| 10-07 | 07:35 `equity` 10-06 99,986,600 · `signal` 후보 0 → 08:35 **`config_changed` `f3f6a99b → b4728a9c`, `pinned_positions: ['096530']`** → `eod` 잠정 100,428,800 |
+
+- 체결가·손절·목표·자산 행이 첫 검토의 하네스 리허설(§1.3)과 원 단위까지 같다 — 하네스가 실 CLI 경로와 같은 결과를 냈다는 확인이기도 하다.
+- `signal` 소요 130~148 s(거의 전부 DB 적재) — 시간창 58분 안.
+- **10-07 08:35 의 `config_changed` 는 재검증 도중 다른 에이전트가 `StrategyConfig` 에 청산 v2 필드 5개(기본 = 현 동작)를 넣었기 때문이다.** 실 운용에서
+  일어날 "코드 갱신 → 설정 해시 변경" 을 우연히 실제로 재현했다: 열린 포지션은 계획 시점 설정(`f3f6a99b`)에 고정된 채 계속 관리됐고, 원장·경보에 남았다(M3 고침이 동작함).
+
+### 항목별 재검증
+
+| 원 판정 | 고침 | 재검증 | 남은 것 |
+|---|---|---|---|
+| **C1** GA2 → 라이브 1:1 로더 없음, 8개 유전자 결손·의미 다름 | `StrategyConfig.from_genes`/`to_genes`(19 + 수급 3, 모르는 유전자·단계 밖·범위 밖 → 예외), 추세 4성분 분해(`trend_mask`), `pivot_window=0`·`trail_ma=0`·`take_r=∞`(전량 추적, `_close_full`)·`chase=∞`, 끔(None) = NaN 통과(GA 마스크와 같음), `risk_per_trade = max_position_frac`(사이징 정합), `eps_yoy` 를 GA 커널 식(분기 말 분할 조정 주식수, `eps_adjusted_earnings`)으로 교체, `candidate.py`(스키마·`strategy_hash`·`code_hash`·자기 일관성), 3자 패리티 `tests/test_live_genes.py`(`run_backtest` = `simulate_minervini` = `ga_fast.engine_events`, 전부 끔·돌파 없음+추격 ∞ 포함) + EPS 패널 = `ga_run.eps_features` 테스트 | **해소.** 표 §2 의 결손·의미 차이가 전부 코드·테스트로 닫혔다. 커밋본의 `load_strategy_config` 는 `config.load_candidate`(없는 이름)를 찾아 인계 파일을 **관대한 경로로 읽었다**(스키마·해시 검사 우회) — 워킹트리에서 `CANDIDATE_MARKERS`/`genes` 가 있으면 `candidate.load_candidate` 로 강제하도록 고쳐짐(확인). | **MAJOR(인계 전): `ga2_run.py` 는 여전히 옛 모양(`config` 키, `"inf"` 문자열, `fitness` 가 문자열)으로 `live_candidate.json` 을 쓴다** → `--strategy-config` 에 그대로 주면 `CandidateError`(빠진 키) 로 **크게 실패**한다(올바른 실패). 변환(`write_candidate(path, genes_from_legacy(doc), fitness=…, window=…, valid_from=…)`)을 하는 명령·런북 절차가 없다. GA2 결과가 나오면 이 한 단계를 스크립트로 둘 것. |
+| **M1** 수급·실적 지연 → 후보 조용히 0 | `_freshness`: 유니버스 F·PEAD 결측 ≤ 10%, 실적 패널 비어 있지 않음, `supply_demand` 최신일 = d. 실패면 보유 결정·자산·섀도는 하고 진입만 중단 + error | **해소(워킹트리 기준).** 커밋본은 전역 `MAX(date)` 비교라 재생을 막았다(위 1차 실행) — 워킹트리에서 `MAX(date) WHERE date ≤ d` 로 고쳐짐, 중단 시 **rc 4**(`RC_ENTRIES_ABORTED`) 로 크론이 구분한다. 최종 실행 3일 모두 통과(`freshness.ok`). | 워킹트리 rc 4 계약에 맞춰 **`test_live_runtime_adversarial.py` 2개가 아직 0 을 기대해 실패**(`test_stale_signal_data_still_settles_held_positions`·`test_f4_real_holiday_with_stale_open_does_not_fill_paper` — 둘 다 의도된 중단 경로, 동작 회귀 아님). 커밋 전 갱신 필요. |
+| **M2** 재생·리허설 불가(키움 필수, `d=None` 고정) | `RestQuoteProvider` 지연 생성(첫 시세 전엔 키움 안 부름), `DBQuoteProvider`(minute_bars 정규장 봉, `date=asof`), `--quotes db --asof`, 신호일 = `asof` 직전 DB 거래일, 워킹트리에서 `SimClock` + 작업별 예정 시각(`REPLAY_JOB_TIMES`, `--clock`) | **해소.** 키·토큰 없이 실 CLI 로 3거래일 21작업 재생, 결과가 하네스와 일치. 재생 시계 없이는 매 작업이 그날 전체 봉을 봤을 것(커밋본) — 워킹트리에서 고쳐짐. | — |
+| **M3** 열린 포지션이 전역 설정에 다시 묶임 | `PositionRec.cfg`/`cfg_hash`(계획 시 고정), `_cfg_of` 를 상태 복원·DB 종가 결정·섀도까지, `config_changed` 사건·경보, 원장 모든 사건에 `cfg=<8자리>`, `--strategy-config` | **해소** — 실제 설정 해시 변경(위 10-07)에서 고정이 동작했다. | MINOR: 고정 dict 에는 **나중에 추가된 필드가 없어** `_strategy_from_dict` 가 그 필드를 **지금 코드 기본값**으로 채운다. 이번 v2 필드는 기본값이 현 동작이라 무해했지만, 나중 커밋이 기본값을 바꾸면 옛 포지션이 조용히 새 규칙을 탄다. 또 필드 하나 추가할 때마다(값이 같아도) 해시가 바뀌어 `config_changed` 경보가 난다. → 고정 dict 에 없는 필드는 "그 필드가 생기기 전 동작" 값으로 채우는 이주표(또는 `StrategyConfig` 에 `schema_version`)를 둘 것. |
+| **M4** 보유 종목 미보정 종가 무검사 | `_decide_on_db_close`·`_shadow_settle`: `code ∉ patched_codes` 면 결정 보류 + warn | **해소**(코드 확인; 실데이터 노출 0 이라 재생에선 발동 안 함 — 프로젝트 테스트가 덮음). | — |
+| **M5** 섀도 종가 결정이 실포지션과 다른 가격·시각 | `_shadow_settle`: 다음날 `signal` 의 DB 보정 일봉으로 `on_bar`, `eod` 의 섀도 처리 제거, 09:02 시세 없을 때 DB 시가 진입 | **해소**(코드 확인; 재생 3일 거부 0 이라 섀도 미발생 — 프로젝트 테스트가 덮음). 상태 줄이 "순수익 기준 — 사전등록 지표 아님" 을 명시(m1 도 정리). | — |
+| **M6** 아침 적재 전체 `read_prices` + 재시도 없음 | 3회 재시도(5·15 s), `storage.read_prices_wide`(서버측 커서, 메모리 절약) 추가 | **부분.** 재시도는 들어갔다. `read_prices_wide` 는 만들어졌지만 **`features.load_inputs` 가 아직 `read_prices` 를 부른다**(적재 130~148 s, 전 기간 전 종목) — 시간창 안이라 페이퍼엔 무해. | MINOR(성능): `load_inputs` 를 `read_prices_wide` 로. |
+| **M7** `stop_cap > 0.10` 사이징 불일치 | `from_genes` 가 `risk_per_trade = max_position_frac` | **해소.** | — |
+
+전체 테스트(커밋 `7084b8f`): **1,272 통과 · 6 건너뜀**(93 s, 3코어). 워킹트리(재검증 끝 시점) 라이브 테스트: 243 통과 · **2 실패**(위 rc 4 계약 — 테스트 미갱신).
+
+### 최종 판정
+
+**PAPER: GO** — 코드 기본 설정(`StrategyConfig()`, `--strategy-config` 없이)으로. 실 CLI 가 키움·API 키 없이 실DB 로 3거래일을 끝까지 돌았고(21작업 rc 0),
+체결·손절·목표·자산이 독립 하네스와 일치하며, 수급·실적 지연은 이제 rc 4 + error 로 드러나고, 설정 교체는 열린 포지션을 건드리지 않는다는 것을
+실제 해시 변경으로 확인했다. 전제(첫 페이퍼 날 전):
+
+1. 워킹트리 수정(신선도 `≤ d`·`SimClock`·인계 파일 라우팅·rc 4)을 **커밋**하고, rc 4 를 기대하도록 adversarial 테스트 2개를 고친 뒤 전체 테스트 녹색.
+2. 크론 감시가 rc 4 를 "신규 진입 중단" 으로 다루게(런북 §2 표에 이미 있음 — 크론 래퍼·데드맨이 0 만 정상으로 보게).
+3. 선행 검토의 페이퍼 전제 그대로: `holidays.txt` 2026 완비, 첫날 `ka10001` 필드 사람 확인 1회, 한 모드만 운용.
+
+**GA2 config 를 페이퍼에 싣는 것: 아직 NO-GO** — 로더·패리티는 준비됐지만 (a) `ga2_run.py` 출력 → 인계 스키마 변환 단계가 없고(지금은 크게 실패한다 — 올바르다),
+(b) 고정 dict 의 새 필드 기본값 문제(M3 잔여)가 롤링 재적합의 소급 변경 구멍으로 남는다, (c) GA2 결과 자체가 아직 없다(`ga2/STATUS.txt` 실행 중).
+**실계좌: NO-GO**(선행 REVIEW_RUNTIME §9 조건 그대로).
