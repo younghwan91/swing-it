@@ -148,6 +148,7 @@ def listing_age(close: pd.DataFrame) -> pd.DataFrame:
 def universe_mask(close: pd.DataFrame, trade_value: pd.DataFrame, meta: pd.DataFrame, *,
                   raw_close: "pd.DataFrame | None" = None,
                   adv_floor: float = ADV_FLOOR, adv_window: int = ADV_WINDOW,
+                  adv_cap: "float | None" = None,
                   min_price: float = MIN_PRICE, min_history: int = MIN_HISTORY,
                   markets: tuple[str, ...] = UNIVERSE_MARKETS) -> pd.DataFrame:
     """한국 위생 유니버스(날짜×종목 bool). 전부 ``d`` 종가까지로 정해진다.
@@ -160,6 +161,8 @@ def universe_mask(close: pd.DataFrame, trade_value: pd.DataFrame, meta: pd.DataF
     4. ADV20 ≥ ``adv_floor`` — ``d`` 포함 직전 ``adv_window`` 행 평균 거래대금(백만원), 창이 다 차야 값이 있다
        (:func:`~swing_it.features.technical.average_trade_value`). 거래정지일(NaN)이 창에 끼면 그날은 빠진다.
        폐지 종목(``source='naver'``)의 거래대금은 ``close×volume`` 근사다(중앙 오차 0.7%).
+       ``adv_cap`` 을 주면 ADV20 < ``adv_cap`` 도 건다(구간 유니버스 — 예 중소형 5,000 ≤ ADV20 < 20,000,
+       ``research/logs/sepa_explore/CONVERGENCE.md``). 기본 ``None`` = 상한 없음(기존 동작 그대로).
     5. 가격 ≥ ``min_price`` — **``raw_close`` 를 주면 그걸로**, 없으면 ``close``(분할조정)로 본다.
        1,000원 규칙은 실제 호가 가격에 대한 것이라 원자료가 맞다: 뒤에 액면분할한 종목은 조정가가 과거를
        깎아 내려 "1,000원 미만" 으로 잘못 빠지고, 병합(역분할)은 반대로 잘못 남는다. 원자료
@@ -172,6 +175,7 @@ def universe_mask(close: pd.DataFrame, trade_value: pd.DataFrame, meta: pd.DataF
         trade_value: 거래대금(백만원) — 같은 모양.
         meta: :func:`load_listing_meta` 결과(``code`` 인덱스, ``market``·``excluded`` 컬럼).
         raw_close: 원자료 종가(선택). 1,000원 규칙에만 쓴다.
+        adv_cap: ADV20 상한(미만, 백만원). ``None`` 이면 상한 없음.
 
     Returns:
         ``close`` 와 같은 모양의 bool 패널.
@@ -188,6 +192,8 @@ def universe_mask(close: pd.DataFrame, trade_value: pd.DataFrame, meta: pd.DataF
           & (adv >= adv_floor)
           & (px >= min_price)
           & (listing_age(close) >= min_history))
+    if adv_cap is not None:
+        ok &= adv < adv_cap
     return ok & pd.Series(common, index=codes)
 
 

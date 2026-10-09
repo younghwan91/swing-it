@@ -114,6 +114,23 @@ def test_adv_window_is_trailing_including_today_and_needs_full_window():
     assert not u2["000010"].iloc[20]
 
 
+def test_universe_adv_cap_makes_band_and_default_is_unchanged():
+    d = _days(5)
+    codes = ["000010", "000020", "000030", "000040"]
+    close = pd.DataFrame(5_000.0, index=d, columns=codes)
+    tv = pd.DataFrame({"000010": 4_999.0, "000020": 5_000.0, "000030": 19_999.0, "000040": 20_000.0}, index=d)
+    meta = _meta([(c, "보통", "거래소", "화학") for c in codes])
+    kw = dict(min_history=1, adv_window=1)
+    band = universe_mask(close, tv, meta, adv_floor=5_000.0, adv_cap=20_000.0, **kw).iloc[-1].to_dict()
+    assert band == {"000010": False, "000020": True, "000030": True, "000040": False}   # [5,000, 20,000)
+    no_cap = universe_mask(close, tv, meta, adv_floor=5_000.0, **kw)
+    assert no_cap.iloc[-1].to_dict() == {"000010": False, "000020": True, "000030": True, "000040": True}
+    pd.testing.assert_frame_equal(universe_mask(close, tv, meta, **kw),
+                                  universe_mask(close, tv, meta, adv_cap=None, **kw))
+    assert universe_mask(close, tv, meta, **kw).iloc[-1].to_dict() == {
+        "000010": False, "000020": False, "000030": False, "000040": True}   # 기본 = ADV ≥ 20,000, 상한 없음
+
+
 def test_universe_does_not_peek_future():
     d = _days(40)
     tv = pd.DataFrame({"000010": 1_000.0}, index=d)

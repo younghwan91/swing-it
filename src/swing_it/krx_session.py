@@ -1,0 +1,94 @@
+"""KRX 정규장 일봉 — 2026-09-14 부터 ``daily_bars`` 에 섞인 NXT 야간 체결을 걷어낸다.
+
+**결함(2026-10-10 확인):** 2026-09-14 부터 키움 일봉 수집이 KRX+NXT 통합 시세를 받아 ``daily_bars.close`` 가 그날 마지막 체결
+(NXT 19:59~20:00)이 됐다. 예: 005930 2026-09-17 일봉 종가 256,000 = 분봉 19:59, KRX 종가(15:30 단일가) 252,500.
+분봉이 있는 종목 기준 10-08 하루에 1,351 중 1,182 종목의 종가가 KRX 종가와 다르다. ``daily_bars_adjusted`` 도 같은 값을 물려받는다.
+고가·저가·거래량·거래대금도 NXT 시간대를 포함한다. 시가(09:00)는 정상이다.
+
+(2026-10-08~09 에 "오진" 이라 적었던 진단 둘 — 분봉 15:30 봉이 공식 종가와 다르다는 설명, 일봉 = 수급 테이블 종가 일치 — 은 틀렸다.
+수급 테이블도 같은 키움 피드라 일치가 아무것도 증명하지 않고, 분봉 ``ts`` 는 시간대 없는 KST 라 변환을 한 번 더 걸면 비교가 어긋난다.)
+
+**고치는 법:** ``minute_bars``(KST naive) 의 09:00~15:30 봉으로 정규장 OHLCV 를 다시 만들고, 조정 테이블에는 같은 날 조정계수
+(조정 종가 / 원 종가 — 두 값 모두 같은 오염을 담아 비율은 유효)를 곱해 넣는다. 분봉이 없는 종목·날짜는 원값을 두고 ``krx_patched=False`` 로 표시한다
+(분봉은 하루 ~1,400~1,800 종목 — 유동 종목 위주라 NXT 거래 종목 대부분을 덮는다).
+
+정본 수정은 수집기(quant-airflow, KRX 전용 시세 요청)에서 해야 한다 — 이 모듈은 그 전까지 swing-it 의 읽는 쪽 보정이다.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+#: 일봉에 NXT 가 섞이기 시작한 첫 거래일.
+NXT_START = "2026-09-14"
+#: 정규장 분봉 구간(KST, 양 끝 포함 — 15:30 봉이 종가 단일가).
+SESSION_OPEN = "09:00:00"
+SESSION_CLOSE = "15:30:00"
+
+
+def session_bars_from_minutes(minutes: pd.DataFrame) -> pd.DataFrame:
+    """분봉(code, ts, open, high, low, close, volume, trade_value[원]) → 정규장 일봉(code, date, open, high, low, close,
+    volume, trade_value[백만원]). ``ts`` 는 KST naive. 09:00~15:30 밖의 봉은 버린다. 종가 = 15:30 이하 마지막 봉의 종가."""
+    m = minutes.copy()
+    m["ts"] = pd.to_datetime(m["ts"])
+    t = m["ts"].dt.strftime("%H:%M:%S")
+    m = m[(t >= SESSION_OPEN) & (t <= SESSION_CLOSE)]
+    if m.empty:
+        return pd.DataFrame(columns=["code", "date", "open", "high", "low", "close", "volume", "trade_value"])
+    m = m.sort_values(["code", "ts"])
+    m["date"] = m["ts"].dt.normalize()
+    g = m.groupby(["code", "date"], sort=False)
+    out = g.agg(open=("open", "first"), high=("high", "max"), low=("low", "min"), close=("close", "last"),
+                volume=("volume", "sum"), trade_value=("trade_value", "sum")).reset_index()
+    out["trade_value"] = out["trade_value"] / 1e6
+    return out
+
+
+def read_session_bars(con: Any, *, start: str = NXT_START, end: "str | None" = None) -> pd.DataFrame:
+    """DB 분봉 → 정규장 일봉. ``start``~``end``(포함) 날짜."""
+    q = ("SELECT code, ts, open, high, low, close, volume, trade_value FROM minute_bars "
+         "WHERE ts >= %(lo)s AND ts < %(hi)s AND ts::time BETWEEN %(o)s AND %(c)s")
+    hi = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d") if end else "2100-01-01"
+    m = pd.read_sql_query(q, con, params={"lo": start, "hi": hi, "o": SESSION_OPEN, "c": SESSION_CLOSE})
+    return session_bars_from_minutes(m)
+
+
+def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NXT_START,
+                 adjusted: bool = True) -> pd.DataFrame:
+    """롱 가격표(code, date, open, high, low, close, volume, trade_value …)의 ``since`` 이후 행을 정규장 값으로 바꾼다.
+
+    ``adjusted=True`` 면 그 행의 조정계수 = 행의 close / 원 일봉 close 를 알 수 없으므로 **행 자신의 open 비율**을 쓴다:
+    시가는 오염되지 않았으므로 factor = 행 open / 정규장 open. 가격 4개에 factor 를 곱하고 거래량·거래대금은 정규장 값 그대로.
+    정규장 값이 없는 행은 그대로 두고 ``krx_patched=False``. 반환은 사본, 열 ``krx_patched`` 추가.
+    """
+    df = prices.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df["krx_patched"] = False
+    if session.empty:
+        return df
+    s = session.copy()
+    s["date"] = pd.to_datetime(s["date"])
+    s = s.set_index(["code", "date"])
+    late = df["date"] >= pd.Timestamp(since)
+    key = pd.MultiIndex.from_arrays([df.loc[late, "code"], df.loc[late, "date"]])
+    hit = key.isin(s.index)
+    idx = df.index[late][hit]
+    sv = s.reindex(key[hit])
+    if adjusted:
+        so = sv["open"].to_numpy()
+        fac = np.where(so > 0, df.loc[idx, "open"].to_numpy(dtype=float) / np.where(so > 0, so, np.nan), np.nan)
+    else:
+        fac = np.ones(len(idx))
+    ok = np.isfinite(fac)
+    idx, sv, fac = idx[ok], sv[ok], fac[ok]
+    for col in ("open", "high", "low", "close"):
+        if col in df.columns:
+            df.loc[idx, col] = sv[col].to_numpy() * fac
+    for col in ("volume", "trade_value"):
+        if col in df.columns:
+            df.loc[idx, col] = sv[col].to_numpy()
+    df.loc[idx, "krx_patched"] = True
+    return df
