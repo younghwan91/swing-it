@@ -36,6 +36,10 @@
     1 ~ max_hold−1 일째 종가에서만.
 11. 트레이드 수익 = 두 절반 수익의 평균. 익절이 안 났으면 두 절반이 같은 가격에 함께 나가 ``ret_half1 = ret_half2``.
     ``R = ret / d``.
+12. (선택, ``failed_breakout=True`` — 라이브 설계 §6 2026-10-10, 기본 **False** 로 옛 결과 재현) 돌파 실패: 익절 전
+    거래 가능일 ``k`` (1 ~ max_hold−1 일째) 종가 < 피벗(사건의 ``pivot`` = 직전 50일 최고 고가) → **다음 거래 가능일 시가**
+    전량(``failed_breakout``). 그날 장중 손절·익절이 먼저 났으면 그쪽. 시간 손절과 같은 날 결정이면 시간 손절(즉시 체결)이
+    먼저. 다음날 시가가 손절·목표를 건드려도 시가 청산이 먼저(추적 청산과 같은 규칙 8). 다음 거래 가능일이 지평 밖이면 종료 청산.
 
 비용(``korea.cost_rt``)은 여기서 빼지 않는다 — 러너 몫(사전등록: 분할 청산도 총 비용 같음).
 """
@@ -118,7 +122,7 @@ def _first_from(tr: np.ndarray, k: int, hi: int) -> "int | None":
 
 def _simulate_one(b: _Book, ci: int, d: int, pivot: float, c_low: float, *, stop_floor: float, stop_cap: float,
                   stop_mult: float, fixed_stop: "float | None", take_r: float, time_stop_days: "int | None",
-                  max_hold: int, chase: "float | None", limit_up_skip: bool) -> dict:
+                  max_hold: int, chase: "float | None", limit_up_skip: bool, failed_breakout: bool = False) -> dict:
     """한 사건 → 결과 dict. 건너뛰면 ``{"skip": 사유}``. 규칙은 모듈 docstring 1~11."""
     n = len(b.days)
     e = d + 1
@@ -173,9 +177,31 @@ def _simulate_one(b: _Book, ci: int, d: int, pivot: float, c_low: float, *, stop
                 and cl[cand] <= entry):
             j_ts = cand
 
+    # 돌파 실패(규칙 12): 익절·손절 전 종가 < 피벗 인 첫 거래 가능일 k → 다음 거래 가능일 시가. 신호는 1 ~ max_hold−1 일째.
+    j_fb, j_fb_sig = None, None
+    if failed_breakout and np.isfinite(pivot):
+        sig_n1 = min(k_last, horizon + 1)
+        with np.errstate(invalid="ignore"):
+            fb = tr[:sig_n1] & (cl[:sig_n1] < pivot)
+        if j_s is not None:
+            fb[j_s:] = False                              # 그날 손절이 먼저(장중)
+        if j_p is not None:
+            fb[j_p:] = False                              # 그날 익절이 먼저(장중)
+        if j_ts is not None:
+            fb[j_ts:] = False                             # 시간 손절(종가 즉시)이 먼저
+        k = _first(fb)
+        if k is not None:
+            j_fb_sig = k
+            j_fb = _first_from(tr, k + 1, horizon)
+
     out = {"entry": entry, "d": dd, "stop_px": stop_px, "target_px": tgt, "partial_hit": False,
            "partial_j": None, "partial_px": np.nan}
-    if j_ts is not None:
+    if j_fb_sig is not None:
+        if j_fb is not None:
+            reason, x, px = "failed_breakout", j_fb, op[j_fb]
+        else:
+            reason, x, px = end_exit()
+    elif j_ts is not None:
         reason, x, px = "time_stop", j_ts, cl[j_ts]
     elif j_s is not None and j_p is None:
         reason, x, px = "stop", j_s, min(op[j_s], stop_px)
@@ -275,7 +301,7 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
                        fixed_stop: "float | None" = None, take_r: float = 2.0,
                        time_stop_days: "int | None" = 20, max_hold: int = 120, chase: "float | None" = 0.05,
                        limit_up_skip: bool = True, no_overlap: bool = True, pivot_window: int = 50,
-                       return_skipped: bool = False):
+                       return_skipped: bool = False, failed_breakout: bool = False):
     """사건 → 미너비니 원전 청산 트레이드(총수익, 비용 전). 규칙은 모듈 docstring 1~11.
 
     Args:
@@ -288,6 +314,8 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
         fixed_stop: 주면 기술적 손절 대신 고정 손절폭(민감도 "손절 고정 8%" = 0.08). 수축 저점 거르기는 그대로.
         take_r: 절반 익절 배수(민감도 3R = 3.0).
         time_stop_days: ``None`` 이면 시간 손절 끔(민감도).
+        failed_breakout: True 면 규칙 12(익절 전 종가 < 피벗 → 다음 거래 가능일 시가). 기본 False — 사전등록 결과 재현.
+            라이브 프로토콜(설계 §6) = ``failed_breakout=True, time_stop_days=None``.
         no_overlap: 같은 종목 보유 중(신호일 종가 기준, 나머지 절반 포함) 사건을 버린다. 대조에선 끈다.
         return_skipped: True 면 ``(trades, skipped)``.
 
@@ -305,7 +333,7 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
     b = _Book(o, h, lo, c, trail_ma, volume)
     rules = {"stop_floor": stop_floor, "stop_cap": stop_cap, "stop_mult": stop_mult, "fixed_stop": fixed_stop,
              "take_r": take_r, "time_stop_days": time_stop_days, "max_hold": max_hold, "chase": chase,
-             "limit_up_skip": limit_up_skip}
+             "limit_up_skip": limit_up_skip, "failed_breakout": failed_breakout}
     t, s = _run(b, ev, no_overlap=no_overlap, rules=rules)
     return (t, s) if return_skipped else t
 

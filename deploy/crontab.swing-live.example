@@ -1,0 +1,37 @@
+# 스윙 라이브(sw-live) 크론 **예시** — 문서일 뿐 설치하지 않는다.
+#
+# 이 파일은 dotfiles cron-install 대상이 아니다(대상은 deploy/crontab.simnode). 실제로 돌리려면 사람이 이 줄들을
+# 검토해 simnode 메인 클론의 deploy/crontab.simnode 에 옮겨 커밋·푸시한다(docs/live-swing-runbook.md §6).
+#
+# 전제: 호스트 시계 = KST(crontab.simnode 의 다른 줄과 같다). 평일만(1-5) — 평일 휴장일은 런타임이 판정한다
+#       (data/live_swing/holidays.txt + 09:02 open-check 의 ka10081 오늘 봉 확인).
+# 키움 겹침 시간 회피: 06:30~07:30(다른 레포 일봉 확정), 10:00~10:15, 16:00~16:50(일봉 수집). monitor 는 10:00~10:15 에
+#       폴링 간격을 180초로 늘린다. 16:00 이후에는 아무 작업도 없다.
+# 앱키 공유: 웹소켓을 쓰지 않는다(REST 폴링만). 토큰 logout/revoke 를 부르는 코드는 없다.
+# 환경: KIWOOM_APP_KEY·KIWOOM_APP_SECRET(시세 조회 — 페이퍼도 필요), KR_QUANT_DB(signal), SWING_ALERT_WEBHOOK_URL(선택).
+#       크론은 셸 환경을 안 읽으므로 ../quant-airflow/.env(다른 레포도 쓰는 비밀 파일)를 source 한다. 이 레포 안에 비밀
+#       파일을 두지 않는다 — 두더라도 .env.* 는 .gitignore 다(검토 M8).
+#
+# 모드: 아래는 전부 --paper(기본). 실주문으로 바꾸는 것은 사람만 한다 — 런북 §6 체크리스트를 다 채운 뒤
+#       --paper 를 --execute --confirm-real 로 바꾸고 첫 실행에 --capital 을 준다.
+
+SWL="cd /home/young/git/swing-it && set -a && . /home/young/git/quant-airflow/.env && set +a && .venv/bin/sw-live"
+LOG=/home/young/git/swing-it/data/live_swing/cron.log
+
+# 07:35 신호 — daily_finalize(06:30 확정치) 뒤. DB 최신일 = 직전 거래일·NXT 보정 확인, 아니면 중단+알림.
+#       보유 종목 MA50 추적(→ 오늘 시가 매도)·전일 장 마감 자산·낙폭 킬도 여기서(DB 보정 종가).
+35 7 * * 1-5   bash -c "$SWL signal --paper"      >> $LOG 2>&1
+# 08:35 장전 — 기준선, 전일 결정 매도(장전 동시호가), 지정가 매수(장전 동시호가).
+35 8 * * 1-5   bash -c "$SWL preopen --paper"     >> $LOG 2>&1
+# 09:02 시가 확인 — 휴장 판정, 시가 체결 반영, 미체결 매수 취소(추격 없음), 손절·목표 확정.
+2 9 * * 1-5    bash -c "$SWL open-check --paper"  >> $LOG 2>&1
+# 09:05~15:19 감시(60초 REST 폴링). 10분마다 다시 띄워도 잠금이 중복 실행을 막는다(죽었을 때 재기동용).
+5,15,25,35,45,55 9-14 * * 1-5  bash -c "$SWL monitor --paper"  >> $LOG 2>&1
+5,15 15 * * 1-5                bash -c "$SWL monitor --paper"  >> $LOG 2>&1
+# 15:21 종가 동시호가 — 오늘 못 판 매도 의도의 마지막 기회(종가 기준 결정은 다음날 signal: 돌파 실패·MA50 추적·최대 보유 상한).
+21 15 * * 1-5  bash -c "$SWL close --paper"       >> $LOG 2>&1
+# 15:40 장 마감 — 종가 동시호가 체결 반영·남은 주문 만료·잠정 보고만(16:00 전에 끝난다).
+#       MA50 추적·자산 확정·낙폭 킬은 다음날 07:35 signal 이 DB 보정(KRX) 종가로 한다(장후 키움 시세는 KRX 종가로 검증 안 됨).
+40 15 * * 1-5  bash -c "$SWL eod --paper"         >> $LOG 2>&1
+# (dry-run/live 에서만 의미) 15:50 대사 — 장부 vs 계좌, 보고만.
+# 50 15 * * 1-5  bash -c "$SWL reconcile --dry-run" >> $LOG 2>&1
