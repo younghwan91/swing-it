@@ -433,6 +433,54 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
     return df
 
 
+_PRICE_WIDE_COLS = ("open", "high", "low", "close", "volume")
+
+
+def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, table: str = PRICE_TABLE,
+                     require_delisted: bool = True, batch: int = 250_000):
+    """:func:`read_prices` 의 **메모리 절약판** — 긴 프레임을 만들지 않고 날짜×종목 와이드 패널을 바로 채운다.
+
+    같은 정문 규칙이다: WHERE 없이 전 종목·전 기간을 읽고 폐지 종목 포함을 검사한다(``require_delisted``). 다른 점은
+    모양뿐 — Postgres 서버측 커서로 ``batch`` 행씩 받아 미리 잡아 둔 ``(거래일 × 종목)`` float 배열에 꽂는다. 580만 행
+    긴 프레임은 pandas 객체열 때문에 RSS 가 7GB 를 넘지만(2026-10-10 실측), 이 경로는 열 5개 기준 ~0.5GB 다.
+    sqlite(로컬 개발)는 :func:`read_prices` 로 읽어 피벗한다(작은 DB 전제).
+
+    Returns: ``{col: DataFrame(index=날짜 DatetimeIndex, columns=종목 Index)}`` — 없는 (날짜, 종목) 은 NaN.
+    """
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    if not _is_pg(con):
+        df = read_prices(con, cols=("code", "date", *cols), table=table, require_delisted=require_delisted)
+        df["date"] = pd.to_datetime(df["date"])
+        return {c: df.pivot(index="date", columns="code", values=c).astype(float) for c in cols}
+    with con.cursor() as cur:
+        cur.execute(f"SELECT DISTINCT date FROM {table} ORDER BY date")  # noqa: S608 — 테이블은 모듈 상수
+        days = pd.DatetimeIndex([r[0] for r in cur.fetchall()])
+        cur.execute(f"SELECT DISTINCT code FROM {table} ORDER BY code")  # noqa: S608
+        codes = pd.Index([str(r[0]) for r in cur.fetchall()])
+    dmap = {d: i for i, d in enumerate(days.date)}
+    cmap = {c: i for i, c in enumerate(codes)}
+    arrays = {c: np.full((len(days), len(codes)), np.nan) for c in cols}
+    sel = ", ".join(cols)
+    with con.cursor(name=f"swing_it_prices_{os.getpid()}") as scur:
+        scur.itersize = batch
+        scur.execute(f"SELECT code, date, {sel} FROM {table}")  # noqa: S608 — 컬럼·테이블은 모듈 상수
+        while True:
+            rows = scur.fetchmany(batch)
+            if not rows:
+                break
+            cs, ds, *vals = zip(*rows)
+            ci = np.fromiter((cmap[str(c)] for c in cs), dtype=np.int64, count=len(cs))
+            di = np.fromiter((dmap[d] for d in ds), dtype=np.int64, count=len(ds))
+            for c, v in zip(cols, vals):
+                arrays[c][di, ci] = np.array(v, dtype=float)
+    con.rollback()  # 서버측 커서는 트랜잭션 안에서만 산다 — 읽기 전용이라 되돌려 닫는다
+    if require_delisted:
+        _assert_universe_has_delisted(con, pd.DataFrame({"code": codes}), table=table)
+    return {c: pd.DataFrame(arrays[c], index=days, columns=codes) for c in cols}
+
+
 SUPPLY_TABLE = "supply_demand"
 _SUPPLY_READ_COLS = ("code", "date", "individual", "foreign_", "institution")
 #: 기관 세부 8종. 키움 소스에만 있고 네이버 폐지 백필에는 없다.
@@ -581,6 +629,57 @@ def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
 #: 백필 완료 후 허용 잔여. 상류가 영구 결측 종목에 ``backfill_markers`` 를 찍어주므로
 #: 완료 상태의 기대값은 0 이다. 마커가 없는 구버전 DB 를 위해 여유만 둔다.
 SHARES_RESIDUAL_OK = 10
+
+
+def _ph(con: Any) -> str:
+    return "%s" if _is_pg(con) else "?"
+
+
+def _as_date(v: Any):
+    import datetime as _dt  # noqa: PLC0415
+
+    if v is None:
+        return None
+    if isinstance(v, _dt.datetime):
+        return v.date()
+    if isinstance(v, _dt.date):
+        return v
+    return _dt.date.fromisoformat(str(v)[:10])
+
+
+def last_trading_date_before(con: Any, before: str) -> Any:
+    """``before``(YYYY-MM-DD) **직전** DB 거래일(``daily_bars`` 날짜 집합 기준). 없으면 ``None``.
+
+    유니버스 로더가 아니다 — 날짜 하나만 돌려준다(라이브 ``signal`` 의 ``--asof`` 재생·직전 거래일 판정). 가격·종목은
+    :func:`read_prices` 로만 읽는다(규칙 (g)); 이 정문 안에 두는 이유도 그것이다.
+    """
+    cur = con.cursor()
+    cur.execute(f"SELECT MAX(date) FROM daily_bars WHERE date < {_ph(con)}", (before,))
+    row = cur.fetchone()
+    return _as_date(row[0]) if row else None
+
+
+def reference_daily_bars(con: Any, code: str, *, end: str, limit: int = 60) -> list[tuple]:
+    """한 종목의 일봉 ``(date, open, high, low, close)`` 최신순 ``limit`` 개(``date ≤ end``) — 기준 종목·재생 시세용.
+
+    유니버스 로더가 아니다(종목 하나, 날짜·보조 가격). 2026-09-14 이후 ``daily_bars`` 종가는 NXT 가 섞일 수 있으므로 호출부는
+    **날짜**에만 기대고 가격은 보조로만 쓴다(:class:`swing_it.live.brokers.DBQuoteProvider`).
+    """
+    cur = con.cursor()
+    ph = _ph(con)
+    cur.execute(f"SELECT date, open, high, low, close FROM daily_bars WHERE code = {ph} AND date <= {ph} "
+                f"ORDER BY date DESC LIMIT {ph}", (code, end, int(limit)))
+    return [(_as_date(r[0]), r[1], r[2], r[3], r[4]) for r in cur.fetchall()]
+
+
+def last_close_before(con: Any, code: str, before: str) -> "float | None":
+    """한 종목의 ``before`` 직전 거래일 종가(재생 시세의 장전 현재가·전일종가 대용). 유니버스 로더가 아니다."""
+    cur = con.cursor()
+    ph = _ph(con)
+    cur.execute(f"SELECT close FROM daily_bars WHERE code = {ph} AND date < {ph} ORDER BY date DESC LIMIT 1",
+                (code, before))
+    row = cur.fetchone()
+    return float(row[0]) if row and row[0] is not None else None
 
 
 def shares_backfill_pending(con: Any) -> int:

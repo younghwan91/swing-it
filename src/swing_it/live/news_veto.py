@@ -334,7 +334,10 @@ def apply_live_veto(con, cands: list, d: dt.date, trading_days: Sequence[dt.date
     if not win:
         info["alerts"].append("뉴스 거부권: 거래일 달력이 비어 있다 — 전 후보 모름")
         return VetoResult(kept=list(cands), vetoed=[], info=info)
-    lo = dt.datetime.combine(win[0], dt.time(0), tzinfo=KST) - dt.timedelta(days=4)
+    # 조회 하한 = 창 첫 거래일 **직전 거래일** 15:30 — 그 뒤 기사는 전부 창 첫날로 매핑된다(연휴 길이와 무관, 통합 검토 m3).
+    before = [x for x in days if x < win[0]]
+    lo = (dt.datetime.combine(before[-1], CLOSE_CUTOFF, tzinfo=KST) if before
+          else dt.datetime.combine(win[0], dt.time(0), tzinfo=KST) - dt.timedelta(days=10))
     hi = dt.datetime.combine(win[-1], CLOSE_CUTOFF, tzinfo=KST)
     codes = [c.code for c in cands]
     try:

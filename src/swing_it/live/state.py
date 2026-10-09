@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Callable
@@ -118,6 +119,10 @@ class PositionRec:
     exit_intent: dict[str, Any] | None = None  # {"kind","qty","session","created","reason","halted"}
     exit_attempt: int = 0
     exit_rejects: int = 0           # 연속 거부·차단 매도 수(검토 M1 회로 차단기)
+    #: 계획 시점의 StrategyConfig(dict) 와 그 해시 — 이 포지션의 청산 규칙은 **여기 고정**된다(통합 검토 M3: 롤링 재적합이
+    #: 열린 포지션의 규칙을 소급해 바꾸지 않는다). None 이면(옛 스냅샷) 현재 설정.
+    cfg: dict[str, Any] | None = None
+    cfg_hash: str | None = None
     realized: float = 0.0
     closed_date: str | None = None
     exit_reason: str = ""
@@ -151,6 +156,7 @@ class LiveState:
     shadow: dict[str, PositionRec] = field(default_factory=dict)
     shadow_history: list[PositionRec] = field(default_factory=list)
     blocked_codes: dict[str, str] = field(default_factory=dict)       # 코드 → 사유. 미해결 주문이 있는 종목(신규 진입 금지, 사람이 해제)
+    config_hash: str | None = None                                    # 마지막 작업이 쓴 전략 설정 해시(신규 계획용)
     market_of: dict[str, str] = field(default_factory=dict)           # 코드 → KOSPI/KOSDAQ(세금 계산용, 닫힌 것도 유지)
 
     # ----- 키·조회 -------------------------------------------------------------
@@ -259,6 +265,8 @@ class StateStore:
     def __init__(self, root: Path | str, *, clock: Callable[[], datetime]) -> None:
         self.root = Path(root)
         self._clock = clock
+        #: 모든 사건 행에 붙는 공통 필드(예: ``cfg`` = 전략 설정 해시 8자리).
+        self.default_fields: dict[str, Any] = {}
 
     # ----- 경로 ----------------------------------------------------------------
 
@@ -337,12 +345,12 @@ class StateStore:
     # ----- 사건 원장 -----------------------------------------------------------
 
     def event(self, event: str, **fields_: Any) -> dict[str, Any]:
-        row = {"ts": self._clock().isoformat(timespec="seconds"), "event": event, **fields_}
+        row = {"ts": self._clock().isoformat(timespec="seconds"), "event": event, **self.default_fields, **fields_}
         _fsync_append(self.ledger_path, row)
         return row
 
     def shadow_event(self, event: str, **fields_: Any) -> dict[str, Any]:
-        row = {"ts": self._clock().isoformat(timespec="seconds"), "event": event, **fields_}
+        row = {"ts": self._clock().isoformat(timespec="seconds"), "event": event, **self.default_fields, **fields_}
         _fsync_append(self.shadow_path, row)
         return row
 
@@ -436,6 +444,26 @@ def drawdown_check(
         if on_trigger is not None:
             on_trigger(f"다일 낙폭 킬: {dd:.2%} (자산 {equity:,.0f}, 고점 {state.equity_peak:,.0f})")
     return row
+
+
+def strategy_hash(cfg_dict: dict[str, Any]) -> str:
+    """전략 설정 dict 의 정규화 sha256(전체). 원장엔 앞 8자리를 쓴다. inf/NaN 은 문자열로 직렬화해 안정적이다."""
+    canon = json.dumps(cfg_dict, sort_keys=True, ensure_ascii=False, default=str, allow_nan=False
+                       ) if _finite_only(cfg_dict) else json.dumps(_stringify_nonfinite(cfg_dict), sort_keys=True,
+                                                                   ensure_ascii=False, default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def _finite_only(d: dict[str, Any]) -> bool:
+    import math  # noqa: PLC0415
+
+    return all(not (isinstance(v, float) and not math.isfinite(v)) for v in d.values())
+
+
+def _stringify_nonfinite(d: dict[str, Any]) -> dict[str, Any]:
+    import math  # noqa: PLC0415
+
+    return {k: (str(v) if isinstance(v, float) and not math.isfinite(v) else v) for k, v in d.items()}
 
 
 def trade_stats(records: list[PositionRec]) -> dict[str, Any]:

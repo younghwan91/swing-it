@@ -61,6 +61,7 @@ from .state import atomic_write_json
 __all__ = [
     "MODES",
     "BrokerBundle",
+    "DBQuoteProvider",
     "DailyBar",
     "FakeQuoteProvider",
     "PersistentPaperBroker",
@@ -164,9 +165,22 @@ class RestQuoteProvider:
     수정주가 ``upd_stkpc_tp="1"``). 종목코드는 6자리 그대로 → KRX 시세(NXT·통합은 ``_NX``·``_AL`` 접미).
     """
 
-    def __init__(self, api: Any, *, clock: Callable[[], datetime] = now_kst) -> None:
-        self._api = api
+    def __init__(self, api: Any = None, *, api_factory: Callable[[], Any] | None = None,
+                 clock: Callable[[], datetime] = now_kst) -> None:
+        """``api`` 를 바로 주거나 ``api_factory`` 로 **지연** 생성한다 — 첫 시세 조회 전엔 키움(토큰 발급 포함)을 부르지 않는다
+        (통합 검토 M2: signal 작업·DB 재생은 키움 없이 떠야 한다)."""
+        if api is None and api_factory is None:
+            raise ValueError("api 또는 api_factory 가 필요하다")
+        self._api_obj = api
+        self._api_factory = api_factory
         self._clock = clock
+
+    @property
+    def _api(self) -> Any:
+        if self._api_obj is None:
+            assert self._api_factory is not None
+            self._api_obj = self._api_factory()
+        return self._api_obj
 
     @staticmethod
     def _krx_code(code: str) -> str:
@@ -245,6 +259,70 @@ class FakeQuoteProvider:
         if code in self.fail:
             raise RuntimeError(f"fake: 일봉 없음 {code}")
         return list(self.bars.get(code, []))[-n:]
+
+
+class DBQuoteProvider:
+    """DB 재생 시세(통합 검토 M2) — 키움을 전혀 부르지 않는다. ``sw-live … --quotes db --asof <과거일>``.
+
+    ``minute_bars``(KST naive, 09:00~15:30 정규장 봉)로 ``asof`` 하루를 재생한다: 시계 시각 t 까지의 봉으로 시가(첫 봉)·고가·저가·
+    현재가(t 이하 마지막 봉 종가)를 만들고, ``date=asof``(F4 신선도 증거)를 단다. 09:00 전이거나 봉이 없으면 현재가 = 직전 거래일
+    종가, 시가 없음(실제 장전 시세와 같은 모양). 기준 종목 일봉은 ``daily_bars``(날짜만 쓴다). Postgres·sqlite 둘 다 된다.
+    """
+
+    def __init__(self, con: Any, asof: date, *, clock: Callable[[], datetime] = now_kst) -> None:
+        self._con = con
+        self._asof = asof
+        self._clock = clock
+        self._cache: dict[str, list[tuple[datetime, float, float, float, float]]] = {}
+        self._prev_close: dict[str, float | None] = {}
+        self._pg = type(con).__module__.split(".")[0] != "sqlite3"
+
+    def _rows(self, sql: str, params: tuple) -> list[tuple]:
+        cur = self._con.cursor()
+        cur.execute(sql.replace("?", "%s") if self._pg else sql, params)
+        return list(cur.fetchall())
+
+    def _minutes(self, code: str) -> list[tuple[datetime, float, float, float, float]]:
+        if code not in self._cache:
+            lo = f"{self._asof.isoformat()} 09:00:00"
+            hi = f"{self._asof.isoformat()} 15:30:00"
+            rows = self._rows("SELECT ts, open, high, low, close FROM minute_bars WHERE code = ? AND ts >= ? AND ts <= ? "
+                              "ORDER BY ts", (code, lo, hi))
+            out = []
+            for ts, o, h, lo_, c in rows:
+                t = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts))
+                out.append((t.replace(tzinfo=None), float(o), float(h), float(lo_), float(c)))
+            self._cache[code] = out
+        return self._cache[code]
+
+    def _prev(self, code: str) -> float | None:
+        if code not in self._prev_close:
+            from swing_it.storage import last_close_before  # noqa: PLC0415 — 가격 테이블은 storage 정문으로만
+
+            self._prev_close[code] = last_close_before(self._con, code, self._asof.isoformat())
+        return self._prev_close[code]
+
+    def quote(self, code: str) -> QuoteSnap:
+        now = self._clock()
+        t = (now.astimezone(KST) if now.tzinfo else now).replace(tzinfo=None)
+        bars = [b for b in self._minutes(code) if b[0] <= t]
+        prev = self._prev(code)
+        if not bars:
+            if prev is None:
+                raise ValueError(f"db: {code} {self._asof} 시세 없음")
+            return QuoteSnap(code=code, ts=now, last=prev, prev_close=prev)
+        return QuoteSnap(code=code, ts=now, last=bars[-1][4], open=bars[0][1], high=max(b[2] for b in bars),
+                         low=min(b[3] for b in bars), prev_close=prev, date=self._asof)
+
+    def daily_bars(self, code: str, n: int = 60) -> list[DailyBar]:
+        from swing_it.storage import reference_daily_bars  # noqa: PLC0415 — 가격 테이블은 storage 정문으로만
+
+        out = []
+        for dd, o, h, lo_, c in reference_daily_bars(self._con, code, end=self._asof.isoformat(), limit=n):
+            if c is None:
+                continue
+            out.append(DailyBar(date=dd, open=float(o or c), high=float(h or c), low=float(lo_ or c), close=float(c)))
+        return sorted(out, key=lambda b: b.date)
 
 
 # --------------------------------------------------------------------------- 페이퍼 브로커
@@ -408,9 +486,8 @@ def build_bundle(
         raise ValueError("실주문(live)은 confirm_real=True 와 정확히 짝이어야 한다 — --execute --confirm-real")
 
     if quotes is None:
-        if api is None:
-            api = make_kiwoom_api()
-        quotes = RestQuoteProvider(api, clock=clock)
+        # api 를 안 줬으면 지연 생성 — 시세를 실제로 읽는 작업에서만 키움이 뜬다(토큰 발급 포함).
+        quotes = RestQuoteProvider(api, api_factory=None if api is not None else make_kiwoom_api, clock=clock)
 
     if mode == "paper":
         paper = broker if broker is not None else PersistentPaperBroker.load(paper_path)

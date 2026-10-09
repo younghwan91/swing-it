@@ -61,6 +61,8 @@ from swing_it.live.sizing import position_size, stop_width
 #: ``market`` 은 code → 시장 Series.
 SCAN_KEYS = ("close", "pivot", "tt", "rs", "breakout", "breadth", "universe", "pead_rank", "rel", "F",
              "contraction_low", "adv20")
+#: 수급 유전자(``smart_min``·``foreign_pos``·``persist_min``)가 설정됐을 때만 읽는 패널.
+FLOW_KEYS = ("smart", "foreign", "persist")
 #: 실적 문(GA2 유전자)이 켜졌을 때만 읽는 패널 — :func:`swing_it.live.features.earnings_panels`.
 EARNINGS_KEYS = ("eps_yoy", "accel", "rev_yoy")
 
@@ -170,8 +172,10 @@ def scan(panels: Mapping[str, "pd.DataFrame | pd.Series"], d, cfg: StrategyConfi
         d: 신호일. 패널에 없는 날이면 빈 목록.
         cfg: 전략 설정. ``rel_max=None`` 이면 rel 조건, ``require_flow=False`` 면 F 조건을 끈다.
 
-    조건(전부 AND, NaN 은 통과하지 않는다): ``universe`` ∧ ``tt`` ∧ ``breakout`` ∧ ``rs ≥ rs_min`` ∧
-    ``breadth > breadth_min`` ∧ ``pead_rank ≥ pead_rank_min`` ∧ ``rel ≤ rel_max`` ∧ ``F == 1`` ∧ 수축 저점·피벗·종가 유한
+    조건(전부 AND; 켜진 문턱에서 NaN 은 통과하지 않고, ``None`` = 끔인 문턱은 조건 자체가 없다 — GA2 마스크와 같다):
+    ``universe`` ∧ ``tt``(cfg 의 4성분으로 features 가 만든다) ∧ ``breakout``(cfg: 돌파·거래량 조건, 둘 다 끔이면 전부 참) ∧
+    ``rs ≥ rs_min`` ∧ ``breadth > breadth_min`` ∧ ``pead_rank ≥ pead_rank_min`` ∧ ``rel ≤ rel_max`` ∧ 수급(``F == 1``, 또는
+    수급 유전자가 있으면 ``smart ≥ smart_min`` ∧ (``foreign > 0``) ∧ ``persist ≥ persist_min``) ∧ 수축 저점·피벗·종가 유한
     ∧ (켜진 실적 문: ``eps_yoy ≥ eps_yoy_min`` · ``accel == 1`` · ``rev_yoy ≥ rev_yoy_min`` — :data:`EARNINGS_KEYS` 패널).
     수축 저점이 없으면 연구는 ``skip_no_contraction`` 으로 버린다 — 여기선 후보에서 뺀다(결과 같음).
     """
@@ -181,14 +185,26 @@ def scan(panels: Mapping[str, "pd.DataFrame | pd.Series"], d, cfg: StrategyConfi
         return []
     i = int(close.index.get_loc(d))
     r = {k: _row(panels[k], i) for k in SCAN_KEYS}
+    flow_genes = cfg.smart_min is not None or cfg.foreign_pos is not None or cfg.persist_min
     with np.errstate(invalid="ignore"):
         ok = ((r["universe"] == 1) & (r["tt"] == 1) & (r["breakout"] == 1)
-              & (r["rs"] >= cfg.rs_min) & (r["breadth"] > cfg.breadth_min)
-              & (r["pead_rank"] >= cfg.pead_rank_min)
               & np.isfinite(r["contraction_low"]) & np.isfinite(r["pivot"]) & np.isfinite(r["close"]))
+        if cfg.rs_min is not None:
+            ok &= r["rs"] >= cfg.rs_min
+        if cfg.breadth_min is not None:
+            ok &= r["breadth"] > cfg.breadth_min
+        if cfg.pead_rank_min is not None:
+            ok &= r["pead_rank"] >= cfg.pead_rank_min
         if cfg.rel_max is not None:
             ok &= r["rel"] <= cfg.rel_max
-        if cfg.require_flow:
+        if flow_genes:
+            if cfg.smart_min is not None:
+                ok &= _row(panels["smart"], i) >= cfg.smart_min
+            if cfg.foreign_pos:
+                ok &= _row(panels["foreign"], i) > 0
+            if cfg.persist_min:
+                ok &= _row(panels["persist"], i) >= cfg.persist_min
+        elif cfg.require_flow:
             ok &= r["F"] == 1
         if cfg.eps_yoy_min is not None:
             ok &= _row(panels["eps_yoy"], i) >= cfg.eps_yoy_min
@@ -229,10 +245,11 @@ def entry_limit(pivot: float, prev_close: float, cfg: StrategyConfig = DEFAULT_S
     ``tick_grid=False`` (분할조정 백테스트): 지정가 = 피벗 × (1+chase) 그대로, 상한가 기준 = 전일종가 ×
     ``cfg.limit_up_ratio`` — 연구 ``sepa``/``minervini_exits`` 의 추격·상한가 판정과 같은 식(같은 부동소수).
     """
-    cap = pivot * (1.0 + cfg.chase)
+    cap = pivot * (1.0 + cfg.chase) if np.isfinite(cfg.chase) else math.inf   # chase = inf → 추격 금지 없음
     if not tick_grid:
         lu = prev_close * cfg.limit_up_ratio if (np.isfinite(prev_close) and prev_close > 0) else math.inf
-        return cap, lu
+        # 추격 금지 없음: 지정가 = 상한가 기준(체결 조건 "시가 < 상한가" 와 같은 집합, 현금 예약은 유한하게)
+        return (cap if np.isfinite(cap) else lu), lu
     from krx_quant_core.market.limits import limit_up_price  # noqa: PLC0415
     from krx_quant_core.market.ticks import shift_ticks  # noqa: PLC0415
 
@@ -400,7 +417,7 @@ class PositionState:
         self.phase = "full"
         self.d = float(min(max(1.0 - self.contraction_low * cfg.stop_mult / entry, cfg.stop_floor), cfg.stop_cap))
         self.stop_px = entry * (1.0 - self.d)
-        self.target_px = entry * (1.0 + cfg.take_r * self.d)
+        self.target_px = entry * (1.0 + cfg.take_r * self.d)   # take_r = inf → 목표 없음(익절 없음)
         if entry <= self.contraction_low:
             return [self._exit_all("below_low", entry, "open")]
         return []
@@ -422,7 +439,7 @@ class PositionState:
         if self.phase == "full":
             if low <= self.stop_px or open <= self.stop_px:              # 같은 날이면 손절 먼저
                 return [self._exit_all("stop", min(open, self.stop_px), "intraday")]
-            if high >= self.target_px or open >= self.target_px:
+            if self.cfg.partial_on and (high >= self.target_px or open >= self.target_px):
                 gap = open >= self.target_px
                 acts.append(self._take_partial(open if gap else self.target_px, "open" if gap else "intraday",
                                                gap=gap))
@@ -433,7 +450,7 @@ class PositionState:
                     return acts
                 acts.extend(self._close_half(close, ma50))
                 return acts
-            return self._close_full(close)
+            return self._close_full(close, ma50)
         # 익절 뒤 나머지
         if self._breakeven_active() and (low <= self.entry_px or open <= self.entry_px):
             return [self._exit_all("breakeven", min(open, self.entry_px), "intraday")]
@@ -449,23 +466,28 @@ class PositionState:
         self.pending_kind = kind
         return [self._sell(kind, self.qty_open, None, "next_open")]
 
-    def _close_full(self, close: float) -> list[Action]:
-        """전량 단계의 종가 판단: 시간 손절(켜져 있으면, 한 번) → 최대 보유 → 돌파 실패(종가 < 피벗 → 다음 거래일 시가)."""
+    def _close_full(self, close: float, ma: float = math.nan) -> list[Action]:
+        """전량 단계의 종가 판단: 시간 손절(켜져 있으면, 한 번) → 최대 보유 → 돌파 실패(종가 < 피벗 → 다음 거래일 시가)
+        → (익절 없음 ∧ 추적 있음) 전량 추적: 종가 < MA → 다음 거래일 시가(GA 커널 ``j_t1`` — 같은 날이면 돌파 실패가 먼저)."""
         if self.time_stop_due():
             self.time_checked = True
             if close <= self.entry_px:
                 return [self._exit_all("time_close", close, "close")]
         if self.max_hold_due():
             return [self._exit_all("max_hold", close, "close")]
-        if self.cfg.failed_breakout and close < self.pivot and not self.trail_pending:
+        if self.trail_pending:
+            return []
+        if self.cfg.failed_breakout and close < self.pivot:
             return self._decide_next_open("failed_breakout_next_open")
+        if not self.cfg.partial_on and self.cfg.has_trail and np.isfinite(ma) and close < ma:
+            return self._decide_next_open("trail_next_open")
         return []
 
     def _close_half(self, close: float, ma50: float) -> list[Action]:
         """익절 뒤 나머지의 종가 판단: 최대 보유 → 그 종가, 아니면 종가 < MA → 다음 거래일 시가 결정."""
         if self.max_hold_due():
             return [self._exit_all("max_hold", close, "close")]
-        if np.isfinite(ma50) and close < ma50 and not self.trail_pending:
+        if self.cfg.has_trail and np.isfinite(ma50) and close < ma50 and not self.trail_pending:
             return self._decide_next_open("trail_next_open")
         return []
 
@@ -481,7 +503,7 @@ class PositionState:
         if self.phase == "full":
             if open <= self.stop_px:
                 return [self._exit_all("stop", open, "open")]
-            if open >= self.target_px:
+            if self.cfg.partial_on and open >= self.target_px:
                 return [self._take_partial(open, "open", gap=True)]
             return []
         if self._breakeven_active() and open <= self.entry_px:
@@ -498,7 +520,7 @@ class PositionState:
         if self.phase == "full":
             if last <= self.stop_px:
                 return [self._exit_all("stop", last, "intraday")]
-            if last >= self.target_px:
+            if self.cfg.partial_on and last >= self.target_px:
                 return [self._take_partial(last, "intraday", gap=False)]
             return []
         if self._breakeven_active() and last <= self.entry_px:
@@ -521,7 +543,7 @@ class PositionState:
         if not self.is_open:
             return []
         if self.phase == "full":
-            return self._close_full(close)
+            return self._close_full(close, ma50)
         return self._close_half(close, ma50)
 
     # --- 백테스트 전용 ---

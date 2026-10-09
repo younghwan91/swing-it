@@ -56,6 +56,22 @@ def read_session_bars(con: Any, *, start: str = NXT_START, end: "str | None" = N
     return session_bars_from_minutes(m)
 
 
+def read_session_bars_agg(con: Any, *, start: str = NXT_START, end: "str | None" = None) -> pd.DataFrame:
+    """:func:`read_session_bars` 와 같은 결과를 **DB 에서 집계**해 받는다(Postgres). 분봉을 pandas 로 끌어오면 하루 ~1,800 종목 ×
+    391 분 = 70만 행, 한 달이면 1,300만 행이라 RSS 가 수 GB 로 뛴다(2026-10-10 실측) — 긴 구간·메모리 상한이 있는 작업은 이쪽.
+    시가 = 첫 봉 open, 종가 = 15:30 이하 마지막 봉 close, 고저 = max/min, 거래량·거래대금 = 합(거래대금은 백만원)."""
+    q = ("SELECT code, ts::date AS date, (array_agg(open ORDER BY ts))[1] AS open, max(high) AS high, min(low) AS low, "
+         "(array_agg(close ORDER BY ts DESC))[1] AS close, sum(volume) AS volume, sum(trade_value) / 1e6 AS trade_value "
+         "FROM minute_bars WHERE ts >= %(lo)s AND ts < %(hi)s AND ts::time BETWEEN %(o)s AND %(c)s "
+         "GROUP BY code, ts::date ORDER BY code, date")
+    hi = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d") if end else "2100-01-01"
+    out = pd.read_sql_query(q, con, params={"lo": start, "hi": hi, "o": SESSION_OPEN, "c": SESSION_CLOSE})
+    out["date"] = pd.to_datetime(out["date"])
+    for col in ("open", "high", "low", "close", "volume", "trade_value"):
+        out[col] = out[col].astype(float)
+    return out
+
+
 def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NXT_START,
                  adjusted: bool = True) -> pd.DataFrame:
     """롱 가격표(code, date, open, high, low, close, volume, trade_value …)의 ``since`` 이후 행을 정규장 값으로 바꾼다.

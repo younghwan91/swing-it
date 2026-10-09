@@ -1,4 +1,4 @@
-"""스윙 라이브 전략 v0 설정 — 사전등록 CONVERGENCE A 와 같은 정의(설계 §2).
+"""스윙 라이브 전략 v0 설정 — 사전등록 CONVERGENCE A 와 같은 정의(설계 §2) + GA2 유전자 19개의 1:1 대응(§3 인계).
 
 수치 출처(탐색하지 않는다):
 
@@ -11,17 +11,63 @@
   다음날 시가) — 연구 시뮬레이터의 ``failed_breakout=True, time_stop_days=None`` 과 같다.
 - 사이징·위험: 설계 §2 — 위험 1% / 10% 상한 / 10종목 / 낙폭 −15% 신규 진입 정지.
 
+**GA2 유전자 대응(REVIEW_INTEGRATION §2, 전부 1:1):** :meth:`StrategyConfig.from_genes` / :meth:`StrategyConfig.to_genes`.
+추세 템플릿은 GA2 처럼 4개 성분(``near_high``·``above_low``·``ma_stack``·``ma200_slope_days``)으로 분해돼 있고 기본값이 원전
+템플릿(0.75·1.30·3·20)이다. 연속 문턱은 ``None`` = 끔(NaN 도 통과 — GA 마스크와 같다). ``pivot_window = 0`` = 돌파 요구 없음
+(피벗은 직전 50일 고가 — 추격·돌파 실패 기준), ``take_r = inf`` = 익절 없음(추적은 전량, 1일째부터), ``trail_ma = 0`` = 추적 없음.
+수급 유전자(``smart_min``·``foreign_pos``·``persist_min``)를 하나라도 주면 ``require_flow`` 의 F 규칙 대신 그 조건을 쓴다
+(기존 F = smart > 0 ∧ foreign > 0 은 ``smart_min=0, foreign_pos=True, persist_min=0`` 과 경계 smart = 0 한 점만 다르다).
+
 둘 다 frozen dataclass 라 원장·리포트에 ``dataclasses.asdict`` 로 그대로 적을 수 있다.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import math
+from dataclasses import asdict, dataclass, fields
 
 #: 상한가 시가 판정 허용폭 — :data:`swing_it.features.korea.LIMIT_UP_REL_TOL` 과 같은 값(0.7%p).
 #: 여기 사본을 두는 이유: config 는 무의존(다른 에이전트·CLI 가 가볍게 import)이어야 한다.
 #: 같은 값임은 ``tests/test_live_strategy.py`` 가 못박는다.
 LIMIT_UP_REL_TOL = 0.007
+
+#: GA2 유전자(``research/experiments/ga2_run.py`` G2_CONT + G2_DISC 순서) → :class:`StrategyConfig` 필드. 19개.
+GENE_FIELDS: dict[str, str] = {
+    "near_high": "near_high", "above_low": "above_low", "rs_min": "rs_min", "vol_mult": "vol_mult",
+    "breadth_min": "breadth_min", "pead_min": "pead_rank_min", "rel_max": "rel_max", "eps_yoy_min": "eps_yoy_min",
+    "rev_yoy_min": "rev_yoy_min", "eps_accel": "eps_accel", "ma_stack": "ma_stack",
+    "ma200_slope_days": "ma200_slope_days", "pivot_window": "pivot_window", "chase": "chase", "stop_cap": "stop_cap",
+    "take_r": "take_r", "trail_ma": "trail_ma", "failed_breakout": "failed_breakout", "max_hold": "max_hold",
+}
+#: 수급 시대 유전자(ga2_run FLOW_CONT + FLOW_DISC) → 필드. 주면 ``require_flow=False`` 로 바꾸고 이 조건을 쓴다.
+FLOW_GENE_FIELDS: dict[str, str] = {"smart_min": "smart_min", "foreign_pos": "foreign_pos", "persist_min": "persist_min"}
+#: 이산 유전자의 허용 단계(ga2_run G2_DISC·FLOW_DISC 그대로).
+GENE_LEVELS: dict[str, tuple] = {
+    "eps_accel": (0, 1), "ma_stack": (0, 1, 2, 3), "ma200_slope_days": (0, 10, 20, 40),
+    "pivot_window": (0, 20, 30, 40, 50, 60), "chase": (0.02, 0.05, 0.10, math.inf),
+    "stop_cap": (0.06, 0.08, 0.10, 0.12, 0.15), "take_r": (1.5, 2.0, 3.0, 4.0, math.inf),
+    "trail_ma": (10, 20, 50, 0), "failed_breakout": (0, 1), "max_hold": (20, 60, 120),
+    "foreign_pos": (0, 1), "persist_min": (0, 8, 10, 12),
+}
+#: 연속 유전자의 범위(ga2_run G2_CONT·FLOW_CONT) — 범위 밖이면 거부.
+GENE_RANGES: dict[str, tuple[float, float]] = {
+    "near_high": (0.50, 0.95), "above_low": (1.00, 1.60), "rs_min": (0.0, 95.0), "vol_mult": (0.0, 2.5),
+    "breadth_min": (0.0, 0.7), "pead_min": (0.0, 0.95), "rel_max": (0.5, 4.0), "eps_yoy_min": (0.0, 1.0),
+    "rev_yoy_min": (-0.2, 0.5), "smart_min": (-0.10, 0.20),
+}
+
+
+def _num(name: str, v):
+    """유전자 JSON 값 → 숫자. ``"inf"`` 문자열은 ∞. None 은 그대로."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        if v.strip().lower() in ("inf", "∞", "infinity"):
+            return math.inf
+        raise ValueError(f"유전자 {name}: 숫자가 아니다 {v!r}")
+    if isinstance(v, bool):
+        return int(v)
+    return v
 
 
 @dataclass(frozen=True)
@@ -29,6 +75,7 @@ class StrategyConfig:
     """전략 v0 수치 전부(설계 §2). 기본값 = 사전등록 A + 라이브 유니버스(ADV20 ≥ 50억).
 
     단위: 금액·거래대금은 백만원(``adv_floor``) — 가격은 원. 비율은 소수(0.05 = 5%).
+    ``None`` 인 문턱은 **끔**(그 조건이 없고 NaN 도 통과) — GA2 마스크(``ga_fast._mask_ga2_py``)와 같은 의미.
     """
 
     # --- 유니버스(korea.universe_mask 위생 + ADV 하한) ---
@@ -37,16 +84,25 @@ class StrategyConfig:
     min_price: float = 1_000.0          # 원자료 종가(daily_bars.close) 기준
     min_history: int = 252
 
+    # --- 추세 템플릿(GA2 4성분, 기본 = 원전 전체: close ≥ 0.75×252일 고가 ∧ ≥ 1.30×저가 ∧ MA 정렬 3 ∧ MA200 > 20일 전) ---
+    near_high: "float | None" = 0.75    # close ≥ x × 252일 장중 고가(당일 포함). None = 끔
+    above_low: "float | None" = 1.30    # close ≥ x × 252일 장중 저가. None = 끔
+    ma_stack: int = 3                   # close>MA50, MA50>MA150, MA150>MA200 중 참인 개수 ≥ k. 0 = 끔
+    ma200_slope_days: int = 20          # MA200 > MA200[t−k]. 0 = 끔 (단계 10/20/40)
+
     # --- 뼈대 S(sepa.PREREG_SKELETON) ---
-    rs_min: float = 70.0
-    breadth_min: float = 0.5            # 그 종목 시장의 MA50 위 비율 > 0.5
-    pivot_window: int = 50              # 피벗 = 직전 50일 최고 고가
-    vol_mult: float = 1.5               # 돌파일 거래량 ≥ 1.5 × 직전 50일 평균
+    rs_min: "float | None" = 70.0       # RS 등급 ≥. None = 끔
+    breadth_min: "float | None" = 0.5   # 그 종목 시장의 MA50 위 비율 >. None = 끔
+    pivot_window: int = 50              # 피벗 = 직전 w 일 최고 고가, 돌파 = 종가 > 피벗. 0 = 돌파 요구 없음(피벗은 50일)
+    vol_mult: "float | None" = 1.5      # 돌파일 거래량 ≥ x × 직전 w 일 평균(w = pivot_window, 0 이면 50). None = 끔
 
     # --- 확인 층 ---
-    pead_rank_min: float = 0.70         # PEAD 순위 ≥ 0.70 (모집단 = 그날 위생 ∧ ADV20 ≥ adv_floor)
-    rel_max: "float | None" = 1.0       # 상대 수렴 rel ≤ 1.0. None = 조건 끔(변형용)
-    require_flow: bool = True           # 수급 F = 1. False = 조건 끔(F 가 없는 2024-02-19 이전 백테스트 변형)
+    pead_rank_min: "float | None" = 0.70   # PEAD 순위 ≥ (모집단 = 그날 위생 ∧ ADV20 ≥ adv_floor). None = 끔
+    rel_max: "float | None" = 1.0       # 상대 수렴 rel ≤. None = 끔
+    require_flow: bool = True           # 수급 F = 1 (smart > 0 ∧ foreign > 0). 수급 유전자를 주면 False 로 바꾼다
+    smart_min: "float | None" = None    # smart_ratio_20 ≥ (GA 수급 유전자). None = 안 씀
+    foreign_pos: "bool | None" = None   # foreign_ratio_20 > 0 요구. None = 안 씀
+    persist_min: int = 0                # smart_pos_days_20 ≥. 0 = 안 씀
 
     # --- 상대 수렴 rel(CONVERGENCE.md 정의) ---
     rel_window: int = 10                # 분자: t−10..t−1 고저폭
@@ -54,38 +110,36 @@ class StrategyConfig:
     rel_min_periods: int = 120
     rel_gap: int = 11                   # 분모 창 끝 = t−11
 
+    # --- 실적 문(GA2.md 유전자 — 전부 기본 끔 = 현 동작 그대로) ---
+    #: 최신 분기 **주당** 순이익 YoY 하한 — GA 커널 정의: 순이익/주식수(분기 말 as-of, 분할 조정) 를 ``earnings_leg_panel`` 에 넣어
+    #: 계산(:func:`swing_it.live.features.eps_adjusted_earnings`). 주식수가 없는 분기는 순이익 YoY 로 대체(``eps_from_netinc``).
+    eps_yoy_min: "float | None" = None
+    eps_accel: bool = False             # 가속: 이번 분기 EPS YoY > 직전 분기 EPS YoY(둘 다 유한)
+    rev_yoy_min: "float | None" = None  # 매출 YoY 하한
+
+    # --- 뉴스 거부권(설계 §7, NEWS_VETO.md) ---
+    #: 신호 작업에서 후보의 최근 20거래일 악재(5일 ≥ 1 또는 20일 ≥ 2)를 거부한다(:mod:`swing_it.live.news_veto`). 모름은 거부 안 함.
+    #: 백테스트는 ``run_backtest(veto=패널)`` 로 과거 원장(2025-09~)에서만 적용한다. GA 는 거부권 없이 골랐다 — 인계 때 그대로 둔다.
+    news_veto: bool = True
+
     # --- 진입 체결(sepa 규약) ---
-    chase: float = 0.05                 # 지정가 상한 = 피벗 × 1.05 (= 백테스트 추격 금지)
+    chase: float = 0.05                 # 지정가 상한 = 피벗 × (1+chase) (= 백테스트 추격 금지). inf = 추격 금지 없음
     limit_up_ratio: float = 1.30 - LIMIT_UP_REL_TOL   # 분할조정 패널의 상한가 시가 판정(sepa.LIMIT_UP_RATIO)
 
-    # --- 청산(minervini_exits.PREREG_MINERVINI) ---
+    # --- 청산(minervini_exits.PREREG_MINERVINI + GA2 청산 유전자) ---
     contraction_window: int = 10        # 수축 저점 = min(low[t−10..t]) (돌파일 포함 11일)
     stop_mult: float = 0.99             # 손절 기준 = 수축 저점 × 0.99
     stop_floor: float = 0.03            # 손절폭 하한
     stop_cap: float = 0.10              # 손절폭 상한
-    take_r: float = 2.0                 # 절반 익절 = 진입가 × (1 + 2d)
+    take_r: float = 2.0                 # 절반 익절 = 진입가 × (1 + take_r·d). inf = 익절 없음(추적은 전량·1일째부터)
     partial_frac: float = 0.5           # 익절 비율(보유 수량 대비)
-    trail_ma: int = 50                  # 나머지 추적 MA
+    trail_ma: int = 50                  # 추적 MA(나머지 절반, 익절 없음이면 전량). 0 = 추적 없음
     #: 돌파 실패(설계 §6, 2026-10-10 사용자 지시 — 미너비니 원전): 절반 익절 전 어느 날이든 **종가 < 피벗**(돌파 기준가 =
-    #: 직전 50일 최고 고가, 계획의 ``pivot``) 이면 다음 거래일 시가에 전량 청산(MA50 추적과 같은 경로: d 종가 결정 → d+1 시가).
+    #: 직전 pivot_window 일 최고 고가, 계획의 ``pivot``) 이면 다음 거래일 시가에 전량 청산(MA50 추적과 같은 경로: d 종가 결정 → d+1 시가).
     failed_breakout: bool = True
     #: 시간 손절(20거래일째 종가 ≤ 진입가) — 설계 §6 으로 **폐지**(기본 None). 옛 프로토콜 재현용으로만 숫자를 준다.
     time_stop_days: "int | None" = None
     max_hold: int = 120                 # 최대 보유(진입일 = 1일째) — 안전 상한(신호 아님)
-
-    # --- 실적 문(GA2.md 유전자 — 전부 기본 끔 = 현 동작 그대로; GA2 가 고른 설정을 1:1 로 싣는다) ---
-    #: 최신 분기 **주당** 순이익 YoY 하한 = (netinc/주식수) / (netinc_prior/주식수_전년) − 1 (주식수 = PIT as-of). None = 끔.
-    #: 주식수가 없는 종목-일은 순이익 YoY 로 대체(``eps_from_netinc`` 플래그).
-    eps_yoy_min: "float | None" = None
-    #: 가속: 이번 분기 YoY > 직전 분기 YoY(둘 다 유한). False = 끔.
-    eps_accel: bool = False
-    #: 매출 YoY 하한. None = 끔.
-    rev_yoy_min: "float | None" = None
-
-    # --- 뉴스 거부권(설계 §7, NEWS_VETO.md) ---
-    #: 신호 작업에서 후보의 최근 20거래일 악재(5일 ≥ 1 또는 20일 ≥ 2)를 거부한다(:mod:`swing_it.live.news_veto`). 모름은 거부 안 함.
-    #: 백테스트는 ``run_backtest(veto=패널)`` 로 과거 원장(2025-09~)에서만 적용한다.
-    news_veto: bool = True
 
     # --- 백테스트 체결 모형(라이브 주문엔 쓰지 않는다) ---
     #: 손절·본전 체결 미끄러짐(bp). 일봉 백테스트는 손절가·진입가에 정확히 판다고 보지만, 라이브는 60초 REST 폴링으로
@@ -97,13 +151,97 @@ class StrategyConfig:
     # --- 사이징(설계 §2) ---
     #: 주수 = floor(min(risk × 자산 / (기준가 × d_est), max_position_frac × 자산 / 기준가)). **d_est ≤ stop_cap = 10% 이므로
     #: 위험 1% 항은 늘 10% 상한보다 크다 — 실질 사이징은 "종목당 자산 10% 고정, 손절 폭 d(거의 10%)" 다(REVIEW_BACKTEST M5).
-    #: 위험 항은 stop_cap 을 올리거나 risk 를 낮추는 변형에서만 묶인다. 코드는 두 항을 그대로 둔다.
+    #: 위험 항은 stop_cap 을 올리거나 risk 를 낮추는 변형에서만 묶인다. GA 포트폴리오 적합도는 종목당 10% 고정이라
+    #: :meth:`from_genes` 는 ``risk_per_trade = max_position_frac`` 로 둬서(위험 항이 절대 묶이지 않게) 사이징을 맞춘다.
     risk_per_trade: float = 0.01        # 위험 = 자산 × 1% (현 수치에선 묶이지 않는다)
     max_position_frac: float = 0.10     # 종목당 자산 10% 상한 (실질 사이징)
     max_positions: int = 10             # 최대 동시 보유 종목
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    # --- GA2 유전자 ↔ 설정 ---
+    @property
+    def partial_on(self) -> bool:
+        return math.isfinite(self.take_r)
+
+    @property
+    def has_trail(self) -> bool:
+        return self.trail_ma > 0
+
+    @property
+    def effective_pivot_window(self) -> int:
+        """피벗·거래량 평균 창 — 돌파 요구가 없으면(0) 50일(GA 커널 ``v_col = 3``·``w_idx = W50`` 과 같다)."""
+        return self.pivot_window if self.pivot_window > 0 else 50
+
+    @classmethod
+    def from_genes(cls, genes: dict, *, base: "StrategyConfig | None" = None) -> "StrategyConfig":
+        """GA2 유전자 dict(``live_candidate.json`` 의 ``genes``/``config``) → 설정. **모르는 유전자·허용 밖 단계는 예외**(조용히 무시 금지).
+
+        19개 유전자 전부 있어야 한다. 수급 유전자 3개는 선택(하나라도 있으면 셋 다 있어야 하고 ``require_flow=False``).
+        ``base`` 위에 덮는다(기본 :data:`DEFAULT_STRATEGY` — 유니버스·rel 창·수축 창·사이징·거부권은 유전자 밖 고정값).
+        사이징: ``risk_per_trade = max_position_frac`` (GA 포트폴리오 적합도의 슬롯 10% 고정과 같게 — 위험 항이 안 묶인다).
+        """
+        base = DEFAULT_STRATEGY if base is None else base
+        unknown = set(genes) - set(GENE_FIELDS) - set(FLOW_GENE_FIELDS)
+        if unknown:
+            raise ValueError(f"대응 없는 유전자: {sorted(unknown)}")
+        missing = set(GENE_FIELDS) - set(genes)
+        if missing:
+            raise ValueError(f"빠진 유전자: {sorted(missing)}")
+        flow_given = set(genes) & set(FLOW_GENE_FIELDS)
+        if flow_given and flow_given != set(FLOW_GENE_FIELDS):
+            raise ValueError(f"수급 유전자는 셋 다 있어야 한다: 있음 {sorted(flow_given)}")
+        kw: dict = {}
+        for gene, fld in {**GENE_FIELDS, **FLOW_GENE_FIELDS}.items():
+            if gene not in genes:
+                continue
+            v = _num(gene, genes[gene])
+            if gene in GENE_LEVELS:
+                if v is None or v not in GENE_LEVELS[gene]:
+                    raise ValueError(f"유전자 {gene}: 허용 단계 {GENE_LEVELS[gene]} 밖 {genes[gene]!r}")
+                if gene in ("eps_accel", "failed_breakout", "foreign_pos"):
+                    v = bool(v)
+                elif gene in ("ma_stack", "ma200_slope_days", "pivot_window", "trail_ma", "max_hold", "persist_min"):
+                    v = int(v)
+                else:
+                    v = float(v)
+            elif gene in GENE_RANGES:
+                if v is not None:
+                    lo, hi = GENE_RANGES[gene]
+                    if not (lo - 1e-9 <= float(v) <= hi + 1e-9):
+                        raise ValueError(f"유전자 {gene}: 범위 [{lo}, {hi}] 밖 {v!r}")
+                    v = float(v)
+            else:
+                raise ValueError(f"유전자 {gene}: 단계·범위 정의가 없다")
+            kw[fld] = v
+        if flow_given:
+            kw["require_flow"] = False
+        kw["risk_per_trade"] = base.max_position_frac
+        from dataclasses import replace  # noqa: PLC0415
+
+        return replace(base, **kw)
+
+    def to_genes(self, *, flow: "bool | None" = None) -> dict:
+        """설정 → GA2 유전자 dict(:meth:`from_genes` 의 역 — 왕복 동일). ``flow`` None 이면 수급 유전자가 설정돼 있을 때만 넣는다."""
+        out: dict = {}
+        for gene, fld in GENE_FIELDS.items():
+            v = getattr(self, fld)
+            out[gene] = int(v) if gene in ("eps_accel", "failed_breakout") else v
+        use_flow = (self.smart_min is not None or self.foreign_pos is not None or self.persist_min) if flow is None \
+            else flow
+        if use_flow:
+            out["smart_min"] = self.smart_min
+            out["foreign_pos"] = int(bool(self.foreign_pos))
+            out["persist_min"] = int(self.persist_min)
+        return out
+
+    def describe_genes(self) -> list[tuple[str, str, object]]:
+        """(유전자, 필드, 값) 표 — 리포트용."""
+        return [(g, f, getattr(self, f)) for g, f in {**GENE_FIELDS, **FLOW_GENE_FIELDS}.items()]
+
+
+FIELD_NAMES = tuple(f.name for f in fields(StrategyConfig))
 
 
 @dataclass(frozen=True)

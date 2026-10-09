@@ -9,7 +9,8 @@
 
 - ``universe``: ``korea.universe_mask(raw_close=daily_bars.close, adv_floor=cfg.adv_floor)`` — 위생 ∧ ADV20 ≥ 50억.
   연구 CONVERGENCE 의 H5(PEAD 순위 모집단 = U_s ∪ main)와 같은 마스크다.
-- ``tt``·``rs``·``breakout``·``pivot``·``breadth``·``ma50``: ``sepa.skeleton_features`` 와 같은 호출(minervini 모듈).
+- ``tt``·``rs``·``breakout``·``pivot``·``breadth``·``ma50``: 기본 cfg 에서 ``sepa.skeleton_features`` 와 같은 값(테스트가 못박는다);
+  cfg 가 바뀌면 GA2 유전자 의미(:func:`trend_mask`·:func:`breakout_mask`, ``trail_ma=0`` → ``ma50`` NaN)를 따른다.
   RS·breadth 모집단은 가격 패널 전 종목(시장 구분 = ``stocks``+``delisted_stocks``, ``sepa._market_of`` 와 같은 매핑).
 - ``pead_rank``: ``earnings_leg_panel`` → ``pead_rank(eligible = 그날 universe)`` (``convergence_run.repoint_pead``).
 - ``rel``: (t−10..t−1 고가 최대 / 저가 최소 − 1) ÷ 그 값의 t−260..t−11 이동 중앙값(≥120개) — ``convergence_run.
@@ -17,7 +18,10 @@
 - ``F``: ``flow_leg(weight=거래대금)`` 의 F(1/0/NaN).
 - ``contraction_low``: ``min(low[t−10..t])`` (``minervini_exits.contraction_low_level``).
 - ``adv20``: 20일 평균 거래대금(백만원).
-- ``eps_yoy``·``accel``·``rev_yoy``·``eps_from_netinc``: 실적 문(GA2 유전자, 기본 끔) — :func:`earnings_panels`.
+- ``eps_yoy``·``accel``·``rev_yoy``·``eps_from_netinc``: 실적 문(GA2 유전자, 기본 끔) — :func:`earnings_panels_ga` (GA 커널 정의:
+  분기 말 as-of 분할 조정 주식수, :func:`eps_adjusted_earnings`).
+- ``nh``·``al``·``stack``·``slope10/20/40``: 추세 성분(:func:`trend_components`) — ``tt`` 는 cfg 의 4성분(:func:`trend_mask`).
+- ``smart``·``foreign``·``persist``: 수급 유전자용(``flow_leg`` 의 smart_ratio_20·foreign_ratio_20·smart_pos_days_20).
 
 **그날치(라이브):** :func:`signal_panels_for` 는 신호일까지 :data:`LOOKBACK_ROWS` 거래일만 쓴다. 필요한 최장 이력은 rel
 분모(t−270 행)·RS(252일 수익률)·52주 고저(252행)·MA200 기울기(220행)다 — 300행이면 그날 값이 전 기간 패널과 같다.
@@ -40,7 +44,7 @@ import pandas as pd
 from swing_it.features.earnings_leg import earnings_leg_panel, pead_rank
 from swing_it.features.flow_leg import flow_leg
 from swing_it.features.korea import load_listing_meta, universe_mask
-from swing_it.features.minervini import breadth, pivot_breakout, rs_rating, trend_template
+from swing_it.features.minervini import breadth, pivot_level, rs_rating
 from swing_it.features.technical import average_trade_value, moving_average
 from swing_it.live.config import DEFAULT_STRATEGY, StrategyConfig
 
@@ -118,22 +122,6 @@ def contraction_low(low: pd.DataFrame, window: int = 10) -> pd.DataFrame:
     return low.rolling(window + 1, min_periods=window + 1).min()
 
 
-def shares_pit(shares: "pd.DataFrame | None", at: pd.DatetimeIndex, codes: pd.Index) -> "pd.DataFrame | None":
-    """``shares_outstanding_history`` → ``at`` 날짜×종목 PIT 주식수. 가용일 = max(기준일, 공시일 ``knowledge_date``), 그 뒤
-    이월(as-of). ``at`` 은 아무 날짜 집합이어도 된다(전년 동일 날짜 등)."""
-    if shares is None or shares.empty:
-        return None
-    sh = shares.copy()
-    avail = pd.to_datetime(sh["date"])
-    if "knowledge_date" in sh.columns:
-        avail = pd.concat([avail, pd.to_datetime(sh["knowledge_date"], errors="coerce")], axis=1).max(axis=1)
-    sh["avail"] = avail
-    sh = sh.sort_values(["avail", "date"])
-    w = sh.pivot_table(index="avail", columns="code", values="shares_outstanding", aggfunc="last").reindex(columns=codes)
-    at = pd.DatetimeIndex(at)
-    return w.reindex(w.index.union(at)).sort_index().ffill().reindex(at).astype(float)
-
-
 def _long_to_wide(earn_long: pd.DataFrame, col: str, days: pd.DatetimeIndex, codes: pd.Index) -> pd.DataFrame:
     di = days.get_indexer(pd.to_datetime(earn_long["date"]))
     ci = codes.get_indexer(earn_long["code"])
@@ -144,34 +132,114 @@ def _long_to_wide(earn_long: pd.DataFrame, col: str, days: pd.DatetimeIndex, cod
     return pd.DataFrame(out, index=days, columns=codes)
 
 
-def earnings_panels(earn_long: pd.DataFrame, days: pd.DatetimeIndex, codes: pd.Index,
-                    shares: "pd.DataFrame | None" = None) -> dict:
-    """실적 문 패널(GA2.md 유전자 정의) — ``eps_yoy`` · ``accel`` · ``rev_yoy`` · ``eps_from_netinc``(날짜×종목).
+def trend_components(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame) -> dict:
+    """GA2 추세 성분(``ga_run`` 사전계산과 같은 식): ``nh`` = close / 252일 장중 고가(당일 포함, 창 꽉 찬 날만), ``al`` = close /
+    252일 저가, ``stack`` = (close>MA50)+(MA50>MA150)+(MA150>MA200) 참 개수(NaN 비교 = 거짓), ``slope{10,20,40}`` = MA200 >
+    MA200[t−k] (bool). 원전 템플릿(:func:`trend_template`) = nh ≥ 0.75 ∧ al ≥ 1.30 ∧ stack ≥ 3 ∧ slope20."""
+    hi = high.rolling(252, min_periods=252).max()
+    lo = low.rolling(252, min_periods=252).min()
+    ma50, ma150, ma200 = (moving_average(close, w) for w in (50, 150, 200))
+    out = {"nh": close / hi, "al": close / lo,
+           "stack": ((close > ma50).astype(int) + (ma50 > ma150).astype(int) + (ma150 > ma200).astype(int))}
+    for k in (10, 20, 40):
+        out[f"slope{k}"] = ma200 > ma200.shift(k)
+    return out
 
-    - ``eps_yoy`` = (netinc / 주식수_d) / (netinc_prior / 주식수_{d−1년}) − 1 = (netinc / netinc_prior) × (주식수_{d−1년} /
-      주식수_d) − 1. 주식수는 PIT(:func:`shares_pit`), 전년 = d − 365 역일의 as-of 값. 둘 중 하나라도 없거나 0 이면 순이익
-      YoY(``yoy``)로 대체하고 ``eps_from_netinc = 1``. ``netinc_prior`` 가 0 이면 NaN(yoy 도 NaN 이라 행이 없다).
-    - ``accel`` = ``yoy > yoy_prev`` (둘 다 유한) → 1/0, 모르면 NaN. ``rev_yoy`` = 매출 YoY.
-    모두 ``d`` 행 = 그날 알던 최신 분기(``earnings_leg_panel`` 의 이중 시간축).
+
+def trend_mask(tc: dict, cfg: StrategyConfig = DEFAULT_STRATEGY) -> pd.DataFrame:
+    """cfg 의 4성분으로 만든 추세 템플릿 bool 패널(끔 = 조건 없음, NaN 통과). 기본 cfg 면 :func:`trend_template` 과 같다."""
+    like = tc["stack"]
+    ok = pd.DataFrame(True, index=like.index, columns=like.columns)
+    if cfg.near_high is not None:
+        ok &= (tc["nh"] >= cfg.near_high).fillna(False)
+    if cfg.above_low is not None:
+        ok &= (tc["al"] >= cfg.above_low).fillna(False)
+    if cfg.ma_stack > 0:
+        ok &= tc["stack"] >= cfg.ma_stack
+    if cfg.ma200_slope_days > 0:
+        if cfg.ma200_slope_days not in (10, 20, 40):
+            raise ValueError(f"ma200_slope_days 는 10/20/40 중 하나: {cfg.ma200_slope_days}")
+        ok &= tc[f"slope{cfg.ma200_slope_days}"].fillna(False)
+    return ok
+
+
+def breakout_mask(high: pd.DataFrame, close: pd.DataFrame, volume: pd.DataFrame, cfg: StrategyConfig = DEFAULT_STRATEGY
+                  ) -> "tuple[pd.DataFrame, pd.DataFrame]":
+    """cfg 의 돌파·거래량 조건 → ``(breakout bool, pivot)``. 피벗·거래량 평균 창 = ``cfg.effective_pivot_window``(돌파 요구 없음이면
+    50일 — GA 커널과 같다). ``pivot_window=0`` 이면 돌파 조건 없음, ``vol_mult=None`` 이면 거래량 조건 없음(둘 다 끔 = 전부 참).
+    거래량 조건은 ``vavg > 0 ∧ vol ≥ x·vavg`` (:func:`pivot_breakout`·GA 마스크 모두 같다)."""
+    w = cfg.effective_pivot_window
+    pivot = pivot_level(high, w)
+    ok = pd.DataFrame(True, index=close.index, columns=close.columns)
+    if cfg.pivot_window > 0:
+        ok &= (close > pivot).fillna(False)
+    if cfg.vol_mult is not None:
+        vavg = volume.shift(1).rolling(w, min_periods=w).mean()
+        ok &= ((vavg > 0) & (volume >= cfg.vol_mult * vavg)).fillna(False)
+    return ok, pivot
+
+
+def eps_adjusted_earnings(ea: pd.DataFrame, shares: "pd.DataFrame | None", adj_close: pd.DataFrame,
+                          raw_close: pd.DataFrame) -> pd.DataFrame:
+    """GA 커널(``ga_run.eps_features``)과 **같은 식**으로 순이익 자리에 EPS 를 넣은 실적 프레임.
+
+    주식수 = ``shares_outstanding_history`` 를 그 날짜 직전 거래일의 조정계수(조정 종가 / 원 종가)로 나눈 값(분할 조정)의
+    **분기 말 as-of**(이번 분기 말·전년 같은 분기 말). 둘 다 있으면 ``netinc/주식수``·``netinc_prior/주식수_전년``, 아니면 순이익
+    그대로. ``op_income`` 자리에 표시(2.0/1.0 → ``op_yoy`` 1 = EPS, 0 = 순이익 대체)를 넣는 트릭까지 같다 — 그래서
+    ``earnings_leg_panel(결과)`` 의 ``yoy``·``yoy_prev``·``rev_yoy``·``op_yoy`` 가 GA 의 ``eps_yoy``·가속·``rev_yoy``·``eps_ni`` 다.
+    (분기 말 주식수는 그 분기 보고서와 함께 알려지므로 실적 가용일 기준 시점 안전 — GA 의 가정 그대로.)
     """
-    yoy = _long_to_wide(earn_long, "yoy", days, codes)
-    netinc = _long_to_wide(earn_long, "netinc", days, codes)
-    prior = _long_to_wide(earn_long, "netinc_prior", days, codes)
-    prev = _long_to_wide(earn_long, "yoy_prev", days, codes)
-    rev = _long_to_wide(earn_long, "rev_yoy", days, codes)
-    sp = shares_pit(shares, days, codes)
-    eps = yoy.copy()
-    from_netinc = pd.DataFrame(1.0, index=days, columns=codes).where(yoy.notna())
-    if sp is not None:
-        sp_prev = shares_pit(shares, days - pd.Timedelta(days=365), codes)
-        sp_prev.index = days
-        with np.errstate(invalid="ignore", divide="ignore"):
-            ratio = (netinc / prior.where(prior != 0)) * (sp_prev / sp.where(sp > 0))
-        ok = ratio.notna() & (sp_prev > 0) & yoy.notna()
-        eps = eps.where(~ok, ratio - 1.0)
-        from_netinc = from_netinc.where(~ok, 0.0)
-    accel = ((yoy > prev) & yoy.notna() & prev.notna()).astype(float).where(yoy.notna() & prev.notna())
-    return {"eps_yoy": eps, "accel": accel, "rev_yoy": rev, "eps_from_netinc": from_netinc}
+    ea = ea.copy()
+    ea["code"] = ea["code"].astype(str)
+    if shares is None or shares.empty:
+        now = prev = np.full(len(ea), np.nan)
+    else:
+        sh = shares[["code", "date", "shares_outstanding"]].copy()
+        sh["code"] = sh["code"].astype(str)
+        sh["date"] = pd.to_datetime(sh["date"]).astype("datetime64[ns]")
+        sh = sh[sh["shares_outstanding"] > 0]
+        fac = (adj_close / raw_close.reindex_like(adj_close)).ffill()
+        ci_s = fac.columns.get_indexer(sh["code"])
+        di_s = fac.index.searchsorted(sh["date"], "right") - 1
+        ok = (ci_s >= 0) & (di_s >= 0)
+        f = np.full(len(sh), np.nan)
+        f[ok] = fac.to_numpy()[di_s[ok], ci_s[ok]]
+        sh["sh_adj"] = sh["shares_outstanding"] / f
+        sh = sh[np.isfinite(sh["sh_adj"]) & (sh["sh_adj"] > 0)].sort_values(["date", "code"])
+        q = ea["period"].astype(str)
+        pe = (pd.to_datetime(q.str[:4] + "-" + (q.str[5].astype(int) * 3).astype(str).str.zfill(2) + "-01")
+              + pd.offsets.MonthEnd(0)).astype("datetime64[ns]")
+        tmp = ea.assign(_pe=pe, _pe0=(pe - pd.DateOffset(years=1)).astype("datetime64[ns]"), _row=np.arange(len(ea)))
+        got = {}
+        for col, key in (("_pe", "now"), ("_pe0", "prev")):
+            m = pd.merge_asof(tmp[["code", col, "_row"]].sort_values(col).rename(columns={col: "date"}),
+                              sh[["code", "date", "sh_adj"]], on="date", by="code", direction="backward")
+            got[key] = m.sort_values("_row")["sh_adj"].to_numpy()
+        now, prev = got["now"], got["prev"]
+    have = np.isfinite(now) & np.isfinite(prev)
+    out = ea[["code", "period", "avail_date", "knowledge_date", "revenue", "revenue_prior"]].copy()
+    out["netinc"] = np.where(have, ea["netinc"].to_numpy(float) / np.where(have, now, 1.0), ea["netinc"].to_numpy(float))
+    out["netinc_prior"] = np.where(have, ea["netinc_prior"].to_numpy(float) / np.where(have, prev, 1.0),
+                                   ea["netinc_prior"].to_numpy(float))
+    out["op_income"] = np.where(have, 2.0, 1.0)
+    out["op_income_prior"] = 1.0
+    return out
+
+
+def earnings_panels_ga(ea: pd.DataFrame, shares: "pd.DataFrame | None", adj_close: pd.DataFrame, raw_close: pd.DataFrame,
+                       days: pd.DatetimeIndex, codes: pd.Index) -> dict:
+    """실적 문 패널(GA 커널 정의) — ``eps_yoy`` · ``accel`` · ``rev_yoy`` · ``eps_from_netinc``(날짜×종목).
+    :func:`eps_adjusted_earnings` → ``earnings_leg_panel`` → 넓은 패널. 가속 = ``accel_flag``(NaN → 0, GA 와 같다), 실적 행 없음 = NaN."""
+    from swing_it.features.earnings_leg import accel_flag  # noqa: PLC0415
+
+    ep = earnings_leg_panel(eps_adjusted_earnings(ea, shares, adj_close, raw_close),
+                            [d.strftime("%Y-%m-%d") for d in days])
+    if ep.empty:
+        nan = pd.DataFrame(np.nan, index=days, columns=codes)
+        return {"eps_yoy": nan, "accel": nan.copy(), "rev_yoy": nan.copy(), "eps_from_netinc": nan.copy()}
+    ep = ep.assign(accel=accel_flag(ep).astype(float), eps_from_netinc=(ep["op_yoy"] == 0).astype(float))
+    ep = ep.rename(columns={"yoy": "eps_yoy"})
+    return {k: _long_to_wide(ep, k, days, codes) for k in ("eps_yoy", "accel", "rev_yoy", "eps_from_netinc")}
 
 
 def pead_rank_panel(earn_long: pd.DataFrame, universe: pd.DataFrame) -> pd.DataFrame:
@@ -208,13 +276,17 @@ def build_signal_panels(inp: RawInputs, cfg: StrategyConfig = DEFAULT_STRATEGY, 
     uni = universe_mask(c, tv, inp.meta, raw_close=inp.raw_close, adv_floor=cfg.adv_floor,
                         adv_window=cfg.adv_window, min_price=cfg.min_price, min_history=cfg.min_history)
     log("universe")
-    brk, pivot = pivot_breakout(h, c, v, window=cfg.pivot_window, vol_mult=cfg.vol_mult)
+    brk, pivot = breakout_mask(h, c, v, cfg)
+    tc = trend_components(c, h, lo)
+    nan_ma = pd.DataFrame(np.nan, index=c.index, columns=c.columns)
     out = {
         "open": inp.open, "high": h, "low": lo, "close": c, "volume": v,
         "market": inp.market,
         "universe": uni,
-        "ma50": moving_average(c, cfg.trail_ma),
-        "tt": trend_template(c, high=h, low=lo),
+        "ma50": moving_average(c, cfg.trail_ma) if cfg.has_trail else nan_ma,   # trail_ma = 0 → 추적 없음(NaN)
+        "tt": trend_mask(tc, cfg),
+        "nh": tc["nh"], "al": tc["al"], "stack": tc["stack"],
+        **{f"slope{k}": tc[f"slope{k}"] for k in (10, 20, 40)},
         "rs": rs_rating(c),
         "breakout": brk,
         "pivot": pivot,
@@ -227,10 +299,12 @@ def build_signal_panels(inp: RawInputs, cfg: StrategyConfig = DEFAULT_STRATEGY, 
     log("rel")
     fl = flow_leg(inp.supply, index=inp.days, columns=c.columns, weight=tv)
     out["F"] = fl["F"]
+    out["smart"], out["foreign"] = fl["smart_ratio_20"], fl["foreign_ratio_20"]
+    out["persist"] = fl["smart_pos_days_20"]
     log("flow")
     ep = earnings_leg_panel(inp.earnings, [d.strftime("%Y-%m-%d") for d in inp.days])
     out["pead_rank"] = pead_rank_panel(ep, uni)
-    out.update(earnings_panels(ep, inp.days, c.columns, inp.shares))
+    out.update(earnings_panels_ga(inp.earnings, inp.shares, c, inp.raw_close, inp.days, c.columns))
     log("pead")
     return out
 

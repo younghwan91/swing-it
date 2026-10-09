@@ -73,3 +73,18 @@ def test_default_table_is_split_adjusted():
     """백테스트가 원자료를 읽으면 액면분할이 수익률로 둔갑한다."""
     from swing_it.storage import PRICE_TABLE
     assert PRICE_TABLE == "daily_bars_adjusted"
+
+
+def test_read_prices_wide_sqlite_fallback_pivots_and_checks(tmp_path):
+    """와이드판 정문(sqlite 폴백) — 같은 폐지 검사, 날짜×종목 패널 반환."""
+    from swing_it.storage import read_prices_wide
+
+    con = connect(tmp_path / "t.db")
+    _seed(con, [_row("000020", "2020-01-02", "kiwoom"), _row("000030", "2020-01-02", "naver"),
+                _row("000020", "2020-01-03", "kiwoom")])
+    panels = read_prices_wide(con, cols=("close", "volume"))
+    assert set(panels) == {"close", "volume"}
+    assert list(panels["close"].columns) == ["000020", "000030"]
+    assert panels["close"].shape == (2, 2)
+    assert panels["close"].loc["2020-01-03", "000030"] != panels["close"].loc["2020-01-03", "000030"]  # NaN
+    con.close()

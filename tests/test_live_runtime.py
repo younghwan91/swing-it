@@ -11,6 +11,8 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import json
+
 import pandas as pd
 import pytest
 from krx_quant_core.execution.events import Fill, Holding, OpenOrder
@@ -58,6 +60,7 @@ class FakeSignals:
     def __init__(self) -> None:
         self.batches: dict[date, SignalBatch] = {}
         self.trail: dict[str, list[float]] = {}
+        self.bars: dict[str, dict[str, list[float]]] = {}      # 코드 → {ISO 날짜: [o,h,l,c]} (없는 날은 평평한 봉 c,c,c,c)
         self.calls: list[date] = []
 
     def load(self, asof, *, held, since=None):
@@ -75,6 +78,9 @@ class FakeSignals:
         for c, closes in b.trail_closes.items():   # 날짜: data_date 로 끝나는 연속 거래일(SESSIONS 와 같은 평일)
             if c not in b.trail_dates:
                 b.trail_dates[c] = [str(x.date()) for x in pd.bdate_range(end=b.data_date, periods=len(closes))]
+            if c not in b.bars:                     # 일봉: 지정한 날만 o/h/l/c, 나머지는 평평한 봉(손절·익절 안 걸림)
+                ov = self.bars.get(c, {})
+                b.bars[c] = [list(ov.get(dt, [cl, cl, cl, cl])) for dt, cl in zip(b.trail_dates[c], closes, strict=True)]
         return b
 
 
@@ -993,19 +999,28 @@ def test_vetoed_candidate_becomes_shadow_position_without_orders(tmp_path):
     assert store.load_shadow_book(st).position("VVVVVV").qty == 100
     assert env.book().positions().keys() == {"AAAAAA"}                                 # 실장부와 섞이지 않는다
     assert [e["event"] for e in store.shadow_events()] == ["shadow_planned", "shadow_fill"]
-    # 15:40: 일중 저가가 손절가 아래 → 섀도 손절(비용 포함 순손익), 실포지션은 그대로
+    # 15:40 eod 는 섀도를 건드리지 않는다(통합 검토 M5: 실포지션과 같은 다음날 DB 보정 일봉으로 판단)
     env.q("VVVVVV", 9_500, open=10_100, high=10_200, low=9_100, prev_close=10_000)
     env.q("AAAAAA", 10_400, open=10_100, high=10_450, low=10_050, prev_close=10_000)
     assert env.run("close", D1, "15:21") == 0
     assert env.run("eod", D1, "15:40") == 0
+    assert env.state().shadow["VVVVVV"].status == "open" and env.state().shadow["VVVVVV"].qty == 100
+    # D2 07:35 signal: D1 DB 일봉 저가 9,100 ≤ 손절 → 섀도 손절(비용 포함 순손익), 실포지션은 그대로(저가 10,050 > 손절)
+    env.signals.trail["VVVVVV"] = [9_000.0] * 49 + [9_500.0]
+    env.signals.bars["VVVVVV"] = {D1.isoformat(): [10_100, 10_200, 9_100, 9_500]}
+    env.signals.trail["AAAAAA"] = [9_000.0] * 49 + [10_400.0]
+    env.signals.bars["AAAAAA"] = {D1.isoformat(): [10_100, 10_450, 10_050, 10_400]}
+    assert env.run("signal", D2, "07:35") == 0
     st = env.state()
     assert "VVVVVV" not in st.shadow
     [h] = st.shadow_history
     assert h.exit_reason == "stop" and h.status == "closed" and h.realized < 0 and h.qty == 0
+    assert h.cfg_hash and h.cfg["trail_ma"] == 50                          # 계획 시점 설정이 고정돼 있다(M3)
     assert st.positions["AAAAAA"].status == "open"
     assert store.load_shadow_book(st).positions() == {} and env.book().position("AAAAAA").qty == 100
     close_ev = [e for e in store.shadow_events() if e["event"] == "shadow_close"]
     assert close_ev and close_ev[0]["reason"] == "stop" and close_ev[0]["veto"]["neg5"] == 1
+    assert [e["price"] for e in store.shadow_events() if e["event"] == "shadow_fill" and e["side"] == "sell"] == [9_207]
 
 
 def test_shadow_trail_next_open_and_missed(tmp_path):
@@ -1023,13 +1038,15 @@ def test_shadow_trail_next_open_and_missed(tmp_path):
     st = env.state()
     assert st.shadow["VVVVVV"].status == "open" and "WWWWWW" not in st.shadow
     assert [p.status for p in st.shadow_history] == ["missed"]
-    # 15:40: 고가 ≥ 목표 → 절반 익절; 종가 < MA50 → 다음날 시가 매도 의도
     env.q("VVVVVV", 11_500, open=10_100, high=11_950, low=10_050, prev_close=10_000)
     env.run("eod", D1, "15:40")
-    sh = env.state().shadow["VVVVVV"]
-    assert sh.qty == 50 and sh.partial_done and sh.exit_intent["kind"] == "trail_next_open"
+    # D2 signal: D1 DB 일봉 고가 ≥ 목표 → 절반 익절(목표가); 종가 11,500 < MA50 → 다음날 시가 매도 의도
+    env.signals.trail["VVVVVV"] = [11_800.0] * 49 + [11_500.0]
+    env.signals.bars["VVVVVV"] = {D1.isoformat(): [10_100, 11_950, 10_050, 11_500]}
     env.q("VVVVVV", 11_200, open=11_300, prev_close=11_500)
     env.run("signal", D2, "07:35")
+    sh = env.state().shadow["VVVVVV"]
+    assert sh.qty == 50 and sh.partial_done and sh.exit_intent["kind"] == "trail_next_open"
     env.run("preopen", D2, "08:35")
     env.run("open_check", D2, "09:02")
     st = env.state()
@@ -1053,7 +1070,9 @@ def test_shadow_not_created_when_code_is_a_real_position_and_live_mode_places_no
     env.run("open_check", D1, "09:02")
     assert env.state().shadow["VVVVVV"].status == "open" and fk.submitted == [] and fk.holdings() == {}
     _eod(env, D1, {"VVVVVV": 10_200})
-    env.signals.batches[D2] = _veto_batch(["VVVVVV"], d=D1)                       # 다시 거부돼도 이미 추적 중 → 중복 없음
+    b = _veto_batch(["VVVVVV"], d=D1)                                             # 다시 거부돼도 이미 추적 중 → 중복 없음
+    b.trail_closes["VVVVVV"] = [9_000.0] * 49 + [10_200.0]
+    env.signals.batches[D2] = b
     env.run("signal", D2, "07:35")
     assert len(env.state().shadow) == 1 and env.state().last_signal["shadow_planned"] == 0
 
@@ -1063,7 +1082,8 @@ def test_status_prints_shadow_vs_real_line(tmp_path, capsys):
     from swing_it.live.state import LiveState
 
     st = LiveState(mode="paper", capital=1e7)
-    assert shadow_vs_real_line(st).endswith("n=0 | 진입군(실제) n=0")
+    line0 = shadow_vs_real_line(st)
+    assert line0.endswith("n=0 | 진입군(실제, 거부권 시작 이후) n=0") and "사전등록 지표(정합 초과) 아님" in line0
 
     def rec(code, realized, reason):
         return PositionRec(code=code, market="KOSPI", signal_date="2026-10-09", trade_date="2026-10-12",
@@ -1073,7 +1093,10 @@ def test_status_prints_shadow_vs_real_line(tmp_path, capsys):
     st.history = [rec("A1", 150_000, "trail_next_open"), rec("A2", -70_000, "stop"), rec("A3", 50_000, "max_hold")]
     line = shadow_vs_real_line(st)
     assert "거부군(섀도) n=2 평균순수익=-3.00% 손절률=50%" in line
-    assert "진입군(실제) n=3 평균순수익=+4.33% 손절률=33%" in line and "합격 바 충족(거부 2/30건)" in line
+    assert "진입군(실제, 거부권 시작 이후) n=3 평균순수익=+4.33% 손절률=33%" in line and "합격 바 충족(거부 2/30건)" in line
+    st.history.append(rec("A0", 9_999_999, "max_hold"))
+    st.history[-1].signal_date = "2026-01-02"                                  # 거부권 시작 전 포지션은 비교에서 뺀다(m10)
+    assert "진입군(실제, 거부권 시작 이후) n=3" in shadow_vs_real_line(st)
     env = Env(tmp_path)
     StateStore(env.cfg.mode_dir, clock=env.clock).save(st)
     assert env.run("status", D1, "10:00") == 0
@@ -1131,3 +1154,312 @@ def test_signal_forwards_source_alerts(tmp_path):
     env.signals.batches[D1] = SignalBatch(data_date=SIGNAL_D, candidates=[], alerts=["뉴스 거부권: 키 없음 — 모름"])
     env.run("signal", D1, "07:35")
     assert any(a[0] == "warn" and "신호 원천 경고" in a[1] and "키 없음" in a[2] for a in env.alerts)
+
+
+# --------------------------------------------------------------------------- 통합 검토 M1~M5
+
+
+def test_open_positions_keep_pinned_config_after_refit(tmp_path):
+    """M3: 열린 포지션은 계획 시점 설정으로 청산한다. 재적합(max_hold 3→120, trail_ma 50→20)은 신규 계획에만."""
+    env = Env(tmp_path, strategy=replace(DEFAULT_STRATEGY, max_hold=3))
+    _enter(env, {"AAAAAA": {}})
+    st = env.state()
+    old_hash = st.positions["AAAAAA"].cfg_hash
+    assert old_hash and st.positions["AAAAAA"].cfg["max_hold"] == 3 and st.config_hash == old_hash
+    assert all(e.get("cfg") == old_hash[:8] for e in env.events("signal"))
+    _eod(env, D1, {"AAAAAA": 10_000})
+    env.strategy = replace(DEFAULT_STRATEGY, max_hold=120, trail_ma=20)         # 재적합: 다음 작업부터 전역 설정이 바뀐다
+    env.q("AAAAAA", 10_000, prev_close=10_000)
+    env.signals.batches[D2] = SignalBatch(data_date=D1, candidates=[cand("BBBBBB", d=D1)])
+    env.q("BBBBBB", 10_000, prev_close=10_000)
+    assert env.run("signal", D2, "07:35") == 0
+    st = env.state()
+    new_hash = st.positions["BBBBBB"].cfg_hash
+    assert new_hash != old_hash and st.positions["BBBBBB"].cfg["max_hold"] == 120 and st.config_hash == new_hash
+    assert st.positions["AAAAAA"].cfg_hash == old_hash                        # 옛 포지션은 그대로 고정
+    ev = env.events("config_changed")[-1]                                         # 첫 행은 before="" (최초 기록)
+    assert ev["before"] == old_hash[:8] and ev["after"] == new_hash[:8] and ev["pinned_positions"] == ["AAAAAA"]
+    assert any("전략 설정 교체" in a[1] and "1개" in a[2] for a in env.alerts)
+    env.run("preopen", D2, "08:35")
+    env.q("AAAAAA", 10_000, open=10_000, prev_close=10_000)
+    env.q("BBBBBB", 10_100, open=10_100, prev_close=10_000)
+    env.run("open_check", D2, "09:02")
+    _eod(env, D2, {"AAAAAA": 10_000, "BBBBBB": 10_200})
+    env.run("signal", D3, "07:35")                                              # AAAAAA day 2 종가 평가
+    env.run("preopen", D3, "08:35")
+    for c in ("AAAAAA", "BBBBBB"):
+        env.q(c, 10_000, open=10_000, prev_close=10_000)
+    env.run("open_check", D3, "09:02")
+    _eod(env, D3, {"AAAAAA": 10_000, "BBBBBB": 10_000})
+    env.run("signal", D4, "07:35")                                              # AAAAAA day 3 종가: 고정 설정 max_hold=3 → 매도
+    st = env.state()
+    assert st.positions["AAAAAA"].exit_intent["kind"] == "max_hold"
+    assert st.positions["BBBBBB"].exit_intent is None                            # 새 설정(120일)의 포지션은 계속
+
+
+def test_load_strategy_config_file_and_cli_flag(tmp_path):
+    from swing_it.live import cli
+    from swing_it.live.runtime import load_strategy_config
+    from swing_it.live.state import strategy_hash
+
+    f = tmp_path / "2026-10-12_abc12345.json"
+    f.write_text(json.dumps({"schema": 1, "valid_from": "2026-10-13", "generated": "2026-10-12T18:00:00+09:00",
+                             "source": {"path": "research/logs/sepa_explore/live_candidate.json"},
+                             "strategy": {"max_hold": 90, "take_r": "inf", "trail_ma": 30}}), encoding="utf-8")
+    cfg, meta = load_strategy_config(f)
+    assert cfg.max_hold == 90 and cfg.trail_ma == 30 and cfg.take_r == float("inf") and cfg.rs_min == DEFAULT_STRATEGY.rs_min
+    assert meta["valid_from"] == "2026-10-13" and meta["cfg_hash"] == strategy_hash(cfg.to_dict()) and meta["file_sha256"]
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"strategy": {"max_hold": 90, "take_profit_r": 2}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="take_profit_r"):
+        load_strategy_config(bad)
+    flat = tmp_path / "flat.json"
+    flat.write_text(json.dumps({"max_hold": 60}), encoding="utf-8")
+    assert load_strategy_config(flat)[0].max_hold == 60
+    parser = cli.build_parser()
+    a = parser.parse_args(["status", "--strategy-config", str(f), "--quotes", "db", "--asof", "2026-10-12"])
+    assert a.strategy_config == str(f) and a.quotes == "db"
+    with pytest.raises(SystemExit):
+        cli.resolve_mode(parser, parser.parse_args(["status", "--quotes", "db"]))                 # --asof 필요
+    with pytest.raises(SystemExit):
+        cli.resolve_mode(parser, parser.parse_args(["status", "--quotes", "db", "--asof", "2026-10-12", "--dry-run"]))
+
+
+def test_strategy_hash_is_canonical_and_handles_inf():
+    from swing_it.live.state import strategy_hash
+
+    a = strategy_hash({"x": 1, "y": float("inf")})
+    assert a == strategy_hash({"y": float("inf"), "x": 1}) and a != strategy_hash({"x": 1, "y": 2.0})
+
+
+def _signal_source_env(monkeypatch, *, days, supply_max, f_nan_codes=(), pead_all_nan=False, fail_connects=0):
+    import swing_it.live.features as features
+    import swing_it.live.strategy as strategy
+    import swing_it.storage as storage
+    from swing_it.live.runtime import FeaturesSignalSource
+
+    codes = ["AAAAAA", "BBBBBB", "CCCCCC"]
+    close = pd.DataFrame({c: 1.0 + i for i, c in enumerate(codes)}, index=days, dtype=float)
+    uni = pd.DataFrame(True, index=days, columns=codes)
+    F = pd.DataFrame(1.0, index=days, columns=codes)
+    for c in f_nan_codes:
+        F[c] = float("nan")
+    pead = pd.DataFrame(float("nan") if pead_all_nan else 0.9, index=days, columns=codes)
+    panels = {"close": close, "open": close * 0.99, "high": close * 1.01, "low": close * 0.98, "universe": uni, "F": F,
+              "pead_rank": pead,
+              "patch_info": {"nxt_rows": 1, "nxt_patched": 1, "nxt_unpatched": pd.DataFrame(columns=["code", "date"])}}
+    calls = {"connect": 0, "d": []}
+
+    class _Cur:
+        def __init__(self, sql_log):
+            self.sql_log = sql_log
+            self._row = None
+
+        def execute(self, sql, params=()):
+            self.sql_log.append((sql, params))
+            if "supply_demand" in sql:
+                self._row = (supply_max,)
+            elif "daily_bars" in sql:
+                self._row = (max(x for x in days.date if x < params[0] if isinstance(params[0], date) or True) if False else None,)
+                asof = date.fromisoformat(params[0])
+                prev = [x for x in days.date if x < asof]
+                self._row = (prev[-1].isoformat() if prev else None,)
+
+        def fetchone(self):
+            return self._row
+
+    class _Con:
+        sql_log: list = []
+
+        def cursor(self):
+            return _Cur(self.sql_log)
+
+        def close(self):
+            pass
+
+    def connect(db=None):
+        calls["connect"] += 1
+        if calls["connect"] <= fail_connects:
+            raise ConnectionError("server closed the connection unexpectedly")
+        return _Con()
+
+    def spf(con, d, cfg):
+        calls["d"].append(d)
+        return panels, (pd.Timestamp(d) if d else days[-1])
+
+    monkeypatch.setattr(storage, "connect", connect)
+    monkeypatch.setattr(storage, "db_default", lambda: "x")
+    monkeypatch.setattr(features, "signal_panels_for", spf)
+    monkeypatch.setattr(strategy, "scan", lambda p, d, cfg: [cand("AAAAAA", d=pd.Timestamp(d).date())])
+    waits = []
+    src = FeaturesSignalSource(replace(DEFAULT_STRATEGY, news_veto=False), sleeper=waits.append)
+    return src, calls, waits
+
+
+def test_signal_source_replays_asof_and_checks_freshness(monkeypatch):
+    days = pd.bdate_range("2026-06-01", "2026-10-09")
+    src, calls, _ = _signal_source_env(monkeypatch, days=days, supply_max="2026-10-07")
+    b = src.load(date(2026, 10, 8), held=["BBBBBB"])                             # 과거 asof → d = 10-07 로 재생(M2)
+    assert calls["d"] == ["2026-10-07"] and b.data_date == date(2026, 10, 7)
+    assert b.freshness["ok"] and b.freshness["supply_max_date"] == "2026-10-07" and b.freshness["f_coverage"] == 1.0
+    assert b.bars["BBBBBB"][-1] == pytest.approx([2.0 * 0.99, 2.0 * 1.01, 2.0 * 0.98, 2.0]) and len(b.bars["BBBBBB"]) == len(b.trail_dates["BBBBBB"])
+    b2 = src.load(D1, held=[])                                                   # asof = 10-12 → d = 10-09, 수급은 10-07 → 신선도 실패
+    assert b2.data_date == SIGNAL_D and not b2.freshness["ok"] and any("supply_demand 최신일" in x for x in b2.freshness["problems"])
+    b25 = src.load(date(2026, 10, 9), held=[])                                   # asof = DB 최신일이면 그 직전일로 재생
+    assert calls["d"][-1] == "2026-10-08" and b25.data_date == date(2026, 10, 8)
+    with pytest.raises(RuntimeError, match="오늘 봉"):
+        src.load(date(2026, 5, 1), held=[])                                      # 직전 거래일 없음 → DB 최신일(10-09) ≥ asof → 거부
+    src2, calls2, _ = _signal_source_env(monkeypatch, days=days, supply_max="2026-10-09", f_nan_codes=["AAAAAA"])
+    b3 = src2.load(D1, held=[])
+    assert not b3.freshness["ok"] and any("수급 F 결측" in x for x in b3.freshness["problems"])
+    src3, _, _ = _signal_source_env(monkeypatch, days=days, supply_max="2026-10-09", pead_all_nan=True)
+    assert any("실적 패널" in x for x in src3.load(D1, held=[]).freshness["problems"])
+
+
+def test_signal_source_retries_db_reads(monkeypatch):
+    days = pd.bdate_range("2026-06-01", "2026-10-09")
+    src, calls, waits = _signal_source_env(monkeypatch, days=days, supply_max="2026-10-09", fail_connects=2)
+    b = src.load(D1, held=[])
+    assert b.data_date == SIGNAL_D and calls["connect"] == 3 and waits == [5.0, 15.0]
+    src2, calls2, waits2 = _signal_source_env(monkeypatch, days=days, supply_max="2026-10-09", fail_connects=3)
+    with pytest.raises(ConnectionError):
+        src2.load(D1, held=[])
+    assert calls2["connect"] == 3 and len(waits2) == 2
+
+
+def test_signal_aborts_entries_on_stale_inputs_but_settles_positions(tmp_path):
+    """M1: 수급·실적 지연 → error 경보 + 신규 진입 없음; 보유 종목 종가 결정·자산 행은 그대로."""
+    env = Env(tmp_path)
+    _enter(env, {"CCCCCC": {"trail": [11_800.0] * 49}})
+    env.q("CCCCCC", 11_900, open=10_100, prev_close=10_000)
+    env.run("monitor", D1, "10:30", once=True)
+    _eod(env, D1, {"CCCCCC": 11_000})
+    b = SignalBatch(data_date=D1, candidates=[cand("EEEEEE", d=D1)],
+                    freshness={"ok": False, "problems": ["supply_demand 최신일 2026-10-09 ≠ 신호일 2026-10-12"]})
+    env.signals.batches[D2] = b
+    env.q("CCCCCC", 11_000, prev_close=11_000)
+    assert env.run("signal", D2, "07:35") == 0
+    st = env.state()
+    assert "EEEEEE" not in st.positions and env.events("signal_abort")
+    assert any(a[0] == "error" and "신선도" in a[2] for a in env.alerts)
+    assert st.positions["CCCCCC"].exit_intent["kind"] == "trail_next_open" and st.equity_history[-1]["date"] == D1.isoformat()
+
+
+def test_held_unpatched_close_defers_decision(tmp_path):
+    """M4: 보유 종목의 d 종가가 NXT 미보정이면 그날 결정을 보류하고 경보한다(후보와 같은 규칙)."""
+    env = Env(tmp_path)
+    _enter(env, {"CCCCCC": {"trail": [11_800.0] * 49}})
+    env.q("CCCCCC", 11_900, open=10_100, prev_close=10_000)
+    env.run("monitor", D1, "10:30", once=True)
+    _eod(env, D1, {"CCCCCC": 11_000})
+    env.signals.batches[D2] = SignalBatch(data_date=D1, candidates=[], patched_codes={"ZZZZZZ"})
+    env.q("CCCCCC", 11_000, prev_close=11_000)
+    assert env.run("signal", D2, "07:35") == 0
+    st = env.state()
+    assert st.positions["CCCCCC"].exit_intent is None and st.positions["CCCCCC"].last_eod is None
+    assert any("종가 미보정" in a[1] for a in env.alerts)
+    assert st.equity_history[-1]["date"] == D1.isoformat()                      # 자산 행은 직전 종가로
+
+
+def test_db_quote_provider_replays_minute_bars_without_kiwoom(tmp_path):
+    import sqlite3
+
+    from swing_it.live.brokers import DBQuoteProvider, session_date
+
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE minute_bars (code TEXT, ts TEXT, open REAL, high REAL, low REAL, close REAL)")
+    con.execute("CREATE TABLE daily_bars (code TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL)")
+    rows = [("AAAAAA", f"2026-10-12 {hh:02d}:{mm:02d}:00", 10_000 + i * 10, 10_050 + i * 10, 9_950 + i * 10, 10_020 + i * 10)
+            for i, (hh, mm) in enumerate([(9, 0), (9, 1), (10, 30), (15, 30), (19, 59)])]
+    con.executemany("INSERT INTO minute_bars VALUES (?,?,?,?,?,?)", rows)
+    con.executemany("INSERT INTO daily_bars VALUES (?,?,?,?,?,?)",
+                    [("AAAAAA", "2026-10-09", 1, 1, 1, 9_900), ("AAAAAA", "2026-10-12", 1, 1, 1, 10_050),
+                     (REF_CODE, "2026-10-09", 1, 1, 1, 1), (REF_CODE, "2026-10-12", 1, 1, 1, 1)])
+    clock = Clock()
+    q = DBQuoteProvider(con, D1, clock=clock)
+    clock.set(D1, "08:35")
+    pre = q.quote("AAAAAA")
+    assert pre.last == 9_900 and pre.open is None and pre.date is None and pre.prev_close == 9_900
+    clock.set(D1, "09:02")
+    o = q.quote("AAAAAA")
+    assert (o.open, o.last, o.high, o.low, o.date) == (10_000, 10_030, 10_060, 9_950, D1)
+    clock.set(D1, "10:30")
+    m = q.quote("AAAAAA")
+    assert m.last == 10_040 and m.high == 10_070 and m.low == 9_950
+    clock.set(D1, "15:40")
+    e = q.quote("AAAAAA")
+    assert e.last == 10_050 and e.high == 10_080                                   # 15:30 봉까지, 19:59(NXT) 봉은 안 본다
+    assert session_date(q, D1) == D1 and session_date(q, date(2026, 10, 11)) == date(2026, 10, 9)
+    with pytest.raises(ValueError):
+        q.quote("ZZZZZZ")
+
+
+def test_rest_quote_provider_is_lazy_and_paper_bundle_does_not_touch_kiwoom(tmp_path):
+    from swing_it.live.brokers import RestQuoteProvider, build_bundle
+
+    made = []
+
+    def factory():
+        made.append(1)
+        raise AssertionError("키움 API 를 만들었다")
+
+    rq = RestQuoteProvider(api_factory=factory)
+    assert made == []
+    with pytest.raises(AssertionError):
+        rq.quote("005930")
+    with pytest.raises(ValueError):
+        RestQuoteProvider()
+    import swing_it.live.brokers as brokers
+    orig = brokers.make_kiwoom_api
+    brokers.make_kiwoom_api = factory
+    try:
+        made.clear()
+        b = build_bundle("paper", confirm_real=False, paper_path=tmp_path / "p.json")
+        assert made == []                                                      # 번들을 만들어도 키움은 안 뜬다
+        env = Env(tmp_path)
+        rt = SwingRuntime(env.cfg, b, clock=env.clock, signal_source=env.signals, alert=lambda *a: None)
+        assert rt.run("status", D1) == 0 and made == []
+    finally:
+        brokers.make_kiwoom_api = orig
+
+
+def test_news_lookback_starts_at_previous_trading_day_cutoff(monkeypatch):
+    import swing_it.live.news_veto as nv
+
+    seen = {}
+
+    def fake_pairs(con, codes, lo, hi):
+        seen["lo"], seen["hi"] = lo, hi
+        return pd.DataFrame(columns=["key", "article_id", "code", "available_at", "title", "summary", "body", "name",
+                                     "market", "sector", "related_n"])
+
+    monkeypatch.setattr(nv, "load_candidate_pairs", fake_pairs)
+    days = [x.date() for x in pd.bdate_range("2026-08-03", "2026-10-09")]
+    days = [x for x in days if not (date(2026, 10, 1) <= x <= date(2026, 10, 7))]   # 긴 연휴 가정(6일 공백)
+    res = nv.apply_live_veto(None, [cand("AAAAAA")], SIGNAL_D, days, judge_fn=lambda p: (None, "x", None))
+    win = nv.window_days(days, SIGNAL_D, nv.WINDOW_LONG)
+    prev = [x for x in days if x < win[0]][-1]
+    assert seen["lo"].date() == prev and seen["lo"].time() == nv.CLOSE_CUTOFF and seen["hi"].date() == SIGNAL_D
+    assert res.kept and not res.vetoed
+
+
+def test_shadow_planned_without_quote_enters_at_db_open_next_morning(tmp_path):
+    """m4: 09:02 시세가 없어 planned 로 남은 섀도는 다음 signal 이 그 거래일의 DB 시가로 가상 진입한다."""
+    env = Env(tmp_path)
+    env.signals.batches[D1] = _veto_batch(["VVVVVV"])
+    env.q("VVVVVV", 10_000, prev_close=10_000)
+    env.run("signal", D1, "07:35")
+    env.run("preopen", D1, "08:35")
+    env.quotes.fail.add("VVVVVV")
+    env.run("open_check", D1, "09:02")
+    assert env.state().shadow["VVVVVV"].status == "planned"
+    env.quotes.fail.clear()
+    _eod(env, D1, {})
+    env.signals.trail["VVVVVV"] = [9_000.0] * 49 + [10_300.0]
+    env.signals.bars["VVVVVV"] = {D1.isoformat(): [10_100, 10_400, 10_050, 10_300]}
+    env.q("VVVVVV", 10_300, prev_close=10_300)
+    env.run("signal", D2, "07:35")
+    sh = env.state().shadow["VVVVVV"]
+    assert sh.status == "open" and sh.entry_price == 10_100 and sh.entry_date == D1.isoformat() and sh.last_eod == D1.isoformat()
+    fills = [e for e in StateStore(env.cfg.mode_dir, clock=env.clock).shadow_events() if e["event"] == "shadow_fill"]
+    assert [(e["kind"], e["price"]) for e in fills] == [("entry_db_open", 10_100)]

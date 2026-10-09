@@ -43,12 +43,13 @@ reconcile      아무 때     장부 vs 계좌(기준선 감안) — **보고만
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
 import time as _time
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -80,6 +81,7 @@ from swing_it.live.sizing import allocate
 from swing_it.live.state import (
     LIVE_ORDER_STATUSES,
     LiveState,
+    strategy_hash,
     trade_stats,
     OrderRec,
     PositionRec,
@@ -200,6 +202,12 @@ class SignalBatch:
     veto_info: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: 신호 원천이 전하는 경고(거부권 층의 모름 처리·판정 상한·실패 등) — signal 작업이 warn 경보로 보낸다.
     alerts: list[str] = field(default_factory=list)
+    #: 코드 → ``trail_dates`` 와 같은 길이의 [시가, 고가, 저가, 종가](DB 보정본). 섀도 포지션의 일봉 상태 전이(백테스트와 같은
+    #: ``on_bar``)와 가상 진입 대용(09:02 시세가 없던 날)에 쓴다(통합 검토 M5).
+    bars: dict[str, list[list[float]]] = field(default_factory=dict)
+    #: 입력 신선도(통합 검토 M1): {"ok": bool, "problems": [...], "supply_max_date", "f_coverage", "pead_coverage", "n_universe"}.
+    #: ok=False 면 signal 은 보유 결정·자산은 수행하고 신규 진입만 중단한다.
+    freshness: dict[str, Any] = field(default_factory=lambda: {"ok": True, "problems": []})
 
 
 #: signal 결손 따라잡기용으로 MA 창 위에 더 받는 거래일 수의 **하한**(검토 M5·m10). 실제 배치 크기는 마지막 평가일 이후
@@ -227,26 +235,108 @@ class FeaturesSignalSource:
     :class:`SignalBatch` 에 싣는다 — 보정이 안 돈 날짜로는 신호를 내지 않는다(:meth:`SwingRuntime._job_signal`).
     """
 
-    def __init__(self, cfg: StrategyConfig = DEFAULT_STRATEGY, db: str | None = None) -> None:
+    #: DB 읽기 재시도(통합 검토 §1.4: 아침 적재 중 연결 끊김 1회 실관측) — 횟수와 대기(초).
+    RETRIES = 3
+    BACKOFF = (5.0, 15.0)
+    #: 신선도 하한(통합 검토 M1): 유니버스 종목 중 수급 F·PEAD 순위가 있는 비율.
+    MIN_COVERAGE = 0.90
+
+    def __init__(self, cfg: StrategyConfig = DEFAULT_STRATEGY, db: str | None = None, *,
+                 sleeper: Callable[[float], None] = _time.sleep) -> None:
         self.cfg = cfg
         self.db = db
+        self.sleeper = sleeper
 
     def load(self, asof: date, *, held: Iterable[str], since: date | None = None) -> SignalBatch:
-        from swing_it.krx_session import NXT_START  # noqa: PLC0415 — DB 의존을 신호 작업에만 둔다
+        """``asof`` 직전 DB 거래일 ``d`` 를 신호일로 패널을 만든다 — ``--asof`` 과거일이면 그날 기준으로 **재생**된다(통합 검토 M2).
+
+        DB 읽기(연결·패널·거부권)는 ``RETRIES`` 번까지 재시도한다(끊김 1회로 "오늘 신규 진입 없음" 이 되지 않게). 그래도 실패하면
+        마지막 예외를 올린다 → signal 은 abort + error 경보.
+        """
+        from swing_it.live import features  # noqa: PLC0415 — DB 의존을 신호 작업에만 둔다
+
+        if getattr(features, "signal_panels_for", None) is None:
+            raise RuntimeError("swing_it.live.features.signal_panels_for 가 없다(전략 모듈 미완) — 신호를 내지 않는다")
+        last: Exception | None = None
+        for attempt in range(self.RETRIES):
+            if attempt:
+                wait = self.BACKOFF[min(attempt - 1, len(self.BACKOFF) - 1)]
+                log.warning("signal DB 읽기 재시도 %d/%d (%.0fs 뒤): %s", attempt + 1, self.RETRIES, wait, last)
+                self.sleeper(wait)
+            try:
+                return self._load_once(asof, held=held, since=since)
+            except Exception as e:  # noqa: BLE001 — 재시도 대상(연결 끊김 등). 마지막엔 올린다.
+                last = e
+        assert last is not None
+        raise last
+
+    def _prev_trading_day(self, con: Any, asof: date) -> date | None:
+        """``asof`` 직전 DB 거래일(가격 테이블 날짜 기준, storage 정문). 없으면 None(= DB 최신일 사용)."""
+        from swing_it.storage import last_trading_date_before  # noqa: PLC0415
+
+        try:
+            return last_trading_date_before(con, asof.isoformat())
+        except Exception as e:  # noqa: BLE001
+            log.warning("직전 DB 거래일 조회 실패(DB 최신일로 대신): %s", e)
+            return None
+
+    def _freshness(self, con: Any, panels: dict, d: pd.Timestamp) -> dict[str, Any]:
+        """입력 신선도(통합 검토 M1): supply_demand 최신일 == d, 유니버스의 F·PEAD 결측 ≤ 10%, 실적 패널 비어 있지 않음."""
+        out: dict[str, Any] = {"ok": True, "problems": [], "date": str(d.date())}
+        try:
+            uni = panels["universe"].loc[d]
+            codes = [str(c) for c in uni.index[uni.astype("float64").fillna(0) >= 1]]
+            out["n_universe"] = len(codes)
+            if codes:
+                f = panels["F"].loc[d].reindex(codes)
+                pr = panels["pead_rank"].loc[d].reindex(codes)
+                out["f_coverage"] = float(f.notna().mean())
+                out["pead_coverage"] = float(pr.notna().mean())
+                if out["f_coverage"] < self.MIN_COVERAGE:
+                    out["problems"].append(f"수급 F 결측 {1 - out['f_coverage']:.0%} > 10% (supply_demand 지연?)")
+                if out["pead_coverage"] <= 0.0:
+                    out["problems"].append("실적 패널 비어 있음(PEAD 순위 전부 결측 — earnings 적재?)")
+                elif out["pead_coverage"] < self.MIN_COVERAGE:
+                    out["problems"].append(f"PEAD 순위 결측 {1 - out['pead_coverage']:.0%} > 10%")
+        except Exception as e:  # noqa: BLE001 — 검사 자체가 실패하면 문제로 기록(조용히 통과시키지 않는다)
+            out["problems"].append(f"신선도 검사 실패: {type(e).__name__}: {e}")
+        try:
+            pg = type(con).__module__.split(".")[0] != "sqlite3"
+            cur = con.cursor()
+            cur.execute("SELECT MAX(date) FROM supply_demand")
+            row = cur.fetchone()
+            v = row[0] if row else None
+            if v is not None:
+                sd = v if isinstance(v, date) else pd.Timestamp(str(v)).date()
+                out["supply_max_date"] = sd.isoformat()
+                if sd != d.date():
+                    out["problems"].append(f"supply_demand 최신일 {sd} ≠ 신호일 {d.date()}")
+            else:
+                out["problems"].append("supply_demand 비어 있음")
+            del pg
+        except Exception as e:  # noqa: BLE001
+            out["problems"].append(f"supply_demand 최신일 조회 실패: {type(e).__name__}")
+        out["ok"] = not out["problems"]
+        return out
+
+    def _load_once(self, asof: date, *, held: Iterable[str], since: date | None = None) -> SignalBatch:
+        from swing_it.krx_session import NXT_START  # noqa: PLC0415
         from swing_it.live import features  # noqa: PLC0415
         from swing_it.live.strategy import scan  # noqa: PLC0415
         from swing_it.storage import connect, db_default  # noqa: PLC0415
 
-        signal_panels_for = getattr(features, "signal_panels_for", None)
-        if signal_panels_for is None:
-            raise RuntimeError("swing_it.live.features.signal_panels_for 가 없다(전략 모듈 미완) — 신호를 내지 않는다")
+        signal_panels_for = features.signal_panels_for
         con = connect(self.db or db_default())
         vetoed: list[Candidate] = []
         veto_info: dict = {}
         alerts: list[str] = []
         try:
-            panels, d = signal_panels_for(con, None, self.cfg)
+            prev = self._prev_trading_day(con, asof)
+            panels, d = signal_panels_for(con, None if prev is None else str(prev), self.cfg)
             d = pd.Timestamp(d)
+            if d.date() >= asof:
+                raise RuntimeError(f"DB 최신일 {d.date()} ≥ 거래일 {asof} — 오늘 봉(잠정치)이 들어 있다")
+            freshness = self._freshness(con, panels, d)
             cands = scan(panels, d, self.cfg)
             if getattr(self.cfg, "news_veto", True) and cands:
                 cands, vetoed, veto_info, alerts = self._apply_veto(con, cands, d, panels["close"].index)
@@ -255,8 +345,6 @@ class FeaturesSignalSource:
                 con.close()
             except Exception:  # noqa: BLE001
                 pass
-        if d.date() >= asof:
-            raise RuntimeError(f"DB 최신일 {d.date()} ≥ 거래일 {asof} — 오늘 봉(잠정치)이 들어 있다")
         close = panels["close"]
         row = close.loc[d]
         have = set(map(str, row.index[row.notna()]))
@@ -271,15 +359,20 @@ class FeaturesSignalSource:
             krx_patched = bool(info.get("nxt_patched", 0)) and bool(patched_codes)
         gap = int(np.busday_count(since, asof)) if since is not None else 0
         n = self.cfg.trail_ma + max(CATCHUP_DAYS, gap + 5)      # m10: 결손 길이만큼 늘린다(상한 없음)
-        trail, dates = {}, {}
+        trail, dates, bars = {}, {}, {}
+        ohl = [panels.get(k) for k in ("open", "high", "low")]
         for code in {c.code for c in cands} | {c.code for c in vetoed} | set(held):
             if code in close.columns:
                 ser = close[code].loc[:d].dropna().iloc[-n:]
                 trail[code] = [float(x) for x in ser]
                 dates[code] = [str(pd.Timestamp(i).date()) for i in ser.index]
+                if all(x is not None and code in x.columns for x in ohl):
+                    o, h, lo_ = (x[code].reindex(ser.index) for x in ohl)
+                    bars[code] = [[float(a), float(b), float(c_), float(cl)]
+                                  for a, b, c_, cl in zip(o, h, lo_, ser, strict=True)]
         return SignalBatch(data_date=d.date(), candidates=cands, trail_closes=trail, trail_dates=dates,
                            krx_patched=krx_patched, patched_codes=patched_codes, vetoed=vetoed, veto_info=veto_info,
-                           alerts=alerts)
+                           alerts=alerts, bars=bars, freshness=freshness)
 
     def _apply_veto(self, con: Any, cands: list[Candidate], d: pd.Timestamp, trading_days: Any
                     ) -> tuple[list[Candidate], list[Candidate], dict[str, dict[str, Any]], list[str]]:
@@ -309,6 +402,64 @@ class FeaturesSignalSource:
 # --------------------------------------------------------------------------- 설정
 
 
+def _strategy_from_dict(d: dict[str, Any]) -> StrategyConfig:
+    """dict → :class:`StrategyConfig`. 알 수 없는 키는 ``ValueError``(조용히 무시 금지), 빠진 키는 코드 기본값. ``"inf"`` 문자열은 inf."""
+    names = {f.name for f in fields(StrategyConfig)}
+    unknown = sorted(set(d) - names)
+    if unknown:
+        raise ValueError(f"StrategyConfig 에 없는 키: {unknown}")
+    kw = {}
+    for k, v in d.items():
+        if isinstance(v, str) and v.strip().lower() in ("inf", "infinity", "+inf"):
+            v = math.inf
+        kw[k] = v
+    return StrategyConfig(**kw)
+
+
+def load_strategy_config(path: Path | str) -> tuple[StrategyConfig, dict[str, Any]]:
+    """버전 있는 전략 설정 파일 → (StrategyConfig, 메타). ``--strategy-config`` (통합 검토 §3).
+
+    우선 전략 모듈의 로더(``swing_it.live.config.load_candidate``)가 있으면 그것을 쓴다(GA 유전자 → 설정 대응은 그쪽 정본).
+    없으면 JSON 을 직접 읽는다: ``{"strategy": {...}}`` 블록, 또는 ``{"genes": {...}}``(``StrategyConfig.from_genes`` 가 있을 때만),
+    또는 필드 dict 그대로. 메타엔 파일 sha256·설정 해시·``schema``/``generated``/``valid_from``/``source`` 를 담는다.
+    """
+    import hashlib  # noqa: PLC0415
+
+    from swing_it.live import config as config_mod  # noqa: PLC0415
+
+    path = Path(path)
+    raw_text = path.read_text(encoding="utf-8")
+    meta: dict[str, Any] = {"path": str(path), "file_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest()}
+    loader = getattr(config_mod, "load_candidate", None)
+    cfg: StrategyConfig | None = None
+    if loader is not None:
+        got = loader(path)
+        if isinstance(got, StrategyConfig):
+            cfg = got
+        elif isinstance(got, tuple) and got and isinstance(got[0], StrategyConfig):
+            cfg = got[0]
+            if len(got) > 1 and isinstance(got[1], dict):
+                meta.update(got[1])
+    if cfg is None:
+        raw = json.loads(raw_text)
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path}: 설정 파일은 JSON 객체여야 한다")
+        for k in ("schema", "generated", "valid_from", "source", "procedure"):
+            if k in raw:
+                meta[k] = raw[k]
+        if isinstance(raw.get("strategy"), dict):
+            cfg = _strategy_from_dict(raw["strategy"])
+        elif isinstance(raw.get("genes"), dict):
+            from_genes = getattr(StrategyConfig, "from_genes", None)
+            if from_genes is None:
+                raise ValueError(f"{path}: genes 블록을 읽을 StrategyConfig.from_genes 가 아직 없다")
+            cfg = from_genes(raw["genes"])
+        else:
+            cfg = _strategy_from_dict({k: v for k, v in raw.items() if k not in meta})
+    meta["cfg_hash"] = strategy_hash(cfg.to_dict())
+    return cfg, meta
+
+
 @dataclass
 class RuntimeConfig:
     """런타임 설정. 전략·위험 수치는 :mod:`swing_it.live.config` 가 정본이다."""
@@ -334,6 +485,9 @@ class RuntimeConfig:
     max_exit_rejects: int = 3                 # 연속 거부·차단 이만큼이면 그 매도 의도를 멈추고 사람을 부른다(검토 M1)
     cancel_confirm_reads: int = 3             # 취소 거부(=이미 체결?) 뒤 잔고 재조회 횟수(검토 C2)
     cancel_confirm_wait_sec: float = 5.0      # 그 재조회 간격 — 3회 × 5초 ≥ 10초
+    strategy_file: Path | None = None         # --strategy-config: 버전 있는 후보 JSON(없으면 코드 기본값)
+    strategy_meta: dict[str, Any] = field(default_factory=dict)   # 그 파일의 메타(경로·sha256·valid_from 등)
+    quotes_source: str = "kiwoom"             # "kiwoom" | "db"(--asof 재생, 키움 호출 없음)
 
     @property
     def mode_dir(self) -> Path:
@@ -394,7 +548,10 @@ def shadow_vs_real_line(state: LiveState) -> str:
     합격 바: 거부군 평균 순수익 < 진입군 **그리고** 거부군 손절 비율 ≥ 진입군(전진 6개월 또는 거부 30건 이상).
     """
     sh = trade_stats(list(state.shadow_history))
-    re_ = trade_stats(list(state.history))
+    # m10: 진입군은 거부권이 돌기 시작한 뒤(첫 섀도 신호일 이후)의 포지션만 — 같은 운용 창끼리 비교한다.
+    first = min((p.signal_date for p in state.shadow_history + list(state.shadow.values())), default=None)
+    real_recs = [p for p in state.history if first is None or p.signal_date >= first]
+    re_ = trade_stats(real_recs)
 
     def fmt(d: dict[str, Any]) -> str:
         if d["n"] == 0:
@@ -405,7 +562,8 @@ def shadow_vs_real_line(state: LiveState) -> str:
     if sh["n"] and re_["n"]:
         ok = sh["mean_net"] < re_["mean_net"] and sh["stop_rate"] >= re_["stop_rate"]
         verdict = f" → 합격 바 {'충족' if ok else '미충족'}(거부 {sh['n']}/30건)"
-    return f"뉴스 거부권: 거부군(섀도) {fmt(sh)} | 진입군(실제) {fmt(re_)}{verdict}"
+    return (f"뉴스 거부권[순수익 기준 — 사전등록 지표(정합 초과) 아님: 라이브에 정합 대조 없음]: "
+            f"거부군(섀도) {fmt(sh)} | 진입군(실제, 거부권 시작 이후) {fmt(re_)}{verdict}")
 
 
 def _tick_down(px: float) -> int:
@@ -445,6 +603,10 @@ class SwingRuntime:
         self.alert = alert
         self.store = StateStore(cfg.mode_dir, clock=clock)
         self._alerted: set[str] = set()
+        #: 현재(신규 계획용) 전략 설정 해시. 원장 모든 사건에 ``cfg=<8자리>`` 로 붙는다. 열린 포지션은 각자 계획 시점 설정에 고정.
+        self.cfg_hash = strategy_hash(cfg.strategy.to_dict())
+        self.store.default_fields = {"cfg": self.cfg_hash[:8]}
+        self._cfg_cache: dict[str, StrategyConfig] = {self.cfg_hash: cfg.strategy}
 
     # ----- 공통 ------------------------------------------------------------------
 
@@ -580,6 +742,14 @@ class SwingRuntime:
             log.exception("%s: 브로커 준비 실패", job)
             self.alert("error", f"{job}: 브로커 준비 실패", f"{type(e).__name__}: {e}")
             return 1
+        if state.config_hash != self.cfg_hash:
+            old_pos = [p.code for p in state.open_positions() if p.cfg_hash and p.cfg_hash != self.cfg_hash]
+            self.store.event("config_changed", before=(state.config_hash or "")[:8], after=self.cfg_hash[:8],
+                             pinned_positions=old_pos, meta=self.cfg.strategy_meta)
+            if state.config_hash is not None:
+                self.alert("info", "전략 설정 교체", f"{(state.config_hash or '')[:8]} → {self.cfg_hash[:8]} "
+                           f"(신규 계획에만 적용; 옛 설정으로 열린 포지션 {len(old_pos)}개는 그대로)")
+            state.config_hash = self.cfg_hash
         rc = 0
         try:
             if job in TRADING_JOBS and not self._session_open(ctx):
@@ -1044,11 +1214,11 @@ class SwingRuntime:
             pos.entry_price = float(f.price)
             pos.last_day = ctx.day
             plan = _plan_from_dict(pos.plan)
-            st = PositionState.from_plan(plan, self.cfg.strategy, qty=float(f.qty))
+            st = PositionState.from_plan(plan, self._cfg_of(pos), qty=float(f.qty))
             acts = st.on_fill_open(float(f.price), day_no=1, entry_day=ctx.asof)
             self._store_strat(pos, st)
             self.store.event("position_open", code=pos.code, qty=f.qty, price=f.price, stop=st.stop_px,
-                             target=st.target_px, d=st.d)
+                             target=st.target_px, d=st.d, cfg_hash=pos.cfg_hash)
             self._apply_actions(ctx, pos, st, acts, session="continuous")
         else:   # 같은 주문의 늦은 추가 체결 — 상태 수량을 늘린다
             st = self._strat(pos)
@@ -1076,10 +1246,25 @@ class SwingRuntime:
 
     # ----- 전략 상태 ---------------------------------------------------------------
 
+    def _cfg_of(self, pos: PositionRec) -> StrategyConfig:
+        """이 포지션에 고정된 전략 설정(통합 검토 M3). 계획 시점 dict 에서 복원하고 해시로 캐시한다. 없으면(옛 스냅샷) 현재 설정."""
+        if not pos.cfg:
+            return self.cfg.strategy
+        key = pos.cfg_hash or strategy_hash(pos.cfg)
+        cfg = self._cfg_cache.get(key)
+        if cfg is None:
+            cfg = _strategy_from_dict(pos.cfg)
+            self._cfg_cache[key] = cfg
+        return cfg
+
+    def _pin_cfg(self, pos: PositionRec) -> None:
+        pos.cfg = self.cfg.strategy.to_dict()
+        pos.cfg_hash = self.cfg_hash
+
     def _strat(self, pos: PositionRec) -> PositionState:
         if not pos.strat:
             raise StateCorrupt(f"{pos.code}: 전략 상태 없음")
-        return PositionState.from_dict(pos.strat, self.cfg.strategy)
+        return PositionState.from_dict(pos.strat, self._cfg_of(pos))
 
     def _store_strat(self, pos: PositionRec, st: PositionState) -> None:
         pos.strat = st.to_dict()
@@ -1224,7 +1409,8 @@ class SwingRuntime:
         if self.signal_source is None:
             self.signal_source = FeaturesSignalSource(self.cfg.strategy)
         self._expire_stale(ctx)
-        held = [p.code for p in st.open_positions()] + [p.code for p in st.shadow.values() if p.status == "open"]
+        held = [p.code for p in st.open_positions()] + [p.code for p in st.shadow.values()
+                                                        if p.status in ("open", "planned")]
         since_s = [p.last_eod or p.entry_date for p in st.open_positions() if (p.last_eod or p.entry_date)]
         since = date.fromisoformat(min(since_s)) if since_s else None
         if since is not None and int(np.busday_count(since, ctx.asof)) > CATCHUP_DAYS + 1:
@@ -1252,6 +1438,12 @@ class SwingRuntime:
         if not batch.krx_patched:
             self._abort_signal(ctx, f"{batch.data_date} KRX 정규장 보정이 돌지 않았다(krx_patched=False)", batch)
             return
+        # 2b) 입력 신선도(통합 검토 M1): 수급·실적이 하루 늦으면 후보가 조용히 0 이 된다 — 보유 결정·자산은 하고 진입만 중단
+        if not batch.freshness.get("ok", True):
+            self._settle_equity(ctx, batch)
+            self._shadow_settle(ctx, batch)
+            self._abort_signal(ctx, "입력 신선도 실패: " + "; ".join(batch.freshness.get("problems", [])), batch)
+            return
         cands = list(batch.candidates)
         if batch.patched_codes is not None:
             unpatched = [c.code for c in cands if c.code not in batch.patched_codes]
@@ -1274,6 +1466,7 @@ class SwingRuntime:
                 status="planned", name=batch.names.get(c.code, ""), plan=_plan_to_dict(plan),
                 trail_closes=[float(x) for x in batch.trail_closes.get(c.code, [])][-n_keep:],
             )
+            self._pin_cfg(st.positions[c.code])
             st.market_of[c.code] = c.market
             n_new += 1
         n_shadow = self._shadow_plan(ctx, batch, equity, n_keep)
@@ -1281,7 +1474,8 @@ class SwingRuntime:
                           "codes": [c.code for c in cands], "n_vetoed": len(batch.vetoed), "shadow_planned": n_shadow}
         st.jobs_done["signal"] = ctx.day
         self.store.event("signal", asof=ctx.day, data_date=batch.data_date.isoformat(),
-                         candidates=[c.code for c in cands], planned=n_new)
+                         candidates=[c.code for c in cands], planned=n_new, cfg_hash=self.cfg_hash,
+                         freshness=batch.freshness)
         log.info("signal: %s(d=%s) 후보 %d · 새 계획 %d", ctx.day, batch.data_date, len(cands), n_new)
         self.alert("info", f"신호 {ctx.day}", self._report(ctx, row) + (
             f"\n후보 {len(cands)}: {', '.join(c.code for c in cands[:20])}" if cands else "\n후보 없음") + (
@@ -1291,6 +1485,7 @@ class SwingRuntime:
         """보유 종목 종가 결정(따라잡기 포함) + 날짜별 자산 행·낙폭 킬. 마지막 행을 돌려준다."""
         st = ctx.state
         by_date = self._decide_on_db_close(ctx, batch)
+        self._shadow_settle(ctx, batch)
         done = {r["date"] for r in st.equity_history}
         last_prices: dict[str, float] = {}
         row: dict[str, Any] = {}
@@ -1643,7 +1838,6 @@ class SwingRuntime:
                 self._start_day(ctx, pos, q.open or q.last)
             if pos.code in st.positions and pos.exit_intent:
                 pos.exit_intent["session"] = "open_auction"   # 못 판 의도는 내일 시가에
-        self._shadow_eod(ctx)
         st.jobs_done["eod"] = ctx.day
         equity, cash, mv = self._equity(ctx, ctx.last_px)
         row = {"date": ctx.day, "equity": round(equity, 2), "cash": round(cash, 2), "mv": round(mv, 2),
@@ -1661,10 +1855,16 @@ class SwingRuntime:
         돌려주는 값은 날짜 → {code: 종가}(자산 행 따라잡기용).
         """
         st = ctx.state
-        n = self.cfg.strategy.trail_ma
         by_date: dict[str, dict[str, float]] = {}
         d = batch.data_date.isoformat()
         for pos in list(st.open_positions()):
+            n = self._cfg_of(pos).trail_ma
+            if batch.patched_codes is not None and pos.code not in batch.patched_codes:
+                # 통합 검토 M4: 보유 종목의 d 행이 NXT 미보정(분봉 없음)이면 그 종가로 결정하지 않는다 — 보류 + 경보.
+                self.alert("warn", "보유 종목 종가 미보정 — 결정 보류", f"{pos.code}: {d} KRX 보정 없음(분봉 결손). 직전 종가로만 평가")
+                if pos.trail_closes:
+                    by_date.setdefault(d, {})[pos.code] = pos.trail_closes[-1]
+                continue
             hist = [float(x) for x in batch.trail_closes.get(pos.code) or []]
             dates = list(batch.trail_dates.get(pos.code) or [])
             if not hist:
@@ -1726,6 +1926,7 @@ class SwingRuntime:
                 status="planned", name=batch.names.get(c.code, ""), plan={**_plan_to_dict(plan), "veto": info},
                 trail_closes=[float(x) for x in batch.trail_closes.get(c.code, [])][-n_keep:],
             )
+            self._pin_cfg(st.shadow[c.code])
             st.market_of[c.code] = c.market
             self.store.shadow_event("shadow_planned", code=c.code, signal_date=batch.data_date.isoformat(),
                                     trade_date=ctx.day, limit_px=plan.limit_px, qty=plan.qty, veto=info)
@@ -1782,7 +1983,7 @@ class SwingRuntime:
                 plan = _plan_from_dict(pos.plan)
                 if plan.fills_at(open_px) and int(plan.qty) >= 1:
                     pos.status, pos.entry_date, pos.entry_price, pos.last_day = "open", ctx.day, open_px, ctx.day
-                    s = PositionState.from_plan(plan, self.cfg.strategy, qty=float(int(plan.qty)))
+                    s = PositionState.from_plan(plan, self._cfg_of(pos), qty=float(int(plan.qty)))
                     acts = s.on_fill_open(open_px, day_no=1, entry_day=ctx.asof)
                     self._shadow_fill(ctx, pos, "buy", int(plan.qty), open_px, kind="entry")
                     self._store_strat(pos, s)
@@ -1819,27 +2020,75 @@ class SwingRuntime:
         if pos.qty <= 0 or not s.is_open:
             self._shadow_close(ctx, pos, pos.exit_reason or "exit")
 
-    def _shadow_eod(self, ctx: _Ctx) -> None:
-        """15:40: 섀도 보유 종목마다 시세 1건 → ``on_bar``(시가·고가·저가·현재가, MA50 = DB 종가 + 오늘). 세션 확정 뒤에만."""
+    def _shadow_settle(self, ctx: _Ctx, batch: SignalBatch) -> None:
+        """signal 작업: 섀도 포지션을 **실포지션과 같은 다음날 DB 보정 일봉**으로 전이한다(통합 검토 M5 — 측정 대칭).
+
+        마지막 평가일 이후 거래일마다 ``on_bar(시가·고가·저가·종가, MA, day_no)`` (백테스트와 같은 비관적 일봉 순서: 손절·절반
+        익절·본전·돌파 실패·MA 추적·최대 보유). "다음날 시가" 결정은 다음 봉의 시가에 가상 체결(봉이 아직 없으면 09:02 시세).
+        09:02 시세가 없어 ``planned`` 로 남은 섀도는 그 거래일의 DB 시가로 가상 진입한다(m4). 미보정 종목은 그날 보류(M4).
+        """
         st = ctx.state
-        if st.sessions.get(ctx.day) != "open":
-            return
-        n = self.cfg.strategy.trail_ma
+        d = batch.data_date.isoformat()
         for pos in list(st.shadow.values()):
-            if pos.status != "open" or pos.last_eod == ctx.day:
+            if pos.status not in ("open", "planned"):
                 continue
-            q = self._quote(ctx, pos.code)
-            if q is None or not (q.open and q.high and q.low):
-                self.store.shadow_event("shadow_skip", code=pos.code, date=ctx.day, reason="quote_incomplete")
+            bars = batch.bars.get(pos.code) or []
+            dates = batch.trail_dates.get(pos.code) or []
+            if not bars or len(bars) != len(dates):
                 continue
-            s = self._strat(pos)
-            day_no = s.day_no + (0 if pos.last_day == ctx.day else 1)
-            pos.last_day = ctx.day
-            hist = list(pos.trail_closes)[-(n - 1):]
-            ma = (sum(hist) + float(q.last)) / n if len(hist) >= n - 1 else math.nan
-            acts = s.on_bar(float(q.open), float(q.high), float(q.low), float(q.last), ma, day_no)
-            pos.last_eod = ctx.day
-            self._shadow_apply(ctx, pos, s, acts, None)
+            if batch.patched_codes is not None and pos.code not in batch.patched_codes:
+                continue
+            closes = [b[3] for b in bars]
+            if closes:
+                pos.trail_closes = closes[-self._cfg_of(pos).trail_ma:]
+            n = self._cfg_of(pos).trail_ma
+            if pos.status == "planned":
+                idx = [i for i, dt in enumerate(dates) if dt == pos.trade_date]
+                if not idx:
+                    continue
+                i = idx[0]
+                plan = _plan_from_dict(pos.plan)
+                open_px = bars[i][0]
+                if plan.fills_at(open_px) and int(plan.qty) >= 1:
+                    pos.status, pos.entry_date, pos.entry_price, pos.last_day = "open", dates[i], open_px, dates[i]
+                    s = PositionState.from_plan(plan, self._cfg_of(pos), qty=float(int(plan.qty)))
+                    acts = s.on_fill_open(open_px, day_no=1, entry_day=date.fromisoformat(dates[i]))
+                    self._shadow_fill(ctx, pos, "buy", int(plan.qty), open_px, kind="entry_db_open")
+                    self._store_strat(pos, s)
+                    self._shadow_apply(ctx, pos, s, acts, None)
+                    if pos.code not in st.shadow:
+                        continue
+                    o, h, lo_, c = bars[i]
+                    ma = sum(closes[i - n + 1:i + 1]) / n if i + 1 >= n else math.nan
+                    acts = s.on_bar(o, h, lo_, c, ma, 1)
+                    pos.last_eod = dates[i]
+                    self._shadow_apply(ctx, pos, s, acts, None)
+                else:
+                    pos.status = "missed"
+                    pos.exit_reason = f"open {open_px} > limit {plan.limit_px}"
+                    self._shadow_close(ctx, pos, pos.exit_reason)
+                continue
+            since = pos.last_eod or pos.entry_date or d
+            idxs = [i for i, dt in enumerate(dates)
+                    if len(dt) == 10 and (dt > since if pos.last_eod else dt >= since) and dt <= d]
+            for i in idxs:
+                if pos.code not in st.shadow or pos.status != "open":
+                    break
+                s = self._strat(pos)
+                o, h, lo_, c = bars[i]
+                if pos.exit_intent and pos.exit_intent.get("session") == "open_auction":
+                    # 전일 "다음날 시가" 결정 → 이 봉의 시가에 가상 체결
+                    acts = s.on_open(o, s.day_no + 1)
+                    pos.last_day = dates[i]
+                    self._shadow_apply(ctx, pos, s, acts, None)
+                    pos.last_eod = dates[i]
+                    continue
+                day_no = s.day_no + (0 if pos.last_day == dates[i] else 1)
+                pos.last_day = dates[i]
+                ma = sum(closes[i - n + 1:i + 1]) / n if i + 1 >= n else math.nan
+                acts = s.on_bar(o, h, lo_, c, ma, day_no)
+                pos.last_eod = dates[i]
+                self._shadow_apply(ctx, pos, s, acts, None)
 
     def _report(self, ctx: _Ctx, row: dict[str, Any]) -> str:
         head = f"자산 {row['equity']:,.0f} (현금 {row['cash']:,.0f} · 평가 {row['mv']:,.0f})"
@@ -1873,6 +2122,10 @@ class SwingRuntime:
         print(f"  정지 파일: {', '.join(map(str, stops)) or '없음'} · 낙폭 킬: {bool(state.drawdown_kill.get('active'))}")
         print(f"  작업: {state.jobs_done} · 신호: {state.last_signal.get('asof')} 후보 "
               f"{state.last_signal.get('n_candidates')}")
+        old = [p.code for p in state.open_positions() if p.cfg_hash and p.cfg_hash != self.cfg_hash]
+        meta = self.cfg.strategy_meta
+        print(f"  설정 {self.cfg_hash[:8]}{' (' + str(meta.get('path')) + ', valid_from ' + str(meta.get('valid_from')) + ')' if meta else ' (DEFAULT 코드 기본값)'}"
+              f" · 열린 포지션 중 옛 설정 {len(old)}개{(': ' + ', '.join(old)) if old else ''}")
         for p in state.positions.values():
             print(f"  {p.code} {p.status:13s} qty={p.qty} entry={p.entry_price} stop={p.stop} target={p.target} "
                   f"partial={p.partial_done} intent={p.exit_intent}")

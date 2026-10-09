@@ -36,6 +36,10 @@
     1 ~ max_hold−1 일째 종가에서만.
 11. 트레이드 수익 = 두 절반 수익의 평균. 익절이 안 났으면 두 절반이 같은 가격에 함께 나가 ``ret_half1 = ret_half2``.
     ``R = ret / d``.
+13. (선택, ``take_r = inf`` — 익절 없음, GA2 청산 유전자) 추적 MA 가 있으면 **전량 추적**: 1 ~ max_hold−1 일째 종가 < MA → 다음
+    거래 가능일 시가 전량(``trail``; ``ga_fast._sim_one_py`` 의 ``j_t1`` 과 같은 식). 같은 날 손절보다 시가 청산이 먼저(손절은 엄격히
+    이른 날만). 시간 손절은 추적 청산일보다 앞설 때만, 돌파 실패와 겹치면 청산일이 이른 쪽(같은 날이면 돌파 실패). ``trail_ma``
+    패널이 전부 NaN 이면 추적 없음.
 12. (선택, ``failed_breakout=True`` — 라이브 설계 §6 2026-10-10, 기본 **False** 로 옛 결과 재현) 돌파 실패: 익절 전
     거래 가능일 ``k`` (1 ~ max_hold−1 일째) 종가 < 피벗(사건의 ``pivot`` = 직전 50일 최고 고가) → **다음 거래 가능일 시가**
     전량(``failed_breakout``). 그날 장중 손절·익절이 먼저 났으면 그쪽. 시간 손절과 같은 날 결정이면 시간 손절(즉시 체결)이
@@ -166,15 +170,24 @@ def _simulate_one(b: _Book, ci: int, d: int, pivot: float, c_low: float, *, stop
         return reason, last_tr, cl[last_tr]
 
     # --- 1단계: 전량 ---
+    partial_on = np.isfinite(take_r)
     j_s = _first(w_tr & ((lw[w] <= stop_px) | (op[w] <= stop_px)))
-    j_p = _first(w_tr & ((hi[w] >= tgt) | (op[w] >= tgt)))
+    j_p = _first(w_tr & ((hi[w] >= tgt) | (op[w] >= tgt))) if partial_on else None
     if j_s is not None and j_p is not None and j_s <= j_p:
         j_p = None                                   # 같은 날이면 손절 먼저
+    k_last_sig = min(k_last, horizon + 1)
+    j_t1 = None                                      # 규칙 13: 익절 없음 ∧ 추적 → 전량 추적
+    if not partial_on:
+        with np.errstate(invalid="ignore"):
+            sig1 = tr[:k_last_sig] & (cl[:k_last_sig] < ma[:k_last_sig])
+        k1 = _first(sig1)
+        if k1 is not None:
+            j_t1 = _first_from(tr, k1 + 1, horizon)
     j_ts = None
     if time_stop_days is not None:
         cand = _first_from(tr, time_stop_days - 1, horizon)
         if (cand is not None and (j_s is None or cand < j_s) and (j_p is None or cand < j_p)
-                and cl[cand] <= entry):
+                and (j_t1 is None or cand < j_t1) and cl[cand] <= entry):
             j_ts = cand
 
     # 돌파 실패(규칙 12): 익절·손절 전 종가 < 피벗 인 첫 거래 가능일 k → 다음 거래 가능일 시가. 신호는 1 ~ max_hold−1 일째.
@@ -197,16 +210,21 @@ def _simulate_one(b: _Book, ci: int, d: int, pivot: float, c_low: float, *, stop
     out = {"entry": entry, "d": dd, "stop_px": stop_px, "target_px": tgt, "partial_hit": False,
            "partial_j": None, "partial_px": np.nan}
     if j_fb_sig is not None:
-        if j_fb is not None:
+        if j_t1 is not None and (j_fb is None or j_t1 < j_fb):
+            reason, x, px = "trail", j_t1, op[j_t1]
+        elif j_fb is not None:
             reason, x, px = "failed_breakout", j_fb, op[j_fb]
         else:
             reason, x, px = end_exit()
     elif j_ts is not None:
         reason, x, px = "time_stop", j_ts, cl[j_ts]
-    elif j_s is not None and j_p is None:
-        reason, x, px = "stop", j_s, min(op[j_s], stop_px)
     elif j_p is None:
-        reason, x, px = end_exit()
+        if j_s is not None and (j_t1 is None or j_s < j_t1):
+            reason, x, px = "stop", j_s, min(op[j_s], stop_px)
+        elif j_t1 is not None:
+            reason, x, px = "trail", j_t1, op[j_t1]
+        else:
+            reason, x, px = end_exit()
     else:
         reason = None
     if reason is not None:
@@ -312,7 +330,7 @@ def simulate_minervini(o: pd.DataFrame, h: pd.DataFrame, lo: pd.DataFrame, c: pd
             패널(없으면 :func:`contraction_low_level` ``(lo, window)``)의 사건일 값.
         volume: 거래량 패널 — 거래량 0 인 날(정지)을 체결 불가로 본다. **실데이터에선 반드시 넘긴다.**
         fixed_stop: 주면 기술적 손절 대신 고정 손절폭(민감도 "손절 고정 8%" = 0.08). 수축 저점 거르기는 그대로.
-        take_r: 절반 익절 배수(민감도 3R = 3.0).
+        take_r: 절반 익절 배수(민감도 3R = 3.0). ``inf`` = 익절 없음(규칙 13 — 추적 MA 가 있으면 전량 추적).
         time_stop_days: ``None`` 이면 시간 손절 끔(민감도).
         failed_breakout: True 면 규칙 12(익절 전 종가 < 피벗 → 다음 거래 가능일 시가). 기본 False — 사전등록 결과 재현.
             라이브 프로토콜(설계 §6) = ``failed_breakout=True, time_stop_days=None``.
