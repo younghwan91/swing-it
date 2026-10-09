@@ -1,8 +1,12 @@
-# 비밀키
+# 비밀키 — .env.live 등 어떤 접미도 추적하지 않는다(검토 M8). 비밀은 환경변수나 ../quant-airflow/.env 로만.
 .env
+.env.*
 
 # 데이터 산출물 (SQLite DB, CSV, 차트)
 data/
+# 스윙 라이브 상태(원장·장부·페이퍼 브로커·로그·정지 파일) — data/ 에 이미 포함되지만 명시한다
+data/live_swing/**
+data/swing_*STOP
 *.db
 *.csv
 *.png
