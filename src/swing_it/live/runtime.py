@@ -105,6 +105,9 @@ __all__ = [
 
 log = logging.getLogger("swing_it.live")
 
+#: 종료 코드 — 크론·감시가 구분할 수 있게 고정한다(런북 §2).
+RC_OK, RC_ERROR, RC_SKIPPED, RC_STATE_CORRUPT, RC_ENTRIES_ABORTED = 0, 1, 2, 3, 4
+
 JOBS = ("signal", "preopen", "open_check", "monitor", "close", "eod", "status", "reconcile", "release_order")
 
 #: 작업별 허용 시각(KST, [시작, 끝)). dry-run·live 는 강제, 페이퍼는 ``ignore_clock`` 으로 끌 수 있다.
@@ -301,19 +304,19 @@ class FeaturesSignalSource:
         except Exception as e:  # noqa: BLE001 — 검사 자체가 실패하면 문제로 기록(조용히 통과시키지 않는다)
             out["problems"].append(f"신선도 검사 실패: {type(e).__name__}: {e}")
         try:
+            # 신호일 d **까지**의 최신 수급일 == d 인가(재생에서도 맞는 비교 — 전역 MAX 는 오늘 DB 의 최신일이라 과거 d 와 늘 다르다).
             pg = type(con).__module__.split(".")[0] != "sqlite3"
             cur = con.cursor()
-            cur.execute("SELECT MAX(date) FROM supply_demand")
+            cur.execute("SELECT MAX(date) FROM supply_demand WHERE date <= " + ("%s" if pg else "?"), (str(d.date()),))
             row = cur.fetchone()
             v = row[0] if row else None
             if v is not None:
                 sd = v if isinstance(v, date) else pd.Timestamp(str(v)).date()
                 out["supply_max_date"] = sd.isoformat()
                 if sd != d.date():
-                    out["problems"].append(f"supply_demand 최신일 {sd} ≠ 신호일 {d.date()}")
+                    out["problems"].append(f"supply_demand 에 신호일 {d.date()} 행이 없다(최신 {sd})")
             else:
-                out["problems"].append("supply_demand 비어 있음")
-            del pg
+                out["problems"].append(f"supply_demand 에 {d.date()} 이전 행이 없다")
         except Exception as e:  # noqa: BLE001
             out["problems"].append(f"supply_demand 최신일 조회 실패: {type(e).__name__}")
         out["ok"] = not out["problems"]
@@ -416,46 +419,44 @@ def _strategy_from_dict(d: dict[str, Any]) -> StrategyConfig:
     return StrategyConfig(**kw)
 
 
-def load_strategy_config(path: Path | str) -> tuple[StrategyConfig, dict[str, Any]]:
-    """버전 있는 전략 설정 파일 → (StrategyConfig, 메타). ``--strategy-config`` (통합 검토 §3).
+#: 인계 파일(:mod:`swing_it.live.candidate`) 모양을 가르는 키 — 이 중 하나라도 있으면 **반드시** ``load_candidate`` 로 검증한다.
+CANDIDATE_MARKERS = ("code_hash", "strategy_hash", "fitness", "window")
 
-    우선 전략 모듈의 로더(``swing_it.live.config.load_candidate``)가 있으면 그것을 쓴다(GA 유전자 → 설정 대응은 그쪽 정본).
-    없으면 JSON 을 직접 읽는다: ``{"strategy": {...}}`` 블록, 또는 ``{"genes": {...}}``(``StrategyConfig.from_genes`` 가 있을 때만),
-    또는 필드 dict 그대로. 메타엔 파일 sha256·설정 해시·``schema``/``generated``/``valid_from``/``source`` 를 담는다.
+
+def load_strategy_config(path: Path | str, *, allow_code_mismatch: bool = False) -> tuple[StrategyConfig, dict[str, Any]]:
+    """버전 있는 전략 설정 파일 → (StrategyConfig, 메타). ``--strategy-config``(통합 검토 §3).
+
+    **인계 파일**(GA 후보, :mod:`swing_it.live.candidate` 스키마 — ``code_hash``·``strategy_hash``·``fitness``·``window`` 중 하나라도 있음)은
+    언제나 :func:`swing_it.live.candidate.load_candidate` 로 읽는다: 모르는·빠진 키, ``strategy ≠ from_genes(genes)``, ``strategy_hash``,
+    ``code_hash``(유전자 해석 코드가 바뀜) 중 하나라도 걸리면 예외 — 관대한 경로로 **빠지지 않는다**(재검토 잔여 1).
+    그 밖의 파일(수동 설정)은 ``{"strategy": {...}}`` 블록 또는 필드 dict 그대로(모르는 키 거부). 메타엔 파일 sha256·설정 해시·
+    ``schema``/``created``/``valid_from``/``source`` 를 담는다.
     """
     import hashlib  # noqa: PLC0415
-
-    from swing_it.live import config as config_mod  # noqa: PLC0415
 
     path = Path(path)
     raw_text = path.read_text(encoding="utf-8")
     meta: dict[str, Any] = {"path": str(path), "file_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest()}
-    loader = getattr(config_mod, "load_candidate", None)
-    cfg: StrategyConfig | None = None
-    if loader is not None:
-        got = loader(path)
-        if isinstance(got, StrategyConfig):
-            cfg = got
-        elif isinstance(got, tuple) and got and isinstance(got[0], StrategyConfig):
-            cfg = got[0]
-            if len(got) > 1 and isinstance(got[1], dict):
-                meta.update(got[1])
-    if cfg is None:
-        raw = json.loads(raw_text)
-        if not isinstance(raw, dict):
-            raise ValueError(f"{path}: 설정 파일은 JSON 객체여야 한다")
+    raw = json.loads(raw_text)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: 설정 파일은 JSON 객체여야 한다")
+    if any(k in raw for k in CANDIDATE_MARKERS) or "genes" in raw:
+        from swing_it.live.candidate import load_candidate  # noqa: PLC0415 — 인계 스키마의 정본
+
+        cfg, doc = load_candidate(path, allow_code_mismatch=allow_code_mismatch)
+        for k in ("schema", "created", "valid_from", "source", "code_hash", "strategy_hash", "window"):
+            if k in doc:
+                meta[k] = doc[k]
+        meta["kind"] = "candidate"
+    else:
         for k in ("schema", "generated", "valid_from", "source", "procedure"):
             if k in raw:
                 meta[k] = raw[k]
         if isinstance(raw.get("strategy"), dict):
             cfg = _strategy_from_dict(raw["strategy"])
-        elif isinstance(raw.get("genes"), dict):
-            from_genes = getattr(StrategyConfig, "from_genes", None)
-            if from_genes is None:
-                raise ValueError(f"{path}: genes 블록을 읽을 StrategyConfig.from_genes 가 아직 없다")
-            cfg = from_genes(raw["genes"])
         else:
             cfg = _strategy_from_dict({k: v for k, v in raw.items() if k not in meta})
+        meta["kind"] = "manual"
     meta["cfg_hash"] = strategy_hash(cfg.to_dict())
     return cfg, meta
 
@@ -659,7 +660,8 @@ class SwingRuntime:
 
     def run(self, job: str, asof: date | None = None, *, force: bool = False, once: bool = False,
             oid: str | None = None) -> int:
-        """작업 하나. 종료 코드: 0 정상(건너뜀 포함), 1 오류, 2 시간창 밖·잠금 경합, 3 상태 손상."""
+        """작업 하나. 종료 코드: 0 정상(휴장 건너뜀 포함), 1 오류, 2 시간창 밖·잠금 경합, 3 상태 손상,
+        4 signal 이 **신규 진입을 중단**했다(입력 신선도·DB·최신일·NXT 보정 실패 — 보유 결정·자산은 수행됨)."""
         if job not in JOBS:
             raise ValueError(f"알 수 없는 작업: {job!r}")
         asof = asof or self._now().date()
@@ -751,6 +753,7 @@ class SwingRuntime:
                            f"(신규 계획에만 적용; 옛 설정으로 열린 포지션 {len(old_pos)}개는 그대로)")
             state.config_hash = self.cfg_hash
         rc = 0
+        self._entries_aborted = False
         try:
             if job in TRADING_JOBS and not self._session_open(ctx):
                 log.info("%s: %s 휴장(달력) — 아무것도 안 한다", job, asof)
@@ -775,6 +778,8 @@ class SwingRuntime:
             state.own_ord_nos = sorted(ctx.oms.own_orders)
             self.store.save(state)
             self.bundle.persist()
+        if rc == RC_OK and self._entries_aborted:
+            rc = RC_ENTRIES_ABORTED       # 경보만으로는 크론·감시가 못 본다 — 0 이 아닌 고유 코드
         return rc
 
     # ----- 휴장·킬 ---------------------------------------------------------------
@@ -1419,6 +1424,7 @@ class SwingRuntime:
             batch = self.signal_source.load(ctx.asof, held=held, since=since)
         except Exception as e:  # noqa: BLE001 — 신호 원천 실패 = 오늘 신규 진입 없음(보유 청산은 계속)
             self.store.event("signal_abort", asof=ctx.day, reason=f"{type(e).__name__}: {e}")
+            self._entries_aborted = True
             log.exception("signal 중단: 신호 원천 실패")
             self.alert("error", "신호 중단 — 오늘 신규 진입 없음", f"신호 원천 실패: {type(e).__name__}: {e}")
             return
@@ -1507,6 +1513,7 @@ class SwingRuntime:
 
     def _abort_signal(self, ctx: _Ctx, why: str, batch: SignalBatch) -> None:
         self.store.event("signal_abort", asof=ctx.day, reason=why, data_date=batch.data_date.isoformat())
+        self._entries_aborted = True
         log.error("signal 중단: %s", why)
         self.alert("error", "신호 중단 — 오늘 신규 진입 없음", why)
 

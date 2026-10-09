@@ -1257,8 +1257,9 @@ def _signal_source_env(monkeypatch, *, days, supply_max, f_nan_codes=(), pead_al
 
         def execute(self, sql, params=()):
             self.sql_log.append((sql, params))
-            if "supply_demand" in sql:
-                self._row = (supply_max,)
+            if "supply_demand" in sql:                  # 수급 행은 supply_max 까지 있다(그 뒤 없음) — "date <= d" 를 따른다
+                cap = params[0] if params else None
+                self._row = (min(supply_max, cap) if cap else supply_max,)
             elif "daily_bars" in sql:
                 self._row = (max(x for x in days.date if x < params[0] if isinstance(params[0], date) or True) if False else None,)
                 asof = date.fromisoformat(params[0])
@@ -1304,7 +1305,7 @@ def test_signal_source_replays_asof_and_checks_freshness(monkeypatch):
     assert b.freshness["ok"] and b.freshness["supply_max_date"] == "2026-10-07" and b.freshness["f_coverage"] == 1.0
     assert b.bars["BBBBBB"][-1] == pytest.approx([2.0 * 0.99, 2.0 * 1.01, 2.0 * 0.98, 2.0]) and len(b.bars["BBBBBB"]) == len(b.trail_dates["BBBBBB"])
     b2 = src.load(D1, held=[])                                                   # asof = 10-12 → d = 10-09, 수급은 10-07 → 신선도 실패
-    assert b2.data_date == SIGNAL_D and not b2.freshness["ok"] and any("supply_demand 최신일" in x for x in b2.freshness["problems"])
+    assert b2.data_date == SIGNAL_D and not b2.freshness["ok"] and any("신호일 2026-10-09 행이 없다" in x for x in b2.freshness["problems"])
     b25 = src.load(date(2026, 10, 9), held=[])                                   # asof = DB 최신일이면 그 직전일로 재생
     assert calls["d"][-1] == "2026-10-08" and b25.data_date == date(2026, 10, 8)
     with pytest.raises(RuntimeError, match="오늘 봉"):
@@ -1338,7 +1339,7 @@ def test_signal_aborts_entries_on_stale_inputs_but_settles_positions(tmp_path):
                     freshness={"ok": False, "problems": ["supply_demand 최신일 2026-10-09 ≠ 신호일 2026-10-12"]})
     env.signals.batches[D2] = b
     env.q("CCCCCC", 11_000, prev_close=11_000)
-    assert env.run("signal", D2, "07:35") == 0
+    assert env.run("signal", D2, "07:35") == 4                                 # 신규 진입 중단 = 고유 종료 코드
     st = env.state()
     assert "EEEEEE" not in st.positions and env.events("signal_abort")
     assert any(a[0] == "error" and "신선도" in a[2] for a in env.alerts)
@@ -1463,3 +1464,118 @@ def test_shadow_planned_without_quote_enters_at_db_open_next_morning(tmp_path):
     assert sh.status == "open" and sh.entry_price == 10_100 and sh.entry_date == D1.isoformat() and sh.last_eod == D1.isoformat()
     fills = [e for e in StateStore(env.cfg.mode_dir, clock=env.clock).shadow_events() if e["event"] == "shadow_fill"]
     assert [(e["kind"], e["price"]) for e in fills] == [("entry_db_open", 10_100)]
+
+
+def test_freshness_in_replay_uses_supply_row_for_d_not_global_max(monkeypatch):
+    """재검토 잔여 2: 재생(과거 asof)에서 전역 MAX(supply_demand) 는 오늘 DB 의 최신일이라 늘 d 와 다르다 — d 행이 있으면 통과."""
+    days = pd.bdate_range("2026-06-01", "2026-10-09")
+    src, _, _ = _signal_source_env(monkeypatch, days=days, supply_max="2026-10-09")    # DB 는 10-09 까지 수급이 있다
+    b = src.load(date(2026, 9, 1), held=[])                                          # 08-31 로 재생
+    assert b.data_date == date(2026, 8, 31) and b.freshness["ok"] and b.freshness["supply_max_date"] == "2026-08-31"
+
+
+def _candidate_file(tmp_path, **override):
+    from swing_it.live.candidate import default_candidate_doc
+
+    doc = default_candidate_doc("2026-10-13")
+    doc.update(override)
+    f = tmp_path / "live_candidate.json"
+    f.write_text(json.dumps(doc), encoding="utf-8")
+    return f, doc
+
+
+def test_candidate_shaped_files_always_go_through_load_candidate(tmp_path):
+    """재검토 잔여 1: 인계 파일 모양이면 언제나 ``candidate.load_candidate`` 로 검증한다 — 관대한 경로로 빠지지 않는다."""
+    from swing_it.live.candidate import CandidateError
+    from swing_it.live.runtime import load_strategy_config
+
+    f, doc = _candidate_file(tmp_path)
+    cfg, meta = load_strategy_config(f)
+    assert meta["kind"] == "candidate" and meta["strategy_hash"] == doc["strategy_hash"] and meta["code_hash"] == doc["code_hash"]
+    from swing_it.live.config import StrategyConfig
+    assert cfg == StrategyConfig.from_genes(DEFAULT_STRATEGY.to_genes())      # 유전자 해석(정본)을 거친 설정
+    bad_hash, _ = _candidate_file(tmp_path, strategy_hash="0" * 16)
+    with pytest.raises(CandidateError, match="strategy_hash"):
+        load_strategy_config(bad_hash)
+    stale, _ = _candidate_file(tmp_path, code_hash="f" * 16)
+    with pytest.raises(CandidateError, match="code_hash"):
+        load_strategy_config(stale)
+    assert load_strategy_config(stale, allow_code_mismatch=True)[1]["kind"] == "candidate"
+    tampered, d2 = _candidate_file(tmp_path)
+    d2["strategy"] = {**d2["strategy"], "max_hold": 7}
+    tampered.write_text(json.dumps(d2), encoding="utf-8")
+    with pytest.raises(CandidateError, match="from_genes"):
+        load_strategy_config(tampered)
+    partial = tmp_path / "partial.json"                                          # 인계 표식만 있고 나머지가 빠진 파일도 거부
+    partial.write_text(json.dumps({"strategy_hash": "x", "strategy": {"max_hold": 60}}), encoding="utf-8")
+    with pytest.raises(CandidateError, match="빠진 키"):
+        load_strategy_config(partial)
+
+
+def test_cli_replay_clock_is_per_job_and_paper_only(tmp_path, monkeypatch):
+    """재검토 잔여 3: --quotes db 재생은 작업별 예정 시각(또는 --clock)으로 시계를 둔다 — 벽시계로 그날 전체 봉을 보지 않는다."""
+    from swing_it.live import brokers, cli
+    from swing_it.live import runtime as rt_mod
+
+    seen = []
+
+    class _RT:
+        def __init__(self, cfg, bundle, *, signal_source=None, clock=None, sleeper=None):
+            seen.append({"clock": clock, "sleeper": sleeper, "cfg": cfg})
+
+        def run(self, job, asof, **kw):
+            seen[-1].update(job=job, now=seen[-1]["clock"]() if seen[-1]["clock"] else None)
+            return 0
+
+    monkeypatch.setattr(rt_mod, "SwingRuntime", _RT)
+    base = ["--data-dir", str(tmp_path / "ls"), "--stop-file", str(tmp_path / "swing_STOP"), "--quotes", "db",
+            "--asof", "2026-10-12"]
+    assert cli.main(["open-check", *base]) == 0
+    assert seen[-1]["now"].strftime("%Y-%m-%d %H:%M") == "2026-10-12 09:02" and seen[-1]["cfg"].quotes_source == "db"
+    assert cli.main(["eod", *base]) == 0 and seen[-1]["now"].strftime("%H:%M") == "15:40"
+    assert cli.main(["monitor", *base, "--clock", "10:30"]) == 0 and seen[-1]["now"].strftime("%H:%M") == "10:30"
+    seen[-1]["sleeper"](60)
+    assert seen[-1]["clock"]().strftime("%H:%M") == "10:31"                         # monitor 루프는 재생 시계로 진행
+    parser = cli.build_parser()
+    for argv in (["monitor", "--clock", "10:30"], ["monitor", "--quotes", "db", "--asof", "2026-10-12", "--clock", "25:00"]):
+        with pytest.raises(SystemExit):
+            cli.resolve_mode(parser, parser.parse_args(argv))
+    assert brokers.REPLAY_JOB_TIMES["preopen"] == "08:35"
+
+
+def test_load_inputs_window_from_wide_panels_matches_long_rows():
+    """M6: ``load_inputs`` 의 와이드판 → 창 긴 표 변환은 원래 테이블에 있던 행만 남긴다(없던 칸을 행으로 만들지 않는다)."""
+    import numpy as np
+
+    from swing_it.live.features import _long_window
+
+    idx = pd.DatetimeIndex(["2026-10-07", "2026-10-08", "2026-10-09"])
+    close = pd.DataFrame({"AAAAAA": [1.0, 2.0, 3.0], "BBBBBB": [np.nan, 5.0, 6.0]}, index=idx)
+    vol = pd.DataFrame({"AAAAAA": [10.0, 20.0, 30.0], "BBBBBB": [np.nan, 50.0, np.nan]}, index=idx)
+    df = _long_window({"close": close, "volume": vol}, ("close", "volume"), pd.Timestamp("2026-10-08"), pd.Timestamp("2026-10-09"))
+    assert list(df.columns) == ["code", "date", "close", "volume"]
+    assert sorted(zip(df["code"], df["date"].dt.strftime("%m-%d"), df["close"])) == [
+        ("AAAAAA", "10-08", 2.0), ("AAAAAA", "10-09", 3.0), ("BBBBBB", "10-08", 5.0), ("BBBBBB", "10-09", 6.0)]
+    assert np.isnan(df.loc[(df.code == "BBBBBB") & (df.date == "2026-10-09"), "volume"]).all()
+
+
+def test_signal_abort_exit_codes(tmp_path):
+    """신규 진입을 중단한 signal 은 0 이 아니라 4(크론·감시가 본다). 정상 signal 은 0, 같은 날 재실행(이미 완료)도 0."""
+    from swing_it.live.runtime import RC_ENTRIES_ABORTED
+
+    env = Env(tmp_path)
+    env.signals.batches[D1] = SignalBatch(data_date=date(2026, 10, 8), candidates=[cand("AAAAAA")])   # DB 최신일이 하루 늦다
+    assert env.run("signal", D1, "07:35") == RC_ENTRIES_ABORTED == 4
+    env.signals.batches[D1] = SignalBatch(data_date=SIGNAL_D, candidates=[cand("AAAAAA")], krx_patched=False)
+    assert env.run("signal", D1, "07:36", force=True) == 4
+
+    class Boom:
+        def load(self, asof, *, held, since=None):
+            raise ConnectionError("server closed the connection unexpectedly")
+
+    rt = SwingRuntime(env.cfg, env.bundle, clock=env.clock, signal_source=Boom(), alert=lambda *a: None)
+    env.clock.set(D1, "07:37")
+    assert rt.run("signal", D1, force=True) == 4
+    env.signals.batches[D1] = SignalBatch(data_date=SIGNAL_D, candidates=[cand("AAAAAA")])
+    assert env.run("signal", D1, "07:38", force=True) == 0
+    assert env.run("signal", D1, "07:39") == 0

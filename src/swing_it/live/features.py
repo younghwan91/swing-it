@@ -317,9 +317,26 @@ def _wide(df: pd.DataFrame, col: str, days: pd.DatetimeIndex, codes: pd.Index) -
     return df.pivot(index="date", columns="code", values=col).astype(float).reindex(index=days, columns=codes)
 
 
+def _long_window(wide: dict, cols: "tuple[str, ...]", lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
+    """와이드 패널 ``{col: 날짜×종목}`` 의 ``[lo, hi]`` 창 → 긴 표(code, date, cols…). 값이 전부 없는 (날짜, 종목) 은 뺀다
+    (원래 테이블에 행이 없던 칸 — 긴 표 :func:`read_prices` 와 같은 행 집합)."""
+    ref = wide[cols[0]]
+    ref = ref.loc[(ref.index >= lo) & (ref.index <= hi)]
+    nd, nc = ref.shape
+    data = {"code": np.tile(ref.columns.astype(str).to_numpy(), nd), "date": np.repeat(ref.index.to_numpy(), nc)}
+    for c in cols:
+        data[c] = wide[c].reindex(index=ref.index, columns=ref.columns).to_numpy(dtype=float).ravel()
+    df = pd.DataFrame(data)
+    keep = np.isfinite(df[list(cols)].to_numpy(dtype=float)).any(axis=1)
+    df = df[keep].reset_index(drop=True)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
 def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None" = None,
                 last_rows: "int | None" = None, patch_nxt: bool = True) -> RawInputs:
-    """DB → :class:`RawInputs`. 가격은 정문(:func:`swing_it.storage.read_prices` — 폐지 포함 검사) 뒤 날짜로 자른다.
+    """DB → :class:`RawInputs`. 가격은 정문의 와이드판(:func:`swing_it.storage.read_prices_wide` — 폐지 포함 검사, 서버측 커서) 뒤
+    날짜로 자른다(전 기간 긴 프레임을 만들지 않는다 — 통합 검토 M6).
 
     Args:
         start, end: 날짜 구간(포함). ``end=None`` = 끝까지.
@@ -327,21 +344,19 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
         patch_nxt: 2026-09-14~ 행을 정규장(분봉) 값으로 바꾼다(:mod:`swing_it.krx_session`).
     """
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars  # noqa: PLC0415
-    from swing_it.storage import read_earnings, read_prices, read_supply_demand  # noqa: PLC0415
+    from swing_it.storage import read_earnings, read_prices_wide, read_supply_demand  # noqa: PLC0415
 
-    prices = read_prices(con)
-    prices["date"] = pd.to_datetime(prices["date"])
-    hi = pd.Timestamp(end) if end is not None else prices["date"].max()
-    prices = prices[prices["date"] <= hi]
+    # 정문의 와이드판(서버측 커서 — 긴 프레임 580만 행을 만들지 않는다; 통합 검토 M6). 폐지 포함 검사는 그대로.
+    wide = read_prices_wide(con, cols=PRICE_COLS)
+    days_all = wide["close"].index
+    hi = pd.Timestamp(end) if end is not None else days_all.max()
+    upto = days_all[days_all <= hi]
     if last_rows is not None:
-        all_days = np.sort(prices["date"].unique())
-        lo = pd.Timestamp(all_days[max(len(all_days) - last_rows, 0)])
+        lo = pd.Timestamp(upto[max(len(upto) - last_rows, 0)])
     else:
-        lo = pd.Timestamp(start) if start is not None else prices["date"].min()
-    prices = prices[prices["date"] >= lo]
-    raw = read_prices(con, cols=("code", "date", "open", "close"), table="daily_bars")
-    raw["date"] = pd.to_datetime(raw["date"])
-    raw = raw[(raw["date"] >= lo) & (raw["date"] <= hi)]
+        lo = pd.Timestamp(start) if start is not None else upto.min()
+    prices = _long_window(wide, PRICE_COLS, lo, hi)
+    raw = _long_window(read_prices_wide(con, cols=("open", "close"), table="daily_bars"), ("open", "close"), lo, hi)
 
     # 정수 열(거래량·거래대금)에 정규장 float 를 덮어쓰면 pandas 가 거부한다 — 먼저 float 로.
     prices = prices.astype({c: float for c in PRICE_COLS})

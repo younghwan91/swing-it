@@ -339,7 +339,7 @@ def test_stale_signal_data_still_settles_held_positions(tmp_path):
     env.signals.batches[D3] = SignalBatch(data_date=D1, candidates=[cand("EEEEEE", d=D1)],
                                           trail_closes={"CCCCCC": [11_800.0] * 49 + [11_000.0]})
     env.q("CCCCCC", 12_500, prev_close=12_500)
-    assert env.run("signal", D3, "07:35") == 0
+    assert env.run("signal", D3, "07:35") == 4                                  # 신규 진입 중단 = 종료 코드 4
     st = env.state()
     assert "EEEEEE" not in st.positions and env.events("signal_abort")
     assert st.positions["CCCCCC"].exit_intent["kind"] == "trail_next_open"
@@ -559,7 +559,7 @@ def test_f4_real_holiday_with_stale_open_does_not_fill_paper(tmp_path):
     assert env.run("eod", D1, "15:40") == 0
     st = env.state()
     assert st.sessions[D1.isoformat()] == "suspect" and not env.events("fill") and not st.live_orders()
-    assert env.run("signal", D2, "07:35") == 0
+    assert env.run("signal", D2, "07:35") == 4      # 가짜 원천의 DB 최신일(D1)이 키움 직전 거래일(10-09)과 달라 진입 중단
     assert [p.exit_reason for p in env.state().history] == ["stale_plan"]
 
 

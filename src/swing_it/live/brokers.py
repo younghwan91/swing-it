@@ -60,8 +60,10 @@ from .state import atomic_write_json
 
 __all__ = [
     "MODES",
+    "REPLAY_JOB_TIMES",
     "BrokerBundle",
     "DBQuoteProvider",
+    "SimClock",
     "DailyBar",
     "FakeQuoteProvider",
     "PersistentPaperBroker",
@@ -259,6 +261,30 @@ class FakeQuoteProvider:
         if code in self.fail:
             raise RuntimeError(f"fake: 일봉 없음 {code}")
         return list(self.bars.get(code, []))[-n:]
+
+
+#: 재생에서 작업별 시각(크론 예시와 같다). ``--quotes db`` 는 시계를 이 시각에 둔다 — 벽시계로 과거일을 재생하면 매 작업이
+#: 그날 전체 봉을 본다(재검토 잔여 3).
+REPLAY_JOB_TIMES = {"signal": "07:35", "preopen": "08:35", "open_check": "09:02", "monitor": "09:05",
+                    "close": "15:21", "eod": "15:40", "reconcile": "15:50", "status": "16:00", "release_order": "16:00"}
+
+
+class SimClock:
+    """재생용 시계 — ``set(day, "HH:MM")`` 로 두고 ``sleep(초)`` 로 진행한다(monitor 루프가 실제로 자지 않는다). KST tz-aware."""
+
+    def __init__(self, day: date, hhmm: str = "07:35") -> None:
+        self.now = datetime(day.year, day.month, day.day, tzinfo=KST)
+        self.set(day, hhmm)
+
+    def set(self, day: date, hhmm: str) -> None:
+        h, m = (int(x) for x in hhmm.split(":"))
+        self.now = datetime(day.year, day.month, day.day, h, m, tzinfo=KST)
+
+    def sleep(self, seconds: float) -> None:
+        self.now = self.now + timedelta(seconds=float(seconds))
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 class DBQuoteProvider:

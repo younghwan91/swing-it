@@ -12,7 +12,8 @@
 * ``--execute --confirm-real``: **실주문.** 두 플래그가 다 있어야 한다. 하나만 주면 거부한다(daytrade-it 패턴).
   ``--paper``/``--dry-run`` 과 함께 줄 수 없다. 환경변수로는 켤 수 없다.
 
-종료 코드: 0 정상 · 1 작업 오류 · 2 시간창 밖/잠금 경합/인자 오류 · 3 상태 손상.
+종료 코드: 0 정상 · 1 작업 오류 · 2 시간창 밖/잠금 경합/인자 오류 · 3 상태 손상 ·
+4 signal 신규 진입 중단(입력 신선도·DB·최신일·NXT 보정 실패 — 보유 종목 결정·자산은 수행됨).
 """
 
 from __future__ import annotations
@@ -52,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="버전 있는 전략 설정 JSON(없으면 코드 기본값). 신규 계획에만 적용, 열린 포지션은 계획 시점 설정 고정")
     p.add_argument("--quotes", choices=("kiwoom", "db"), default="kiwoom",
                    help="시세 원천. db = --asof 과거일 재생(minute_bars·daily_bars, 키움 호출 없음, 페이퍼 전용)")
+    p.add_argument("--clock", default=None,
+                   help="재생 시계 HH:MM(--quotes db 전용). 없으면 작업별 예정 시각(signal 07:35 · preopen 08:35 · "
+                        "open-check 09:02 · monitor 09:05~ · close 15:21 · eod 15:40)")
+    p.add_argument("--allow-code-mismatch", action="store_true",
+                   help="인계 파일의 code_hash 가 지금 코드와 달라도 읽는다(사람이 확인한 경우만)")
     return p
 
 
@@ -71,6 +77,12 @@ def resolve_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> t
         parser.error("--quotes db 는 페이퍼 전용이다(재생)")
     if args.quotes == "db" and not args.asof:
         parser.error("--quotes db 에는 --asof YYYY-MM-DD 가 필요하다")
+    if args.clock and args.quotes != "db":
+        parser.error("--clock 은 --quotes db 재생 전용이다(실시간 작업의 시간창을 우회하지 않는다)")
+    if args.clock:
+        hh, _, mm = args.clock.partition(":")
+        if not (hh.isdigit() and mm.isdigit() and len(mm) == 2 and 0 <= int(hh) < 24 and 0 <= int(mm) < 60):
+            parser.error("--clock 은 HH:MM")
     if args.execute and args.confirm_real:
         return "live", True
     if args.dry_run:
@@ -100,7 +112,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     print(banner(mode, data_dir, stop_file), file=sys.stderr, flush=True)
 
-    from swing_it.live.brokers import DBQuoteProvider, build_bundle  # noqa: PLC0415 — CLI 인자 검증 뒤에만 무거운 import
+    from swing_it.live.brokers import (  # noqa: PLC0415 — CLI 인자 검증 뒤에만 무거운 import
+        REPLAY_JOB_TIMES,
+        DBQuoteProvider,
+        SimClock,
+        build_bundle,
+    )
     from swing_it.live.runtime import (  # noqa: PLC0415
         FeaturesSignalSource,
         RuntimeConfig,
@@ -110,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
 
     strategy, meta = DEFAULT_STRATEGY, {}
     if args.strategy_config:
-        strategy, meta = load_strategy_config(args.strategy_config)
+        strategy, meta = load_strategy_config(args.strategy_config, allow_code_mismatch=bool(args.allow_code_mismatch))
         print(f"[sw-live] 전략 설정 {meta.get('cfg_hash', '')[:8]} ← {args.strategy_config} (valid_from {meta.get('valid_from')})",
               file=sys.stderr, flush=True)
     else:
@@ -120,18 +137,26 @@ def main(argv: list[str] | None = None) -> int:
                         strategy_file=Path(args.strategy_config) if args.strategy_config else None, strategy_meta=meta,
                         quotes_source=args.quotes)
 
+    job = args.job.replace("-", "_")
+    clock = None
+    if args.quotes == "db":
+        clock = SimClock(asof, args.clock or REPLAY_JOB_TIMES.get(job, "16:00"))
+
     def bundle_factory():
         quotes = None
         if args.quotes == "db":
             from swing_it.storage import connect, db_default  # noqa: PLC0415
 
-            quotes = DBQuoteProvider(connect(args.db or db_default()), asof)
-        return build_bundle(mode, confirm_real=confirm_real, paper_path=cfg.mode_dir / "paper_broker.json", quotes=quotes)
+            quotes = DBQuoteProvider(connect(args.db or db_default()), asof, clock=clock)
+        kw = {"clock": clock} if clock is not None else {}
+        return build_bundle(mode, confirm_real=confirm_real, paper_path=cfg.mode_dir / "paper_broker.json", quotes=quotes,
+                            **kw)
 
     if args.job == "release-order" and not args.oid:
         parser.error("release-order 에는 --oid 가 필요하다")
-    rt = SwingRuntime(cfg, bundle_factory, signal_source=FeaturesSignalSource(cfg.strategy, db=args.db))
-    return rt.run(args.job.replace("-", "_"), asof, force=args.force, once=args.once, oid=args.oid)
+    rt_kw = {"clock": clock, "sleeper": clock.sleep} if clock is not None else {}
+    rt = SwingRuntime(cfg, bundle_factory, signal_source=FeaturesSignalSource(cfg.strategy, db=args.db), **rt_kw)
+    return rt.run(job, asof, force=args.force, once=args.once, oid=args.oid)
 
 
 if __name__ == "__main__":  # pragma: no cover
