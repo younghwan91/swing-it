@@ -518,16 +518,142 @@ def mood_score(daily: pd.DataFrame) -> pd.Series:
 
 
 def mood_index(daily: pd.DataFrame, trading_days: Sequence[dt.date], *, span: int = 20) -> pd.DataFrame:
-    """거래일 달력 위 일별 평균과 ``span`` 일 지수이동평균(``*_ema20``) — 기사 없는 날은 EMA 가 전날 값을 유지(인과)."""
+    """거래일 달력 위 일별 평균과 ``span`` 일 지수이동평균(``*_ema20``) — 기사 없는(또는 결측) 날은 EMA 가 전날 값을 유지(인과).
+    ``n_*`` 개수 열은 그대로 옮기고 빈 날은 0."""
     idx = pd.DatetimeIndex(sorted(pd.Timestamp(d) for d in trading_days))
     d = daily.reindex(idx)
-    out = d[["n_selected", "n_judged", *FIELDS]].copy()
-    out["n_selected"] = out["n_selected"].fillna(0).astype(int)
-    out["n_judged"] = out["n_judged"].fillna(0).astype(int)
+    counts = [c for c in daily.columns if c.startswith("n_")]
+    out = d[[*counts, *FIELDS]].copy()
+    for c in counts:
+        out[c] = out[c].fillna(0).astype(int)
     out["mood_score"] = mood_score(d)
     for f in [*FIELDS, "mood_score"]:
         out[f"{f}_ema{span}"] = out[f].ewm(span=span, adjust=False, ignore_na=True).mean().ffill()
     return out.rename_axis("date")
+
+
+# ---------------------------------------------------------------------------
+# 신호용 기분 — mood_avail (리뷰 M1·M2, ADAPTIVE §7)
+# ---------------------------------------------------------------------------
+#
+# 위 :func:`daily_mood` 의 행 d 는 "발행 < d 15:30" 기사라 실제로는 **세션 d−1** 의 마감 시황이다(리뷰 M1: 방향 부호가 r_{d−1} 과 98%
+# 일치). 신호(d 종가 결정 → d+1 07:35 작업)에 쓰는 기분은 판단일 d 에 다시 묶는다: **d 15:30 ≤ 발행 < 다음 거래일 07:30 KST**.
+# 07:30~15:30 장중 기사는 어느 판단일에도 들지 않는다(그날 판단에는 늦고, 다음 판단에는 세션 d+1 마감 기사가 있다).
+
+#: 판단일 창의 끝(다음 거래일 아침) — 07:35 작업 전 여유.
+AVAIL_CUTOFF = dt.time(7, 30)
+#: 판단일 창의 시작(그날 장 마감).
+AVAIL_OPEN = dt.time(15, 30)
+#: 집계에 쓸 최소 기사 수 — 미만이면 그날 기분은 결측(0 이 아니다).
+MIN_ARTICLES = 5
+#: 판정이 전부 중립인 출력 — 주제 무관 기사(외국인 관광객·환율 마감·상장 예정 …)의 전형(리뷰 M2: 전체 18.9%).
+NEUTRAL_OUTPUT = {"market_direction": 0, "risk_appetite": 1, "foreign_flow_tone": 0, "breadth_tone": 0, "event_risk": 0}
+#: 표 기사(외국인·기관 순매수도 상위종목) — 2023 0% → 2026 17.8% 로 늘며 척도를 바꾼다(리뷰 M2).
+TABLE_TITLE = re.compile(r"^\s*\[표\]")
+
+
+def exclusion_reason(title: str, output: "dict | None") -> "str | None":
+    """집계에서 뺄 이유 — ``"table"`` (``[표]`` 제목) · ``"neutral"`` (5필드 전부 중립) · ``"unjudged"`` · 없으면 None."""
+    if TABLE_TITLE.search(str(title)):
+        return "table"
+    if output is None:
+        return "unjudged"
+    if all(output.get(k) == v for k, v in NEUTRAL_OUTPUT.items()):
+        return "neutral"
+    return None
+
+
+def _next_weekday(d: dt.date) -> dt.date:
+    n = d + dt.timedelta(days=1)
+    while n.weekday() >= 5:
+        n += dt.timedelta(days=1)
+    return n
+
+
+def avail_decision_days(times, trading_days: Sequence[dt.date], *, cutoff: dt.time = AVAIL_CUTOFF) -> pd.Series:
+    """발행 시각(tz-aware) → 판단일 d (``d 15:30 ≤ t < next_td(d) cutoff``), 어느 창에도 안 들면 None.
+
+    달력 마지막 날의 다음 거래일은 모르므로 다음 평일로 둔다(실제가 휴장이면 창이 짧아질 뿐 — 미래를 넣지 않는 쪽)."""
+    days = sorted(trading_days)
+    t = pd.DatetimeIndex(pd.to_datetime(pd.Series(times), utc=True)).tz_convert(KST)
+    if not days or len(t) == 0:
+        return pd.Series([None] * len(t), dtype=object)
+    opens = pd.DatetimeIndex([dt.datetime.combine(d, AVAIL_OPEN, tzinfo=KST) for d in days])
+    nexts = [*days[1:], _next_weekday(days[-1])]
+    ends = pd.DatetimeIndex([dt.datetime.combine(n, cutoff, tzinfo=KST) for n in nexts])
+    i = opens.searchsorted(t, side="right") - 1          # 마지막 open ≤ t
+    out = []
+    for k, ti in zip(i, t):
+        out.append(days[k] if k >= 0 and ti < ends[k] else None)
+    return pd.Series(out, dtype=object)
+
+
+def mood_avail_daily(articles: pd.DataFrame, outputs: dict[str, dict], trading_days: Sequence[dt.date], *,
+                     exclude: bool = True, min_n: int = MIN_ARTICLES) -> pd.DataFrame:
+    """판정된 기사(``key``·``published_at``·``title``) → 판단일별 집계. index = 판단일(Timestamp).
+
+    열: ``n_window`` (창 안 판정 기사) · ``n_table``·``n_neutral`` (뺀 수) · ``n_judged`` (집계에 쓴 수) · 5필드 평균.
+    ``exclude`` 면 ``[표]``·전부 중립 출력을 뺀다(:func:`exclusion_reason`). ``n_judged < min_n`` 이면 5필드를 NaN 으로(모름)."""
+    cols = ["n_window", "n_table", "n_neutral", "n_judged", *FIELDS]
+    if articles.empty:
+        return pd.DataFrame(columns=cols).rename_axis("signal_day")
+    a = articles.copy()
+    a["signal_day"] = avail_decision_days(a["published_at"], trading_days).to_numpy()
+    a = a[a["signal_day"].notna()]
+    a["output"] = a["key"].map(outputs)
+    a = a[a["output"].notna()]
+    a["why"] = [exclusion_reason(t, o) for t, o in zip(a["title"], a["output"])]
+    use = a["why"].isna() if exclude else pd.Series(True, index=a.index)
+    rows = []
+    for day, g in a.groupby("signal_day", sort=True):
+        u = g[use.loc[g.index]]
+        row = {"signal_day": pd.Timestamp(day), "n_window": len(g), "n_table": int((g["why"] == "table").sum()),
+               "n_neutral": int((g["why"] == "neutral").sum()), "n_judged": len(u)}
+        for f in FIELDS:
+            row[f] = float(pd.Series([o[f] for o in u["output"]]).mean()) if len(u) >= min_n else float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows, columns=["signal_day", *cols]).set_index("signal_day")
+
+
+def live_mood_avail(articles: pd.DataFrame, outputs: dict[str, dict], *, d: dt.date, next_day: dt.date,
+                    cutoff: dt.time = AVAIL_CUTOFF, min_n: int = MIN_ARTICLES, per_day: int = PER_DAY) -> dict:
+    """라이브 판단일 ``d`` 의 기분(작업 시각 = ``next_day`` 07:35). 기사는 **우리가 실제로 받은 시각** ``collected_at < next_day cutoff``
+    이고 발행이 ``[d 15:30, next_day cutoff)`` 인 것만, 발행 순 앞 ``per_day`` 건 중 ``[표]``·전부 중립·미판정을 뺀다.
+    남은 기사가 ``min_n`` 미만이면 5필드 NaN(모름 — 0 이 아니다). 반환: 5필드 평균 + ``n_window``·``n_judged``.
+
+    역사 구간은 ``collected_at`` 이 아카이브 이전 시각(발행 뒤 ~636일)이라 이 거름을 쓸 수 없다 — :func:`mood_avail_daily` 가 발행 시각으로 대신한다."""
+    lo = dt.datetime.combine(d, AVAIL_OPEN, tzinfo=KST)
+    hi = dt.datetime.combine(next_day, cutoff, tzinfo=KST)
+    a = articles.copy()
+    pub = pd.to_datetime(a["published_at"], utc=True).dt.tz_convert(KST)
+    col = pd.to_datetime(a["collected_at"], utc=True).dt.tz_convert(KST)
+    a = a[(pub >= lo) & (pub < hi) & (col < hi)].assign(_pub=pub).sort_values("_pub").head(per_day)
+    outs = [outputs.get(k) for k in a["key"]]
+    used = [o for t, o in zip(a["title"], outs) if exclusion_reason(t, o) is None]
+    res: dict = {"n_window": len(a), "n_judged": len(used)}
+    for f in FIELDS:
+        res[f] = float(sum(o[f] for o in used) / len(used)) if len(used) >= min_n else float("nan")
+    return res
+
+
+def exclusion_by_year(articles: pd.DataFrame, outputs: dict[str, dict], trading_days: Sequence[dt.date]) -> pd.DataFrame:
+    """판단일 연도별 ``[표]``·전부 중립 비중과 일 평균 |방향| (제외 전 / 후) — 척도 표류 기술(리뷰 M2)."""
+    a = articles.copy()
+    a["signal_day"] = avail_decision_days(a["published_at"], trading_days).to_numpy()
+    a = a[a["signal_day"].notna()]
+    a["output"] = a["key"].map(outputs)
+    a = a[a["output"].notna()]
+    a["why"] = [exclusion_reason(t, o) for t, o in zip(a["title"], a["output"])]
+    a["dir"] = [o["market_direction"] for o in a["output"]]
+    a["year"] = [d.year for d in a["signal_day"]]
+    rows = {}
+    for y, g in a.groupby("year"):
+        kept = g[g["why"].isna()]
+        rows[y] = {"articles": len(g), "table_%": 100 * (g["why"] == "table").mean(),
+                   "neutral_%": 100 * (g["why"] == "neutral").mean(),
+                   "abs_dir_before": g.groupby("signal_day")["dir"].mean().abs().mean(),
+                   "abs_dir_after": kept.groupby("signal_day")["dir"].mean().abs().mean()}
+    return pd.DataFrame.from_dict(rows, orient="index").rename_axis("year")
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +666,20 @@ _SQL_ARTICLES = (
     "AND (title ILIKE '%%코스피%%' OR title ILIKE '%%코스닥%%' OR title ILIKE '%%증시%%' OR title ILIKE '%%마감%%' "
     "OR title ILIKE '%%외국인%%') ORDER BY id, collected_at"
 )
+
+
+def load_judged_articles(con) -> pd.DataFrame:
+    """원장 ``market-mood-haiku55`` 의 판정 기사 — ``id``·``key``·``published_at``·``collected_at``·``title`` (같은 id 두 판이면 먼저 수집된 판)."""
+    cur = con.cursor()
+    cur.execute(
+        "SELECT DISTINCT ON (a.id) a.id, a.published_at, a.collected_at, a.title FROM news_articles a "
+        "JOIN article_judgments j ON j.article_id = a.id AND j.judge = %s AND j.code = %s ORDER BY a.id, a.collected_at",
+        (JUDGE, CODE))
+    df = pd.DataFrame(cur.fetchall(), columns=["id", "published_at", "collected_at", "title"])
+    df["published_at"] = pd.to_datetime(df["published_at"], utc=True)
+    df["collected_at"] = pd.to_datetime(df["collected_at"], utc=True)
+    df["key"] = df["id"].map(article_key)
+    return df
 
 
 def load_market_articles(con, lo: dt.datetime, hi: dt.datetime) -> pd.DataFrame:

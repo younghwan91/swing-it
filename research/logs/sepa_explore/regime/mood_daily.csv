@@ -1,3 +1,4 @@
+# 세션 d−1 묘사, 신호에 쓰지 말 것 — 신호용은 mood_avail_daily.csv (REVIEW_REGIME_DATA.md M1)
 date,n_selected,n_judged,market_direction,risk_appetite,foreign_flow_tone,breadth_tone,event_risk,mood_score,market_direction_ema20,risk_appetite_ema20,foreign_flow_tone_ema20,breadth_tone_ema20,event_risk_ema20,mood_score_ema20,kospi_ret
 2023-03-15,0,0,,,,,,,,,,,,,
 2023-03-16,10,10,-0.2000,0.8000,-0.2000,-0.1000,0.3000,-1.0000,-0.2000,0.8000,-0.2000,-0.1000,0.3000,-1.0000,

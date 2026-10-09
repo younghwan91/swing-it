@@ -234,3 +234,87 @@ def test_messages_judge_parses_and_reports_errors(monkeypatch):
     assert out["market_direction"] == -1 and err is None and usage["cache_read_input_tokens"] == 250
     out, err, usage = judge({**a, "title": "오류"})
     assert out is None and err.startswith("schema") and usage == {"input_tokens": 1}
+
+
+# --- 신호용 mood_avail (리뷰 M1·M2) ---
+
+DAYS2 = [d.date() for d in pd.bdate_range("2026-07-01", "2026-07-10")]   # 수 ~ 다음 주 금
+
+
+def _judged(rows):
+    """(i, when, title) → (기사 표, 판정 출력)."""
+    arts = pd.DataFrame([{"id": f"toss:{i:012x}", "key": f"k{i}|MARKET", "published_at": w, "title": t,
+                          "collected_at": w + dt.timedelta(minutes=5)} for i, w, t in rows])
+    return arts
+
+
+def _o(d=1, r=2, f=1, b=1, e=0):
+    return {"market_direction": d, "risk_appetite": r, "foreign_flow_tone": f, "breadth_tone": b, "event_risk": e}
+
+
+def test_avail_decision_day_windows_and_holiday_gap():
+    fri, mon = dt.date(2026, 7, 3), dt.date(2026, 7, 6)
+    times = [_at(fri, 15, 29), _at(fri, 15, 30), _at(dt.date(2026, 7, 4), 12), _at(mon, 7, 29), _at(mon, 7, 30),
+             _at(mon, 12), _at(DAYS2[-1], 20)]
+    got = list(mm.avail_decision_days(times, DAYS2))
+    assert got[0] is None                                     # 금 15:29 → 목 판단일 창(목 15:30 ~ 금 07:30) 밖
+    assert got[1:4] == [fri, fri, fri]                        # 금 15:30 ~ 월 07:29 → 금 판단일(주말 포함)
+    assert got[4] is None and got[5] is None                  # 월 07:30 이후 장중 → 어느 판단일에도 안 든다
+    assert got[6] == DAYS2[-1]                                # 달력 끝 → 다음 평일 07:30 까지
+
+
+def test_mood_avail_excludes_tables_and_neutral_and_requires_min_n():
+    d = DAYS2[0]
+    rows = [(i, _at(d, 16, i), f"코스피 마감 {i}") for i in range(6)]
+    rows += [(10, _at(d, 17), "[표] 거래소 외국인 순매수도 상위종목"), (11, _at(d, 17, 1), "외국인 관광객 급증")]
+    rows += [(20 + i, _at(DAYS2[1], 16, i), f"코스닥 마감 {i}") for i in range(4)]   # 다음 판단일: 4건 → 결측
+    arts = _judged(rows)
+    outs = {f"k{i}|MARKET": _o(d=1 if i < 3 else -1) for i in range(6)}
+    outs |= {"k10|MARKET": mm.NEUTRAL_OUTPUT.copy(), "k11|MARKET": mm.NEUTRAL_OUTPUT.copy()}
+    outs |= {f"k{20 + i}|MARKET": _o() for i in range(4)}
+    daily = mm.mood_avail_daily(arts, outs, DAYS2)
+    r0 = daily.loc[pd.Timestamp(d)]
+    assert (r0["n_window"], r0["n_table"], r0["n_neutral"], r0["n_judged"]) == (8, 1, 1, 6)
+    assert r0["market_direction"] == 0.0 and r0["risk_appetite"] == 2.0
+    r1 = daily.loc[pd.Timestamp(DAYS2[1])]
+    assert r1["n_judged"] == 4 and np.isnan(r1["market_direction"])
+    raw = mm.mood_avail_daily(arts, outs, DAYS2, exclude=False)
+    assert raw.loc[pd.Timestamp(d), "n_judged"] == 8 and raw.loc[pd.Timestamp(d), "market_direction"] == 0.0
+    idx = mm.mood_index(daily, DAYS2)
+    assert idx.loc[pd.Timestamp(DAYS2[1]), "market_direction_ema20"] == idx.loc[pd.Timestamp(d), "market_direction_ema20"]
+    assert idx.loc[pd.Timestamp(DAYS2[1]), "n_judged"] == 4
+
+
+def test_mood_avail_row_never_uses_articles_after_next_morning_cutoff():
+    d = DAYS2[2]
+    rows = [(i, _at(d, 16, i), f"코스피 마감 {i}") for i in range(5)]
+    arts = _judged(rows + [(9, _at(DAYS2[3], 9, 5), "코스피 하락 출발")])   # 다음 날 개장 뒤 → 제외
+    outs = {f"k{i}|MARKET": _o(d=1) for i in range(5)} | {"k9|MARKET": _o(d=-1)}
+    daily = mm.mood_avail_daily(arts, outs, DAYS2)
+    assert daily.loc[pd.Timestamp(d), "n_window"] == 5 and daily.loc[pd.Timestamp(d), "market_direction"] == 1.0
+    assert pd.Timestamp(DAYS2[3]) not in daily.index
+
+
+def test_live_mood_avail_filters_by_collected_at_and_min_n():
+    d, nxt = DAYS2[0], DAYS2[1]
+    rows = [(i, _at(d, 16, i), f"코스피 마감 {i}") for i in range(7)]
+    arts = _judged(rows)
+    arts.loc[5, "collected_at"] = _at(nxt, 7, 31)        # 07:30 뒤에 받은 기사 → 못 쓴다
+    arts.loc[6, "collected_at"] = _at(nxt, 8)
+    outs = {f"k{i}|MARKET": _o(d=1 if i % 2 else -1) for i in range(7)}
+    res = mm.live_mood_avail(arts, outs, d=d, next_day=nxt)
+    assert res["n_window"] == 5 and res["n_judged"] == 5
+    assert res["market_direction"] == pytest.approx(-0.2)
+    arts.loc[4, "title"] = "[표] 코스닥 기관 순매수도 상위종목"
+    res = mm.live_mood_avail(arts, outs, d=d, next_day=nxt)
+    assert res["n_judged"] == 4 and np.isnan(res["market_direction"])   # < 5 → 모름
+
+
+def test_exclusion_by_year_reports_shares_before_after():
+    d = DAYS2[0]
+    rows = [(i, _at(d, 16, i), f"코스피 마감 {i}") for i in range(4)] + [(9, _at(d, 17), "[표] 표")]
+    arts = _judged(rows)
+    outs = {f"k{i}|MARKET": _o(d=1) for i in range(4)} | {"k9|MARKET": mm.NEUTRAL_OUTPUT.copy()}
+    t = mm.exclusion_by_year(arts, outs, DAYS2)
+    assert t.loc[2026, "articles"] == 5 and t.loc[2026, "table_%"] == pytest.approx(20.0)
+    assert t.loc[2026, "abs_dir_before"] == pytest.approx(0.8) and t.loc[2026, "abs_dir_after"] == pytest.approx(1.0)

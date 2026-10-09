@@ -169,6 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     idx["kospi_ret"] = kr.reindex(idx.index)
     tag = "mood_daily" if args.mode == "batch" else "mood_pilot_daily"
     idx.to_csv(out / f"{tag}.csv", float_format="%.4f")
+    # 이 집계의 행 d 는 세션 d−1 의 마감 시황이다(REVIEW_REGIME_DATA.md M1) — 신호용은 mood_avail_run.py 의 mood_avail_daily.csv.
+    csv = out / f"{tag}.csv"
+    csv.write_text("# 세션 d−1 묘사, 신호에 쓰지 말 것 — 신호용은 mood_avail_daily.csv (REVIEW_REGIME_DATA.md M1)\n"
+                   + csv.read_text(encoding="utf-8"), encoding="utf-8")
     n_judged = info.get("n_judged", info.get("n_ok", 0) + info.get("n_error", 0))
     valid = (info["n_ok"] / n_judged) if n_judged else float("nan")
     per_req = (info["measured_usd"] / n_judged) if n_judged and info["measured_usd"] else None
