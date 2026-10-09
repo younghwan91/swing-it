@@ -66,6 +66,10 @@ def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NX
     """
     df = prices.copy()
     df["date"] = pd.to_datetime(df["date"])
+    # DB 일봉의 가격·거래량은 정수 열로 오기도 한다 — 정규장 값(실수·조정계수 곱)을 대입하려면 실수여야 한다.
+    for col in ("open", "high", "low", "close", "volume", "trade_value"):
+        if col in df.columns:
+            df[col] = df[col].astype(float)
     df["krx_patched"] = False
     if session.empty:
         return df

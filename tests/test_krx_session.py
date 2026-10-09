@@ -35,3 +35,12 @@ def test_patch_scales_by_open_ratio_and_flags():
     assert a_new["krx_patched"] and a_new["close"] == 102 * 0.5 and a_new["high"] == 104 * 0.5
     assert a_new["volume"] == 40
     assert not b["krx_patched"] and b["close"] == 7.5                    # 분봉 없는 종목은 원값 + 표시
+
+
+def test_patch_accepts_integer_columns():
+    """DB 원 일봉은 int64 열 — 실수 대입이 실패하지 않아야 한다(두 러너가 각자 우회했던 버그)."""
+    s = session_bars_from_minutes(_minutes())
+    prices = pd.DataFrame({"code": ["A"], "date": ["2026-09-17"], "open": [50], "high": [60], "low": [45],
+                           "close": [57], "volume": [99], "trade_value": [9]})
+    out = patch_prices(prices, s)
+    assert out.iloc[0]["krx_patched"] and out.iloc[0]["close"] == 102 * 0.5
