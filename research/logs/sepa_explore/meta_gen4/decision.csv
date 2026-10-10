@@ -1,0 +1,5 @@
+proc,win,n_params,crit_c1,crit_c2,crit_c3,crit_c4,crit_c5,crit_all,crit_each_all,crit_circ_all,crit_b12_all,crit_acc_all,null_markov_calmar_p95,null_circ_calmar_p95,b3_p_sharpe,b3_p_calmar,b3_p_both,b3_months,b12_p_sharpe,b12_p_calmar,b12_p_both,b12_months
+C1f,full,0,False,False,True,False,False,False,False,False,False,False,0.6021175799755739,0.4906945445286513,0.472,0.547,0.437,117,0.4045,0.624,0.3955,117
+C4,full,0,False,False,False,False,False,False,False,False,False,False,0.5471506931164204,0.5625694155536051,0.442,0.5305,0.404,117,0.404,0.645,0.393,117
+C1,oos,1,False,False,True,False,False,False,False,False,False,False,0.7750588304505827,0.8718827083947606,0.5415,0.6185,0.5155,81,0.6645,0.786,0.65,81
+C2,oos,1,False,False,True,False,True,False,False,False,False,False,0.757539209581604,0.6044099802663873,0.685,0.689,0.6355,81,0.454,0.517,0.4195,81
