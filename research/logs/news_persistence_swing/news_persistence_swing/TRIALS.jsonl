@@ -1,0 +1,1 @@
+{"config": {"drop_price_move": true, "drop_repeat": true, "entry": "next_open", "horizons": [5, 10, 20, 40], "n_per": 5, "primary": "hi_minus_lo", "primary_h": 20, "prompt": "v2+r3", "sentiment": 1, "strata": ["date", "market", "q_adv", "q_ret5"], "subject": "main", "universe": 300}, "fingerprint": "8425bc0ff9f0009c"}
