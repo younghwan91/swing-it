@@ -1031,7 +1031,7 @@ def _eps_flags(con, sv: pd.DataFrame) -> np.ndarray:
 
 def _estimate_p(con, A: V.Arrays, h5: pd.DataFrame, days: pd.DatetimeIndex, p_hi: "str | None", *,
                 band_lo: float = V.VCP_PARAMS["close_lo"], min_age: int = V.VCP_PARAMS["dry_min"],
-                params: "dict | None" = None) -> dict:
+                params: "dict | None" = None, levels_fn=None) -> dict:
     """정정 C3·정정 2 B-M1 — 분봉 구간(2025-08+) 유니버스 합성 매수정지 돌파의 **모호** 사건(시뮬과 같은 식: 시가 ≤ 피벗 ∧ 저가 ≤ 손절가 ∧
     종가 > 손절가 — :func:`vcp.buystop_entry_check`)에서 손절가 터치가 체결 봉 **뒤**에 온 비율 p. 진입일 종가 ≤ 손절가(확정 손절)는
     분모에 넣지 않고 따로 센다. 합성 = H5 종목, 피벗 = 직전 k일 최고 고가(피벗 뒤 ≥ 3일), 손절 = 직전 j일 최저 저가 − 1호가(2% 하한),
@@ -1052,10 +1052,13 @@ def _estimate_p(con, A: V.Arrays, h5: pd.DataFrame, days: pd.DatetimeIndex, p_hi
         seen = np.zeros(len(cs), bool)
         conf_seen = np.zeros(len(cs), bool)
         for k, j in P_GRID:
-            piv, ip, ll = V.null_levels(A, cs, np.full(len(cs), s), np.full(len(cs), k), np.full(len(cs), j))
-            cl = A.C[cs, s]
-            with np.errstate(invalid="ignore"):
-                band = (cl < piv) & (cl >= band_lo * piv) & (ip <= s - min_age)
+            if levels_fn is None:
+                piv, ip, ll = V.null_levels(A, cs, np.full(len(cs), s), np.full(len(cs), k), np.full(len(cs), j))
+                cl = A.C[cs, s]
+                with np.errstate(invalid="ignore"):
+                    band = (cl < piv) & (cl >= band_lo * piv) & (ip <= s - min_age)
+            else:                                      # 다른 시험의 합성 사건 정의(예: 쐐기 D 바닥 반전) — (기준가, 손절 기준, 통과)
+                piv, ll, band = levels_fn(A, cs, np.full(len(cs), s), np.full(len(cs), k), np.full(len(cs), j))
             chk = V.buystop_entry_check(A, cs, np.full(len(cs), d), piv, ll, params)
             ok = band & (chk["status"] == V.S_OK)
             stage["band"] += int(band.sum())
