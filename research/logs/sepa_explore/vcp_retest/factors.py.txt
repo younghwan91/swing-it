@@ -1,0 +1,49 @@
+"""Independent factor proxies for regressing stitched portfolio returns (reviewer-built, KRX-session patched)."""
+import sys, numpy as np, pandas as pd
+sys.path.insert(0, "/home/young/git/swing-it-feature-combined-strategy")
+from swing_it.storage import connect, db_default, read_prices
+from swing_it.krx_session import read_session_bars, patch_prices
+from research.signals.sepa import _market_of
+OUT = sys.argv[1]
+con = connect(db_default())
+px = read_prices(con)
+for _c in ("open","high","low","close","volume","trade_value"): px[_c] = px[_c].astype(float)
+sess = read_session_bars(con)
+px = patch_prices(px, sess)
+px["date"] = pd.to_datetime(px["date"])
+C = px.pivot(index="date", columns="code", values="close").sort_index()
+TV = px.pivot(index="date", columns="code", values="trade_value").reindex_like(C)
+mk = _market_of(con, C.columns)
+r = C.pct_change(fill_method=None)
+r = r.where(r.abs() <= 0.35)               # drop data errors (limit is 30%)
+adv = TV.rolling(20, min_periods=20).mean()
+elig = (adv.shift(1) >= 1000) & (C.shift(1) >= 1000)       # ADV20 >= 10억 (백만원 단위), prev-day
+f = {}
+for m in ("KOSPI", "KOSDAQ"):
+    cols = mk.index[mk == m]
+    rr = r[cols].where(elig[cols]); w = adv.shift(1)[cols].where(elig[cols])
+    f[f"MKT_{m}_EW"] = rr.mean(axis=1)
+    f[f"MKT_{m}_TVW"] = (rr * w).sum(axis=1) / w.where(rr.notna()).sum(axis=1)
+# monthly rebalanced long-short portfolios within ADV>=50억 universe
+u50 = (adv >= 5000) & (C >= 1000)
+mom = C.shift(21) / C.shift(252) - 1
+vol60 = r.rolling(60, min_periods=40).std()
+me = C.groupby(C.index.to_period("M")).tail(1).index            # month-end dates
+def ls(sig, hi_long=True, univ=u50, q=0.3):
+    out = pd.Series(np.nan, index=C.index)
+    for i, d in enumerate(me[:-1]):
+        s = sig.loc[d].where(univ.loc[d]).dropna()
+        if len(s) < 30: continue
+        lo, hi = s.quantile(q), s.quantile(1 - q)
+        L, S = s.index[s >= hi], s.index[s <= lo]
+        if not hi_long: L, S = S, L
+        nxt = (C.index > d) & (C.index <= me[i + 1])
+        out[nxt] = r.loc[nxt, L].mean(axis=1) - r.loc[nxt, S].mean(axis=1)
+    return out
+f["UMD"] = ls(mom)
+f["SMB_ADV"] = ls(adv, hi_long=False, univ=(adv >= 1000) & (C >= 1000))
+f["LOWVOL"] = ls(vol60, hi_long=False)
+F = pd.DataFrame(f)
+F.to_pickle(OUT)
+print(F.describe().T[["count", "mean", "std"]])
+print((F.loc["2020":].mean() * 252).round(3))
