@@ -1,0 +1,12 @@
+[    0.0s] 캐시 재사용 /tmp/claude-1000/-home-young-git-swing-it-feature-combined-strategy/c0fa40b6-d4a8-41de-bd4c-b160264df3d9/scratchpad/pga_cache (사건 191,648)
+[    0.0s] 엔진 — 사건 191,648 · 표 72 · 폴드 6
+[   43.3s] 재시작 풀(실제): 폴드1 19 · 폴드2 33 · 폴드3 54 · 폴드4 69 · 폴드5 54 · 폴드6 28
+[ 1517.9s] 실제 런 10/60 · 재시작 2 · 293s
+[ 1784.7s] 실제 런 20/60 · 재시작 2 · 292s
+[ 1961.6s] 실제 런 30/60 · 재시작 2 · 268s
+[ 2226.0s] 실제 런 40/60 · 재시작 2 · 314s
+[ 2481.6s] 실제 런 50/60 · 재시작 2 · 285s
+[ 2591.9s] 실제 런 60/60 · 재시작 1 · 182s
+[ 2622.3s] 선별·풀 끝
+/home/young/.local/share/uv/python/cpython-3.13.15-linux-x86_64-gnu/lib/python3.13/multiprocessing/resource_tracker.py:479: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-4pa1kp61', '/mp-3gt_1g65', '/mp-mgfu14u6', '/mp-paq8qo24', '/mp-fn9p_awk'}
+  warnings.warn(
