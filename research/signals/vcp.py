@@ -51,6 +51,11 @@ numba 는 선택이다(:mod:`research.signals.ga_fast` 와 같은 규약) — ``
 9. **NXT 절단(정정 2 B-M3):** :class:`Arrays` 의 ``CUT[종목]`` = 그 종목이 2026-09-14+ 미보정(NXT 오염) 행을 가지면 2026-09-14 행,
    아니면 패널 길이. 보유 경로는 ``CUT`` 전 마지막 거래 가능일(2026-09-11) 종가에서 ``data_end`` 로 끊는다(트레이드·널·대조 모두).
    진입 행 ≥ ``CUT`` 이면 ``skip_nxt_cut``.
+10. **쐐기 시험(``WEDGE_TEST.md``)용 스위치 — 기본값 = VCP 동작 그대로:** ``fb_days``(돌파 실패 = 익절 전 연속 ``fb_days`` 거래 가능일
+    종가 < 돌파 기준, 정지일은 세지도 끊지도 않는다; VCP 1, 쐐기 2), ``ref_order``(9.5% 사전 거르기·3% 갭의 기준을 피벗 대신 주문가로),
+    ``be_r``(청산 v2 본전 이동 — 고가 ≥ 진입가 + be_r × (진입가 − 손절가) 인 날 다음 거래일부터 손절선 = 진입가 × 1.005; 하루 순서
+    손절 > 본전 손절 > 2R 익절 > be_r 발동 기록 > 종가 판단, :func:`minervini_exits._simulate_one_v2` 와 같음 — 테스트로 대조).
+    지그재그는 :func:`_zigzag_py` 하나를 :mod:`research.signals.wedge` 와 함께 쓴다.
 
 실적(§6·정정 M2)·수급(§7·정정 M3)은 :func:`standalone_quarter_states`·:func:`e_accel_asof`·:class:`FlowCum` 설명에 적는다.
 비용(``korea.cost_rt``)은 여기서 빼지 않는다 — 러너 몫.
@@ -61,6 +66,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from research.signals.minervini_exits import BE_COST
 from research.signals.sepa import LIMIT_UP_RATIO, _Book
 from swing_it.features.korea import tick_size_vec
 
@@ -113,6 +119,7 @@ BUYSTOP_PARAMS = {
     "be_mult": 1.0,      # 익절 뒤 본전선 = 진입가 × 1.0 (라이브 기본)
     "x1_chase": 0.05,    # X1 옛 시점: 시가 > 피벗 × 1.05 → 추격 금지
     "old_stop_mult": 0.99, "old_stop_floor": 0.03, "old_stop_cap": 0.10,   # X2 옛 손절
+    "be_r": np.inf,      # 본전 이동(청산 v2 be_r): 고가 ≥ 진입가 + be_r × (진입가 − 손절가) 인 날 다음 거래일부터 손절선 = 진입가 × 1.005
     "fb_days": 1,        # 돌파 실패: 익절 전 연속 fb_days 일 종가 < 돌파 기준 → 다음날 시가(VCP = 1, 쐐기 = 2)
     "ref_order": False,  # 9.5% 사전 거르기·3% 갭의 기준: False = 피벗(VCP), True = 주문가(쐐기)
 }
@@ -341,7 +348,7 @@ def vcp_setups(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, volum
 # ---------------------------------------------------------------------------
 
 def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_line, skip0, p0, take_frac, max_hold,
-                  be_line, sell_slip, fb_days):
+                  be_line, sell_slip, fb_days, be_r):
     """진입 행 ``d``(오프셋 0) 이후 라이브 청산 → ``(reason, x, partial, part_x, px1, fin_px)``. 규칙은 모듈 설명 6·7.
 
     ``skip0`` = 진입일 손절을 보지 않는다(낙관 경로), ``p0`` = 진입일 2R 익절 인정(시가 진입만 — 매수정지는 False).
@@ -363,6 +370,9 @@ def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_l
     ks = 1.0 - sell_slip
     partial = False
     be_from = -1
+    be_trig = -1                                      # be_r 발동 오프셋(청산 v2 — 다음 거래일부터 진입가 × (1 + BE_COST))
+    be_level = entry + be_r * (entry - stop_px) if be_r < 1e18 else np.inf
+    be_stop = entry * (1.0 + BE_COST)
     part_x = -1
     px1 = nan
     pending = -1
@@ -385,6 +395,9 @@ def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_l
             if partial and j >= be_from:
                 line = be_line
                 why = R_BE
+            if be_trig >= 0 and j > be_trig and be_stop > line:
+                line = be_stop
+                why = R_BE
             if L[ci, t] <= line or op <= line:
                 return why, t, partial, part_x, px1, min(op, line) * ks
         if (not partial) and (j > 0 or p0) and (H[ci, t] >= tgt or op >= tgt):
@@ -395,6 +408,8 @@ def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_l
             part_x = t
             if gap and L[ci, t] <= be_line:
                 return R_BE, t, True, t, px1, be_line * ks
+        if be_trig < 0 and (H[ci, t] >= be_level or op >= be_level):
+            be_trig = j
         if j == j_time:
             return R_TIME, t, partial, part_x, px1, C[ci, t]
         if j >= sig_end:
@@ -418,7 +433,7 @@ _exit_path = _jit(_exit_path_py)
 
 
 def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops_raw, pids, old_low, stop_mode, ref_order,
-                    fb_days, gap_max,
+                    fb_days, be_r, gap_max,
                     slip, sell_slip, risk_max, d_floor, take_r, take_frac, max_hold, be_mult, lu_ratio, old_mult,
                     old_floor, old_cap, no_overlap, st, x, fill, entry, stop, dd, tgt, gapf, amb, reason, part,
                     part_x, px1, fin):
@@ -490,7 +505,7 @@ def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops
         open_ok = op <= P and C[ci, d] > sp               # 종가 ≤ 손절가 = 확정 진입일 손절(정정 2 B-M1)
         is_amb = open_ok and L[ci, d] <= sp
         r = _exit_path(Op, H, L, C, MA, TR, PL, CUT, ci, d, e, sp, tg, P, open_ok, False, take_frac, max_hold,
-                       e * be_mult, sell_slip, fb_days)
+                       e * be_mult, sell_slip, fb_days, be_r)
         st[i] = S_OK
         fill[i] = f
         entry[i] = e
@@ -513,7 +528,7 @@ _run_buystop = _jit(_run_buystop_py)
 
 
 def _run_open_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, dds, take_r, take_frac, max_hold, be_mult, lu_ratio, sell_slip,
-                 slip, fb_days, st, x, entry, reason, part, part_x, px1, fin):
+                 slip, fb_days, be_r, st, x, entry, reason, part, part_x, px1, fin):
     """대조: 행 ``d`` 시가 × (1 + slip) 진입, 손절폭 ``dds[i]``, 돌파 실패 피벗 = 진입가. 겹침 없음(독립 표본) — 병렬."""
     n = Op.shape[1]
     for i in prange(len(cis)):
@@ -541,7 +556,7 @@ def _run_open_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, dds, take_r, take_frac, 
         sp = e * (1.0 - w)
         tg = e * (1.0 + take_r * w)
         r = _exit_path(Op, H, L, C, MA, TR, PL, CUT, ci, d, e, sp, tg, e, False, True, take_frac, max_hold,
-                       e * be_mult, sell_slip, fb_days)
+                       e * be_mult, sell_slip, fb_days, be_r)
         st[i] = S_OK
         entry[i] = e
         reason[i] = r[0]
@@ -556,7 +571,7 @@ _run_open = _jit(_run_open_py, parallel=True)
 
 
 def _run_x1_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, stops_raw, pids, chase, d_cap, d_floor, take_r, take_frac,
-               max_hold, be_mult, lu_ratio, sell_slip, fb_days, st, x, entry, stop, dd, reason, part, part_x, px1, fin):
+               max_hold, be_mult, lu_ratio, sell_slip, fb_days, be_r, st, x, entry, stop, dd, reason, part, part_x, px1, fin):
     """X1(정정 M5): 신호 행 ``ds[i]`` 종가 돌파(러너가 고른다) → 다음 거래일 행 시가 진입, 추격 5%·상한가·정지 버림, 손절 = 새 손절
     (L_last − 1호가, 2% 하한), d > 10% 면 안 산다. 같은 피벗 첫 신호 하나·보유 중 무시. 순차."""
     n_st, n = Op.shape
@@ -605,7 +620,7 @@ def _run_x1_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, stops_raw, pids, c
             w = d_floor
         tg = op * (1.0 + take_r * w)
         r = _exit_path(Op, H, L, C, MA, TR, PL, CUT, ci, e_, op, sp, tg, P, False, True, take_frac, max_hold,
-                       op * be_mult, sell_slip, fb_days)
+                       op * be_mult, sell_slip, fb_days, be_r)
         st[i] = S_OK
         entry[i] = op
         stop[i] = sp
@@ -673,7 +688,7 @@ def run_buystop(A: Arrays, cis, ds, pivots, l_last, pids, *, no_overlap: bool = 
     if m:
         _run_buystop(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, np.asarray(cis, np.int64), np.asarray(ds, np.int64),
                      pivots, orders, stops_raw, np.asarray(pids, np.int64), ol, mode, bool(p["ref_order"]),
-                     int(p["fb_days"]), float(p["gap_max"]),
+                     int(p["fb_days"]), float(p["be_r"]), float(p["gap_max"]),
                      float(p["slip"]), float(p["sell_slip"]), float(p["risk_pre_max"]), float(p["d_floor"]),
                      float(p["take_r"]), float(p["take_frac"]), int(p["max_hold"]), float(p["be_mult"]),
                      float(LIMIT_UP_RATIO), float(p["old_stop_mult"]), float(p["old_stop_floor"]),
@@ -707,7 +722,7 @@ def run_open_entry(A: Arrays, cis, ds, dds, params: "dict | None" = None) -> dic
     if m:
         _run_open(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, np.asarray(cis, np.int64), np.asarray(ds, np.int64),
                   np.asarray(dds, float), float(p["take_r"]), float(p["take_frac"]), int(p["max_hold"]),
-                  float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), float(p["slip"]), int(p["fb_days"]),
+                  float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), float(p["slip"]), int(p["fb_days"]), float(p["be_r"]),
                   o["status"], o["x"], o["entry"],
                   o["reason"], o["part"], o["part_x"], o["px1"], o["fin"])
     _attach_rets(o, p)
@@ -728,7 +743,8 @@ def run_x1(A: Arrays, cis, sig_rows, pivots, l_last, pids, params: "dict | None"
         _run_x1(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, np.asarray(cis, np.int64), np.asarray(sig_rows, np.int64),
                 np.asarray(pivots, float), stops_raw, np.asarray(pids, np.int64), float(p["x1_chase"]),
                 float(p["d_cap"]), float(p["d_floor"]), float(p["take_r"]), float(p["take_frac"]), int(p["max_hold"]),
-                float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), int(p["fb_days"]), o["status"], o["x"],
+                float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), int(p["fb_days"]), float(p["be_r"]),
+                o["status"], o["x"],
                 o["entry"],
                 o["stop"], o["dd"], o["reason"], o["part"], o["part_x"], o["px1"], o["fin"])
     _attach_rets(o, p)

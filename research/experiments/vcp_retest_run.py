@@ -250,6 +250,7 @@ def wstats(x: pd.DataFrame, n_dsr: int = 1) -> dict:
          "net2_mean": wm(net2), "net_median": wquantile(net, w, 0.5),
          "win": float(w[net >= BE_BAND].sum() / W), "be": float(w[np.abs(net) < BE_BAND].sum() / W),
          "lossc": float(w[net <= -BE_BAND].sum() / W), "loss_rate": float(w[loss].sum() / W),
+         "gain_rate": float(w[gain].sum() / W),
          "avg_gain": ag, "avg_loss": al,
          "gl_ratio": ag / abs(al) if np.isfinite(ag) and np.isfinite(al) and al < 0 else np.nan,
          "avg_loss_R": wm(R, loss), "r_p5": wquantile(R, w, 0.05), "big_loss": float(w[net < BIG_LOSS].sum() / W),
@@ -1028,7 +1029,9 @@ def _eps_flags(con, sv: pd.DataFrame) -> np.ndarray:
     return V.eps_accel(sv.reset_index(drop=True), asof(ea), asof(ea - yr), asof(pa), asof(pa - yr))
 
 
-def _estimate_p(con, A: V.Arrays, h5: pd.DataFrame, days: pd.DatetimeIndex, p_hi: "str | None") -> dict:
+def _estimate_p(con, A: V.Arrays, h5: pd.DataFrame, days: pd.DatetimeIndex, p_hi: "str | None", *,
+                band_lo: float = V.VCP_PARAMS["close_lo"], min_age: int = V.VCP_PARAMS["dry_min"],
+                params: "dict | None" = None) -> dict:
     """정정 C3·정정 2 B-M1 — 분봉 구간(2025-08+) 유니버스 합성 매수정지 돌파의 **모호** 사건(시뮬과 같은 식: 시가 ≤ 피벗 ∧ 저가 ≤ 손절가 ∧
     종가 > 손절가 — :func:`vcp.buystop_entry_check`)에서 손절가 터치가 체결 봉 **뒤**에 온 비율 p. 진입일 종가 ≤ 손절가(확정 손절)는
     분모에 넣지 않고 따로 센다. 합성 = H5 종목, 피벗 = 직전 k일 최고 고가(피벗 뒤 ≥ 3일), 손절 = 직전 j일 최저 저가 − 1호가(2% 하한),
@@ -1052,8 +1055,8 @@ def _estimate_p(con, A: V.Arrays, h5: pd.DataFrame, days: pd.DatetimeIndex, p_hi
             piv, ip, ll = V.null_levels(A, cs, np.full(len(cs), s), np.full(len(cs), k), np.full(len(cs), j))
             cl = A.C[cs, s]
             with np.errstate(invalid="ignore"):
-                band = (cl < piv) & (cl >= V.VCP_PARAMS["close_lo"] * piv) & (ip <= s - V.VCP_PARAMS["dry_min"])
-            chk = V.buystop_entry_check(A, cs, np.full(len(cs), d), piv, ll)
+                band = (cl < piv) & (cl >= band_lo * piv) & (ip <= s - min_age)
+            chk = V.buystop_entry_check(A, cs, np.full(len(cs), d), piv, ll, params)
             ok = band & (chk["status"] == V.S_OK)
             stage["band"] += int(band.sum())
             stage["fill_open_le_pivot"] += int((ok & chk["open_le_pivot"]).sum())
@@ -1137,7 +1140,8 @@ def _p_reweight(pinfo: dict, t: pd.DataFrame) -> float:
 
 
 def _momentum_control(t: pd.DataFrame, A: V.Arrays, h5: pd.DataFrame, q_mom: np.ndarray, adv2: np.ndarray,
-                      mkt: np.ndarray, days: pd.DatetimeIndex, codes: pd.Index, pval: float) -> dict:
+                      mkt: np.ndarray, days: pd.DatetimeIndex, codes: pd.Index, pval: float,
+                      params: "dict | None" = None) -> dict:
     """모멘텀 정합: 트레이드(신호 행 s)마다 같은 날 × 시장 × q_mom × adv2 의 H5 종목 5개(복원, 자기 제외, seed 0) → d 시가 진입·
     같은 손절폭·같은 청산 → ``matched_alpha``(총수익, 날짜군집 2000). 트레이드 값 = p 혼합 총수익(보수·낙관도)."""
     if t is None or t.empty:
@@ -1159,7 +1163,7 @@ def _momentum_control(t: pd.DataFrame, A: V.Arrays, h5: pd.DataFrame, q_mom: np.
         return _alpha("mom_", None)
     cc = cand.loc[ctl["control_idx"].to_numpy()]
     dd = tt.loc[ctl["trade_idx"].to_numpy(), "d"].to_numpy()
-    r = V.run_open_entry(A, cc["ci"].to_numpy(), cc["s"].to_numpy() + 1, dd)
+    r = V.run_open_entry(A, cc["ci"].to_numpy(), cc["s"].to_numpy() + 1, dd, params)
     ok = r["status"] == V.S_OK
     pool = pd.DataFrame({"ret": r["ret"][ok], "hold": r["x"][ok] - cc["s"].to_numpy()[ok],
                          "reason": np.asarray(V.REASONS, dtype=object)[r["reason"][ok]]})
