@@ -112,6 +112,7 @@ if FW:
 FW_FEAS_TARGET = 1_000                 # 리뷰 FW M1: 폴드마다 실현 가능 config 가 이 수에 닿는 가장 짧은 덩어리 접두(건수만 정지 규칙)
 FW_Q_2A, FW_Q_2B = 99.0, 100.0         # 리뷰 FW M5: 사후 좁힘 다중성 — 2a p99 · 2b 50벌 전부 위
 FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fw/parent_viewed_trades.csv"   # 리뷰 FW M5: 부모 열람 OOS 거래
+FW_PARENT_SHA256 = "6e989c1948d8a10ce020a20cb7461f32fb4f6e6cd98949111ceaa170c49d6fdb"   # 리뷰 FW M10
 
 
 def fw_ok(su: float, sl: float, g: dict) -> bool:
@@ -1795,6 +1796,10 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
     from swing_it.diagnostics.trials import count_trials, record_trial  # noqa: PLC0415
 
     timings: dict = {}
+    if FW and not debug:                              # 리뷰 FW M10: 고정한 부모 열람 목록이 없거나 바뀌었으면 시작하지 않는다
+        with open(FW_PARENT_VIEWED, "rb") as fh:
+            if hashlib.sha256(fh.read()).hexdigest() != FW_PARENT_SHA256:
+                raise SystemExit(f"{FW_PARENT_VIEWED} 해시 불일치 — 사전등록 고정 목록과 다르다")
     fac_sha = R._sha(R.FACTORS_PKL)
     pmix = E.pmix
     base_cfg = {**_proc_config(budget, seeds, fac_sha, pmix), **run_provenance(args.cache)}
@@ -2317,7 +2322,7 @@ def render(V: dict) -> "list[str]":  # noqa: C901
           f"(아니면 판단 불가 = ✗, 2단계 M4) | {_pct(st['calm_ann'])} · {_pct(st['ex2020_21_ann'])} · {_pct(st['ex2025_26_ann'])}"
           f"{'' if V['b4_judgeable'] else ' · **판단 불가**'} | {_m(bars['b4'])} |",
           f"| 6 | OOS 거래 ≥ {B6_N} ∧ 손익비(2배) ≥ {B6_GL:g} ∧ 승률(본전 제외) > 손익분기 + 5%p | n {ws.get('n', 0)} · "
-          f"{_f(ws.get('gl_ratio2', np.nan))} · {_f(V['w2'])} vs {_f(V['be_need'])} | {_m(bars['b6'])} |",
+          f"{_f(V['gl'])}{'(본전 제외 — 리뷰 FW M3)' if FW else ''} · {_f(V['w2'])} vs {_f(V['be_need'])} | {_m(bars['b6'])} |",
           f"| **전부** | 1·2(a∧b)·3·4·6 | | **{_m(bars['all'])}** |", "",
           f"바 5(기술): 폴드 내 CSCV PBO {[_f(x) for x in V['pbo']]} (리뷰 M3 — 노이즈에서도 0.37~0.59, 과적합 부재의 증거 아님). WFE 삭제. "
           f"DSR(기술): N = 보고 변형 {V['dsr']['변형']['N']} → P {_f(V['dsr']['변형']['prob'], '{:.3f}')} · N = 검증 구조 {DSR_STRUCTS} → "
