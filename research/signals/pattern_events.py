@@ -42,8 +42,11 @@
     H0 / min(저가[i0−w..i0]) − 1 하나, 쉼 거리 = 패턴 첫 저점 행 − i0.
 11. **수평 저항 수(정정 3 ``ceil_kind``):** 천장 창 안 확정 고점(창 시작부터 i0 전까지 같은 θ 지그재그로 확정된 고점 + H0 + H0 뒤 확정
     고점) 중 H0 × 0.97 이상인 수. ``ceil_kind`` = 수평 저항이면 ≥ 2 를 요구, 단일 고점 H0 면 요구 없음(러너).
-12. 손절 후보(정정 1 MINOR 4): E − 1호가, 하단선(d) − 1호가. 하단선 손절은 하단선(d) ≥ 종가(s) 면 무효(:mod:`pattern_fast`).
-    바닥 반전 진입은 손절 = E − 1호가 고정, 익절 전 돌파 실패 규칙 없음(정정 3).
+12. **호가(2단계 리뷰 MINOR 1):** 1호가는 **그날의 표** — 2023-01-25 전은 옛 표(시장별: 1천 1 · 5천 5 · 1만 10 · 5만 50 · 그 위
+    코스피 10만 100 · 50만 500 · 1,000 / 코스닥 100), 그 뒤는 통합 표(:func:`korea.tick_size_vec`). 주가가 분할 조정가라 격자 자체가
+    깨져 있어 격자 올림·내림 정렬은 하지 않는다(선 값 + 그날 1호가). 손절·본전 체결 −1호가는 :mod:`pattern_fast`(쐐기 D 와 같다).
+13. 손절 후보(정정 1 MINOR 4): E − 1호가, 하단선(d) − 1호가. 하단선 손절은 하단선(d) ≥ 종가(s) 면 무효(:mod:`pattern_fast`).
+    바닥 반전 진입은 손절 = E − 1호가 고정, 익절 전 돌파 실패 규칙 없음(정정 3). 정정 5 손절 여유용으로 ATR20(d−1)(``atr_s``)을 싣는다.
 """
 
 from __future__ import annotations
@@ -78,7 +81,7 @@ HYG_STATUS = ("ok", "spacing<3", "span<15", "integrity_upper", "integrity_lower"
 F_COLS = ("level", "order", "h0", "A", "B", "Cl", "D", "E", "su", "sl", "s_up", "s_lo", "rho", "touch", "span", "hgt",
           "ceil", "depth", "dry", "runup20", "runup40", "runup60", "rest_gap", "lower_d", "u_d", "hE", "n_res", "h0in",
           "stopE_raw", "stopL_raw", "open_d", "high_d", "low_d", "close_d", "close_s", "adv20", "rs", "breadth",
-          "above50", "tt_s", "tt_h0", "e_yoy", "e_yoy_prev", "market", "strat", "month")
+          "above50", "tt_s", "tt_h0", "e_yoy", "e_yoy_prev", "market", "strat", "month", "atr_s")
 FI = {k: i for i, k in enumerate(F_COLS)}
 #: 사건 표 정수 열(``I``) — iA = 패턴 첫 저점(정정 2 의 A), iS = 패턴 시작(``h0in`` 0: A, 1: H0).
 I_COLS = ("d", "ci", "i0", "iA", "iB", "iC", "iD", "iE", "iS", "table")
@@ -101,8 +104,10 @@ def table_key(tid: int) -> "tuple[float, int, str]":
 
 
 # ---------------------------------------------------------------------------
-# 0. 호가단위(numba) — ``korea.tick_size_vec`` 와 같은 표
+# 0. 호가단위(numba) — 통합 표(``korea.tick_size_vec`` 와 같다) + 2023-01-25 전 옛 표(날짜별)
 # ---------------------------------------------------------------------------
+
+TICK_REFORM_DAY = "2023-01-25"
 
 def _tick_py(p):
     if p < 2000.0:
@@ -121,6 +126,43 @@ def _tick_py(p):
 
 
 _tick = _jit(_tick_py)
+
+
+def _tick_dated_py(p, row, mkt, reform):
+    """행 ``row`` 의 호가단위 — ``row ≥ reform``(2023-01-25 행) 이면 통합 표, 아니면 옛 표(``mkt`` 1 = 코스닥)."""
+    if row >= reform:
+        return _tick(p)
+    if p < 1000.0:
+        return 1.0
+    if p < 5000.0:
+        return 5.0
+    if p < 10000.0:
+        return 10.0
+    if p < 50000.0:
+        return 50.0
+    if mkt == 1:
+        return 100.0
+    if p < 100000.0:
+        return 100.0
+    if p < 500000.0:
+        return 500.0
+    return 1000.0
+
+
+tick_dated = _jit(_tick_dated_py)
+
+
+def tick_dated_vec(p, rows, mkt, reform: int) -> np.ndarray:
+    """벡터판 :func:`_tick_dated_py` (NaN·0 이하 → NaN)."""
+    p = np.asarray(p, float)
+    rows = np.broadcast_to(np.asarray(rows), p.shape)
+    mkt = np.broadcast_to(np.asarray(mkt), p.shape)
+    new = tick_size_vec(p)
+    pz = np.where(np.isfinite(p), p, 0.0)
+    old = np.select([pz < 1000, pz < 5000, pz < 10000, pz < 50000, mkt == 1, pz < 100000, pz < 500000],
+                    [1.0, 5.0, 10.0, 50.0, 100.0, 100.0, 500.0], 1000.0)
+    out = np.where(rows >= reform, new, old)
+    return np.where(np.isfinite(p) & (p > 0), out, np.nan)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +218,7 @@ def _lines(hv, hi_, lv, li_, nh, iE, E):
 _lines_j = _jit(_lines)
 
 
-def _scan_py(H, L, C, cis, ss, theta, cw, st, i0o, iDo, iEo, lvt, Do, h0o, hEo, pre):
+def _scan_py(H, L, C, MK, reform, cis, ss, theta, cw, st, i0o, iDo, iEo, lvt, Do, h0o, hEo, pre):
     """행마다 구조 → 첫 관통 탐색 재료(상태·i0·행(D)·행(E)·U(d)·D·H0·E 봉 고가) + 기준선별 '이미 관통' 비트 ``pre``
     (1 추세선: D 뒤 ~ s 고가 ≥ U(j) + 1호가, 2 수평: D 뒤 ~ s 고가 ≥ D + 1호가, 8 바닥: E 뒤 ~ s 고가 ≥ E 봉 고가 + 1호가). 병렬."""
     cap = cw + 3
@@ -205,17 +247,16 @@ def _scan_py(H, L, C, cis, ss, theta, cw, st, i0o, iDo, iEo, lvt, Do, h0o, hEo, 
         hE = H[ci, iE]
         hEo[k] = hE
         b = 0
-        tD = D + _tick(D)
-        for j in range(iD + 1, s + 1):
+        mk = MK[ci]
+        for j in range(iD + 1, s + 1):                # 관통 = 그날 선 값 + 그날 1호가(날짜별 표)
             hj = H[ci, j]
             u = math.exp(lnD + su * (j - iD))
-            if hj >= u + _tick(u):
+            if hj >= u + tick_dated(u, j, mk, reform):
                 b |= 1
-            if hj >= tD:
+            if hj >= D + tick_dated(D, j, mk, reform):
                 b |= 2
-        tE = hE + _tick(hE)
         for j in range(iE + 1, s + 1):
-            if H[ci, j] >= tE:
+            if H[ci, j] >= hE + tick_dated(hE, j, mk, reform):
                 b |= 8
         pre[k] = b
 
@@ -399,7 +440,7 @@ def base_level(base: int, lvt, Dv, h0, hE) -> np.ndarray:
     return (lvt, Dv, h0, hE)[base]
 
 
-def first_crossings(H, TR, cis, ss, st, i0, iD, iE, lvt, Dv, h0, hE, pre, base: int) -> np.ndarray:
+def first_crossings(H, TR, cis, ss, st, i0, iD, iE, lvt, Dv, h0, hE, pre, base: int, mkt=None, reform: int = 0) -> np.ndarray:
     """기준선 ``base`` 의 첫 관통 행 번호(입력 = (종목, s) 오름차순). 관통 = 구조 정의 ∧ d 거래 가능 ∧ 고가(d) ≥ 기준선(d) + 1호가
     ∧ 그 패턴이 s 까지 이미 관통하지 않음(``pre`` 비트 — 정의 전 관통 포함). 식별 (종목, i0, 행(D))마다 첫 행 하나(H0 = (종목, i0)).
     바닥 반전은 기준선이 E 봉 고가라 E 가 내려가면 새 기준선이다 — 식별 (종목, i0, 행(D), 행(E)) 마다 첫 관통(같은 E 봉 고가를
@@ -411,7 +452,7 @@ def first_crossings(H, TR, cis, ss, st, i0, iD, iE, lvt, Dv, h0, hE, pre, base: 
     if _PRE_BIT[base]:
         ok &= (pre & _PRE_BIT[base]) == 0
     with np.errstate(invalid="ignore"):
-        order = lvl + tick_size_vec(lvl)
+        order = lvl + (tick_size_vec(lvl) if mkt is None else tick_dated_vec(lvl, d, mkt[cis], reform))
         hd = H[cis, d]
         cross = ok & TR[cis, d] & np.isfinite(hd) & (hd >= order)
     idx = np.flatnonzero(cross)
@@ -443,6 +484,8 @@ def build_tables(H, L, C, Vv, Op, TR, ctx: dict, *, d_lo: int, d_hi: int, thetas
     s_lo = max(0, d_lo - 1 - max(CEIL_WINS) - 5)          # 사건 구간 앞에서 시작한 패턴의 관통도 잡는다(소진 판정)
     s_hi = min(d_hi - 1, n_d - 2)
     cis, ss = scan_rows(valid, s_lo, s_hi)
+    MK = np.asarray(ctx["market"], np.int64)
+    reform = int(ctx.get("tick_reform_row", 0))
     Fs, Is, funnel = [], [], {}
     off = [0]
     hy = HYGIENE
@@ -459,10 +502,10 @@ def build_tables(H, L, C, Vv, Op, TR, ctx: dict, *, d_lo: int, d_hi: int, thetas
             iE = np.full(m, -1, np.int64)
             pre = np.zeros(m, np.int64)
             lvt, Dv, h0, hE = (np.full(m, np.nan) for _ in range(4))
-            _scan(H, L, C, cis, ss, float(th), int(cw), st, i0, iD, iE, lvt, Dv, h0, hE, pre)
+            _scan(H, L, C, MK, reform, cis, ss, float(th), int(cw), st, i0, iD, iE, lvt, Dv, h0, hE, pre)
             for bi, bname in enumerate(BASES):
                 tid = table_id(ti, wi, bi)
-                fc = first_crossings(H, TR, cis, ss, st, i0, iD, iE, lvt, Dv, h0, hE, pre, bi)
+                fc = first_crossings(H, TR, cis, ss, st, i0, iD, iE, lvt, Dv, h0, hE, pre, bi, MK, reform)
                 dd = ss[fc] + 1
                 fc = fc[(dd >= d_lo) & (dd <= d_hi)]
                 k = len(fc)
@@ -475,22 +518,28 @@ def build_tables(H, L, C, Vv, Op, TR, ctx: dict, *, d_lo: int, d_hi: int, thetas
                           int(hy["span_min"]), float(hy["integ_tol"]), int(hy["bottom_age"]), int(hy["dry_skip"]),
                           int(hy["dry_win"]), float(hy["res_tol"]), hst, oi, of)
                 lvl = of[:, FI["level"]]
+                d_all = s_ + 1
                 with np.errstate(invalid="ignore"):
-                    of[:, FI["order"]] = lvl + tick_size_vec(lvl)
+                    of[:, FI["order"]] = lvl + tick_dated_vec(lvl, d_all, MK[c_], reform)
                     room = C[c_, s_] <= of[:, FI["order"]] * hy["close_room"]
                 hst = np.where((hst == H_OK) & ~room, H_CLOSE, hst)
                 ctx_ok = ctx["base"][c_, s_] if k else np.zeros(0, bool)
                 hst = np.where((hst == H_OK) & ~ctx_ok, H_CONTEXT, hst)
-                funnel[(th, cw, bname)] = {"first_cross": int(k),
+                h0in_ = of[:, FI["h0in"]] == 1             # 2단계 MINOR 5: 간격 탈락 중 D→E 만 짧은 것(소진 규칙 몫)
+                i0_, iA_, iU_, iC_, iD_, iE_ = (oi[:, j] for j in range(6))
+                fixed_bad = np.where(h0in_, ((iC_ - i0_) < hy["gap_min"]) | ((iD_ - iC_) < hy["gap_min"]),
+                                     ((iU_ - iA_) < hy["gap_min"]) | ((iC_ - iU_) < hy["gap_min"]) | ((iD_ - iC_) < hy["gap_min"]))
+                de_only = (hst == H_SPACING) & ((iE_ - iD_) < hy["gap_min"]) & ~fixed_bad
+                funnel[(th, cw, bname)] = {"first_cross": int(k), "spacing_DE_only": int(de_only.sum()),
                                            **{HYG_STATUS[q]: int((hst == q).sum()) for q in range(len(HYG_STATUS))}}
                 keep = hst == H_OK
                 c_, s_, oi, of = c_[keep], s_[keep], oi[keep], of[keep]
                 d_ = s_ + 1
                 E_ = of[:, FI["E"]]
                 lo_d = of[:, FI["lower_d"]]
-                of[:, FI["stopE_raw"]] = E_ - tick_size_vec(E_)
+                of[:, FI["stopE_raw"]] = E_ - tick_dated_vec(E_, d_, MK[c_], reform)
                 with np.errstate(invalid="ignore"):
-                    of[:, FI["stopL_raw"]] = lo_d - tick_size_vec(np.where(lo_d > 0, lo_d, np.nan))
+                    of[:, FI["stopL_raw"]] = lo_d - tick_dated_vec(np.where(lo_d > 0, lo_d, np.nan), d_, MK[c_], reform)
                 for nm, arr, row in (("open_d", Op, d_), ("high_d", H, d_), ("low_d", L, d_), ("close_d", C, d_),
                                      ("close_s", C, s_)):
                     of[:, FI[nm]] = arr[c_, row]
@@ -502,6 +551,8 @@ def build_tables(H, L, C, Vv, Op, TR, ctx: dict, *, d_lo: int, d_hi: int, thetas
                 of[:, FI["market"]] = ctx["market"][c_]
                 of[:, FI["strat"]] = ctx["strat"][c_, s_]
                 of[:, FI["month"]] = ctx["month"][d_]
+                if "atr" in ctx:                              # 정정 5 손절 여유(ATR20, d−1)
+                    of[:, FI["atr_s"]] = ctx["atr"][c_, s_]
                 I_ = np.column_stack([d_, c_, oi, np.full(len(c_), tid)]).astype(np.int64)
                 o = np.lexsort((c_, -np.nan_to_num(of[:, FI["adv20"]], nan=-1.0), d_))
                 Fs.append(of[o])

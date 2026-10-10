@@ -86,12 +86,12 @@ def test_event_table_deterministic_and_config_free():
         g.update(theta=0.05, ceil_win=120)
         g = G.canonical(g)
         lo, hi = PE.table_slice(a["off"], G.table_of(g))
-        buf = [np.empty(max(hi - lo, 1), t) for t in (np.int64, float, float, float, np.bool_, np.bool_)]
+        buf = [np.empty(max(hi - lo, 1), t) for t in (np.int64, float, float, float, np.bool_, np.bool_, float, float)]
         n = PF.filter_events(a["F"], lo, hi, G.gene_vec(g), 1.3, *buf)
         assert np.all((buf[0][:n] >= lo) & (buf[0][:n] < hi))
         # 청산 유전자만 바꾸면 후보는 같다
         g2 = G.canonical({**g, "take_r": math.inf, "trail": "chand", "trail_k": 4.0, "pyramid": "1r"})
-        buf2 = [np.empty(max(hi - lo, 1), t) for t in (np.int64, float, float, float, np.bool_, np.bool_)]
+        buf2 = [np.empty(max(hi - lo, 1), t) for t in (np.int64, float, float, float, np.bool_, np.bool_, float, float)]
         n2 = PF.filter_events(a["F"], lo, hi, G.gene_vec(g2), 1.3, *buf2)
         assert n2 == n and np.array_equal(buf[0][:n], buf2[0][:n2])
 
@@ -234,7 +234,7 @@ def test_live_exit_parity_with_vcp(fb_days, be_r):
             tgt = e * (1 + 2.0 * (e - sp) / e)
             ref = V._exit_path_py(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, ci, d, e, sp, tgt, fb, skip0, False, 0.5, 120,
                                   e, 0.001, fb_days, be_r, *extra)
-            PF._path_py(A.O, A.H, A.L, A.C, ma20, A.MA, atr, A.TR, LIM, ci, d, e, sp, fb, np.inf, skip0, px, out)
+            PF._path_py(A.O, A.H, A.L, A.C, ma20, A.MA, atr, A.TR, LIM, ci, d, e, sp, fb, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, skip0, 0, 0, px, out)
             reason = int(out[PF.O_REASON])
             ref_reason = ref[0] if ref[0] != V.R_DELISTED else V.R_DATA_END
             assert reason in (ref_reason, ref[0])
@@ -260,12 +260,12 @@ def test_exit_path_no_lookahead():
         px = G.exit_vec(g)
         ci, d = int(rng.integers(0, 3)), int(rng.integers(60, 300))
         e, sp = Op[ci, d] * 1.001, Op[ci, d] * 0.95
-        PF._path_py(A.O, A.H, A.L, A.C, ma20, A.MA, atr, A.TR, A.CUT, ci, d, e, sp, e * 0.99, H[ci, d] * 1.2, True, px, out1)
+        PF._path_py(A.O, A.H, A.L, A.C, ma20, A.MA, atr, A.TR, A.CUT, ci, d, e, sp, e * 0.99, H[ci, d] * 1.2, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0, px, out1)
         x = int(out1[PF.O_X])
         O2, H2, L2, C2 = (z.copy() for z in (A.O, A.H, A.L, A.C))
         for z in (O2, H2, L2, C2):
             z[:, x + 1:] *= 1.5
-        PF._path_py(O2, H2, L2, C2, ma20, A.MA, atr, A.TR, A.CUT, ci, d, e, sp, e * 0.99, H[ci, d] * 1.2, True, px, out2)
+        PF._path_py(O2, H2, L2, C2, ma20, A.MA, atr, A.TR, A.CUT, ci, d, e, sp, e * 0.99, H[ci, d] * 1.2, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0, px, out2)
         assert np.allclose(out1, out2, equal_nan=True)
 
 
@@ -294,7 +294,7 @@ def test_pyramid_plus_1r_add_and_addon_stop():
     e, sp = 100.0, 90.0                                         # R = 10 → +1R = 110 (행 1 고가 111)
     out = np.empty(PF.N_O)
     px = _px(X_PYR=PF.PYR_1R, X_TAKE_R=np.inf, X_FB_DAYS=0)
-    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, e, sp, -np.inf, np.inf, True, px, out)
+    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, e, sp, -np.inf, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0, px, out)
     assert int(out[PF.O_TA]) == 2 and out[PF.O_PA] == pytest.approx(110 * 1.001)
     assert int(out[PF.O_TS]) == 3 and out[PF.O_PXS] == pytest.approx(100 * 0.999)   # 저가 99.8 ≤ 본전 100
     wb = PF.WB_PYR
@@ -302,13 +302,117 @@ def test_pyramid_plus_1r_add_and_addon_stop():
     assert out[PF.O_PNL] == pytest.approx(exp)
 
 
-def test_pyramid_cancelled_when_stop_zone_touched_same_day():
+def test_pyramid_same_day_add_then_addon_stop_no_lookahead():
+    """2단계 C1: 추가는 시가 정보만으로 — 시가 110 > 추가분 손절선 100 이면 산다. 같은 날 저가 99 가 선에 닿으면 그 추가분은 그날 판다
+    (취소 아님 — 그날 저가는 시가 매수 뒤에 생긴다)."""
     rows = [(100, 101, 99.5, 100.5), (101, 111, 100.8, 110), (110, 112, 99.0, 105)] + [(104, 105, 103, 104)] * 5
     Op, H, L, C, ma, atr, TR, LIM = _hand_book(rows)
     out = np.empty(PF.N_O)
-    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, True,
+    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0,
+                _px(X_PYR=PF.PYR_1R, X_TAKE_R=np.inf, X_FB_DAYS=0), out)
+    assert int(out[PF.O_TA]) == 2 and out[PF.O_ADDED] == 1 and out[PF.O_PA] == pytest.approx(110 * 1.001)
+    assert int(out[PF.O_TS]) == 2 and out[PF.O_PXS] == pytest.approx(100 * 0.999)
+    wb = PF.WB_PYR
+    exp = -1.0 + (1 - wb) / (110 * 1.001) * 100 * 0.999 + wb / 100.0 * out[PF.O_FIN]
+    assert out[PF.O_PNL] == pytest.approx(exp)
+    # 시가가 추가분 손절선 이하면(시가에서 아는 정보) 취소
+    rows2 = [(100, 101, 99.5, 100.5), (101, 111, 100.8, 110), (99.5, 104, 99.0, 103)] + [(104, 105, 103, 104)] * 5
+    Op, H, L, C, ma, atr, TR, LIM = _hand_book(rows2)
+    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0,
                 _px(X_PYR=PF.PYR_1R, X_TAKE_R=np.inf, X_FB_DAYS=0), out)
     assert int(out[PF.O_TA]) == -1 and out[PF.O_ADDED] == 0
+
+
+def test_pyramid_add_day_partial_includes_addon():
+    """2단계 C1-2: 시가 추가가 장중 익절보다 먼저 — 같은 날 익절은 추가분 포함 보유 전부에 take_frac 을 적용한다."""
+    rows = [(100, 101, 99.5, 100.5), (101, 111, 100.8, 110), (112, 125, 111, 118)] + [(115, 116, 114, 115)] * 5
+    Op, H, L, C, ma, atr, TR, LIM = _hand_book(rows)
+    out = np.empty(PF.N_O)
+    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0,
+                _px(X_PYR=PF.PYR_1R, X_TAKE_R=2.0, X_TAKE_FRAC=0.5, X_FB_DAYS=0), out)
+    assert int(out[PF.O_TA]) == 2 and int(out[PF.O_TP]) == 2 and out[PF.O_PX1] == pytest.approx(120.0)
+    wb = PF.WB_PYR
+    sh = wb / 100.0 + (1 - wb) / (112 * 1.001)
+    exp = -1.0 + 0.5 * sh * 120.0 + 0.5 * sh * 115.0
+    assert out[PF.O_FIN] == 115.0 and out[PF.O_PNL] == pytest.approx(exp)
+
+
+def _one_trade_portfolio(rows, px, e=100.0, sp=90.0):
+    """손계산 장부: 후보 하나 · 비용 0 · 대조 0 → 끝 자산 = 1 + 0.1 × 경로 손익(재생 순서가 경로와 같아야 성립)."""
+    Op, H, L, C, ma, atr, TR, LIM = _hand_book([(100, 100, 100, 100)] + rows)
+    n = Op.shape[1]
+    L_ = len(rows) + 1
+    i1, f1, b1 = (lambda v: np.array([v], np.int64)), (lambda v: np.array([v], float)), (lambda v: np.array([v], np.bool_))
+    ret, bench, expo = np.zeros(L_), np.zeros(L_), np.zeros(L_)
+    rec = np.zeros((1, PF.N_Q))
+    ny = np.zeros(1, np.int64)
+    r = PF._portfolio_py(i1(1), i1(0), f1(e), f1(sp), f1(-np.inf), f1(np.inf), f1(np.inf), f1(0.0), f1(1.0), i1(0), f1(0.0),
+                         f1(0.0), b1(False), b1(True), f1(sp), i1(-1), i1(0), i1(0), i1(0), i1(7),
+                         np.ascontiguousarray(px[None, :]), Op, H, L, C, ma, ma, atr, TR, LIM,
+                         np.zeros((3, n, 1)), np.zeros((3, n, 1), np.int64), np.full((1, n), -1, np.int64), np.zeros((2, n)),
+                         2.0, 0.0, 0, L_, 10, 0.1, ret, bench, expo, rec, np.zeros(n, np.int64), ny, 0, False, 1.3, 1)
+    assert r[0] == 1
+    return float(np.prod(1 + ret)), rec[0]
+
+
+@pytest.mark.parametrize("rows", [
+    [(100, 101, 99.5, 100.5), (101, 111, 100.8, 110), (110, 112, 99.0, 105)] + [(104, 105, 103, 104)] * 5,   # 같은 날 추가·추가분 손절
+    [(100, 101, 99.5, 100.5), (101, 111, 100.8, 110), (112, 125, 111, 118)] + [(115, 116, 114, 115)] * 5,    # 같은 날 추가·익절
+    [(100, 101, 99.5, 100.5), (101, 111, 100.8, 110), (112, 125, 99.0, 118)] + [(115, 116, 114, 115)] * 5,   # 추가·추가분 손절·익절
+])
+def test_portfolio_replay_matches_path_same_day_events(rows):
+    px = _px(X_PYR=PF.PYR_1R, X_TAKE_R=2.0, X_TAKE_FRAC=0.5, X_FB_DAYS=0)
+    eq, rec = _one_trade_portfolio(rows, px)
+    assert eq == pytest.approx(1 + 0.1 * rec[PF.Q_PNL], rel=1e-12)
+    assert rec[PF.Q_ADDED] == 1
+
+
+def test_same_day_open_decisions_ignore_after_open_prices():
+    """2단계 C1-4 일반 시험: 경로의 시가 결정일 t(불타기 추가·시가 청산)마다 t 의 고가·저가·종가(시가 뒤 값)를 바꿔도 t 시가 결정은 같다."""
+    G = _runner()
+    rng = np.random.default_rng(31)
+    out1, out2 = np.empty(PF.N_O), np.empty(PF.N_O)
+    checked = 0
+    for it in range(400):
+        Op, H, L, C, _ = _rand_book(n=200, k=1, seed=100 + it, drift=0.002, vol=0.03)
+        A, ma20 = _arrays(Op, H, L, C)
+        atr = _atr(H, L, C)
+        g = G.decode(G.random_x(rng, 1)[0])
+        g = G.canonical({**g, "pyramid": "1r" if it % 2 else g["pyramid"]})
+        px = G.exit_vec(g)
+        d = 60
+        e, sp = A.O[0, d] * 1.001, A.O[0, d] * 0.95
+        args = (ma20, A.MA, atr, A.TR, A.CUT, 0, d, e, sp, e * 0.99, H[0, d] * 1.2, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0, px)
+        PF._path_py(A.O, A.H, A.L, A.C, *args, out1)
+        for t, kind in ((int(out1[PF.O_TA]), "add"), (int(out1[PF.O_X]) if out1[PF.O_EXIT_OPEN] > 0.5 else -1, "exit")):
+            if t < 0:
+                continue
+            for mode in ("flat", "crash", "spike"):
+                H2, L2, C2 = A.H.copy(), A.L.copy(), A.C.copy()
+                o = A.O[0, t]
+                H2[0, t], L2[0, t], C2[0, t] = {"flat": (o, o, o), "crash": (o, o * 0.6, o * 0.6),
+                                                "spike": (o * 1.5, o, o * 1.4)}[mode]
+                PF._path_py(A.O, H2, L2, C2, *args, out2)
+                if kind == "add":
+                    assert int(out2[PF.O_TA]) == t and out2[PF.O_PA] == out1[PF.O_PA]
+                else:
+                    assert int(out2[PF.O_X]) == t and out2[PF.O_FIN] == out1[PF.O_FIN] and out2[PF.O_EXIT_OPEN] == 1
+                checked += 1
+    assert checked > 50
+
+
+def test_dated_tick_table():
+    """2단계 MINOR 1: 2023-01-25 전 옛 표(시장별), 뒤 통합 표."""
+    p = np.array([1500.0, 7000.0, 30000.0, 70000.0, 300000.0, 600000.0])
+    old_kospi = PE.tick_dated_vec(p, 0, 0, reform=10)
+    old_kosdaq = PE.tick_dated_vec(p, 0, 1, reform=10)
+    new = PE.tick_dated_vec(p, 10, 0, reform=10)
+    assert old_kospi.tolist() == [5, 10, 50, 100, 500, 1000]
+    assert old_kosdaq.tolist() == [5, 10, 50, 100, 100, 100]
+    from swing_it.features.korea import tick_size_vec
+    assert np.array_equal(new, tick_size_vec(p))
+    for x, r, m in ((1500.0, 0, 0), (70000.0, 0, 1), (30000.0, 20, 0)):
+        assert PE._tick_dated_py(x, r, m, 10) == PE.tick_dated_vec(np.array([x]), r, m, 10)[0]
 
 
 def test_chandelier_trail_from_entry_and_tighten():
@@ -317,14 +421,14 @@ def test_chandelier_trail_from_entry_and_tighten():
     rows += [(99, 100, 98, 99)] * 4
     Op, H, L, C, ma, atr, TR, LIM = _hand_book(rows)
     out = np.empty(PF.N_O)
-    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, True,
+    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0,
                 _px(X_TRAIL=PF.TRAIL_CHAND, X_TRAIL_K=2.0, X_TAKE_R=np.inf, X_FB_DAYS=0), out)
     # 행 3: 최고 105 − 2×2 = 101 > 종가 99.5 → 행 4 시가 청산
     assert int(out[PF.O_REASON]) == V.R_TRAIL and int(out[PF.O_X]) == 4 and out[PF.O_FIN] == 99
     rows2 = [(100, 102, 99, 101), (101, 131, 100, 128), (128, 129, 125, 126.5), (126, 127, 124, 125)] + [(125, 126, 124, 125)] * 4
     Op, H, L, C, ma, atr, TR, LIM = _hand_book(rows2, atr_v=3.0)
     for tight, want in ((0, -1), (1, 3)):      # 조임 없음: 131 − 2×3 = 125 (종가 ≥ 125) · +3R = 130 ≤ 131 → 다음날부터 131 − 1×3 = 128 > 126.5
-        PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, True,
+        PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, 100.0, 90.0, -np.inf, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True, 0, 0,
                     _px(X_TRAIL=PF.TRAIL_CHAND, X_TRAIL_K=2.0, X_TIGHTEN=tight, X_TAKE_R=np.inf, X_FB_DAYS=0), out)
         if want > 0:
             assert int(out[PF.O_REASON]) == V.R_TRAIL and int(out[PF.O_X]) == want
@@ -512,3 +616,208 @@ def test_shape_names_and_user_region():
     assert G.user_region(g3) == {"W": False, "WD": True, "any": True}
     off = G.shape_off(g)
     assert off["sup_hw"] is None and off["slo_hw"] is None and off["touch_lo"] == 2 and off["entry"] == "trend"
+
+
+# ---------------------------------------------------------------------------
+# 정정 4~7·9 — 사용자 사례를 본뜬 합성 경로(가격 수치는 사전등록 문구, 그 밖은 손으로 고른 값)
+# ---------------------------------------------------------------------------
+
+def _path(rows, e, sp, px, *, fb=-np.inf, h0=np.inf, u=np.inf, su=0.0, lE=1.0, liE=0, lsl=0.0, lbuf=0.0, skip0=True, atr_v=2.0):
+    Op, H, L, C, ma, atr, TR, LIM = _hand_book(rows, atr_v=atr_v)
+    out = np.empty(PF.N_O)
+    PF._path_py(Op, H, L, C, ma, ma, atr, TR, LIM, 0, 0, e, sp, fb, h0, u, su, lE, liE, lsl, lbuf, skip0, 0, 0, px, out)
+    return out
+
+
+def test_default_new_genes_off_equal_previous_behaviour():
+    """정정 4~7·9 유전자 끔(클라이맥스 끔·장중·여유 0·고정 앵커·조기 청산 끔·재진입 끔)이면 경로는 라이브 동치 시험과 같은 값 — 무작위 경로에서
+    새 칸만 기본값인 두 인자 벡터가 같은 결과."""
+    O_, H_, L_, C_, _ = _rand_book(n=300, k=2, seed=41)
+    A, ma20 = _arrays(O_, H_, L_, C_)
+    atr = _atr(H_, L_, C_)
+    rng = np.random.default_rng(2)
+    o1, o2 = np.empty(PF.N_O), np.empty(PF.N_O)
+    for _ in range(80):
+        ci, d = int(rng.integers(0, 2)), int(rng.integers(60, 280))
+        e = A.O[ci, d] * 1.001
+        sp = e * (1 - rng.uniform(0.02, 0.09))
+        px = PF.LIVE_X.copy()
+        px2 = px.copy()
+        px2[[PF.X_CLIMAX_DAY, PF.X_CLIMAX_5D, PF.X_CLIMAX_R, PF.X_STOP_HARD]] = [0.11, 0.21, 2.5, 1.7]   # 꺼진 유전자의 값은 무관
+        a = (A.O, A.H, A.L, A.C, ma20, A.MA, atr, A.TR, A.CUT, ci, d, e, sp, e * 0.99, np.inf, np.inf, 0.0, 1.0, 0, 0.0, 0.0, True,
+             0, 0)
+        PF._path_py(*a, px, o1)
+        PF._path_py(*a, px2, o2)
+        assert np.allclose(o1, o2, equal_nan=True)
+
+
+def test_climax_exit_united_pharm_like():
+    """정정 4(유나이티드제약 2018-01 꼴): 2R 절반 익절 뒤 +9R 급등일 종가 → 다음날 시가 남은 수량 전량. 끄면 본전까지 돌려준다."""
+    e, sp = 29100.0, 27956.5                          # R = 1,143.5 → 2R = 31,387
+    rows = [(28900, 29300, 28800, 29200), (29300, 31500, 29200, 31400), (31500, 39000, 31400, 37500), (36000, 36500, 34000, 35000),
+            (34000, 34500, 31000, 31500), (31000, 31200, 29000, 29100)] + [(29000, 29100, 28800, 29000)] * 3
+    on = _px(X_CLIMAX=1, X_CLIMAX_DAY=0.15, X_CLIMAX_5D=0.30, X_CLIMAX_R=4.0, X_FB_DAYS=0)
+    off = _px(X_FB_DAYS=0)
+    r_on, r_off = _path(rows, e, sp, on), _path(rows, e, sp, off)
+    assert int(r_on[PF.O_TP]) == 1 and r_on[PF.O_PX1] == pytest.approx(31387.0)
+    assert int(r_on[PF.O_REASON]) == PF.R_CLIMAX and int(r_on[PF.O_X]) == 3 and r_on[PF.O_FIN] == 36000
+    assert int(r_off[PF.O_REASON]) == V.R_BE and r_off[PF.O_PNL] < r_on[PF.O_PNL]
+
+
+def test_climax_needs_r_threshold():
+    """급등률만 넘고 +kR 아래면 발동 안 함(진입 직후 작은 반등 퇴화 방지)."""
+    rows = [(100, 101, 99, 100), (100, 112, 100, 111)] + [(111, 112, 110, 111)] * 4
+    r = _path(rows, 100.0, 95.0, _px(X_CLIMAX=1, X_CLIMAX_DAY=0.10, X_CLIMAX_5D=0.2, X_CLIMAX_R=4.0, X_FB_DAYS=0, X_TAKE_R=np.inf))
+    assert int(r[PF.O_REASON]) != PF.R_CLIMAX                 # 111 < 100 + 4 × 5 = 120
+
+
+def test_close_basis_stop_hanwha_like():
+    """정정 5(한화솔루션 2020-12 꼴): 시가 갭 하락이 손절가 아래(42,649 < 43,617)지만 종가 44,200 회복 — 장중 기준은 그날 시가 손절,
+    종가 기준(재난 2배)은 생존해 이후 상승을 가진다."""
+    e, sp = 45268.0, 43617.0
+    rows = [(45000, 45500, 44800, 45200), (45200, 45400, 43667, 44000), (44000, 44500, 43800, 44300), (42649, 44500, 42500, 44200),
+            (44200, 46000, 44100, 45800), (46000, 52000, 45900, 51500), (52000, 58740, 51800, 58000)] + [(58000, 58500, 57500, 58000)] * 3
+    intra = _path(rows, e, sp, _px(X_FB_DAYS=0, X_TAKE_R=np.inf))
+    close = _path(rows, e, sp, _px(X_FB_DAYS=0, X_TAKE_R=np.inf, X_STOP_CLOSE=1, X_STOP_HARD=2.0))
+    assert int(intra[PF.O_REASON]) == V.R_STOP and int(intra[PF.O_X]) == 3 and intra[PF.O_FIN] == pytest.approx(42649 * 0.999)
+    assert int(close[PF.O_REASON]) == V.R_DATA_END and close[PF.O_PNL] > 0.2
+
+
+def test_close_basis_hard_stop_and_next_open():
+    """종가 기준: 종가 < 손절가 → 다음날 시가, 장중 재난선(e − 2R) 닿으면 그 자리."""
+    rows = [(100, 101, 99, 100), (99, 99.5, 94, 94.5), (93, 95, 92, 94)] + [(94, 95, 93, 94)] * 3
+    r = _path(rows, 100.0, 95.0, _px(X_FB_DAYS=0, X_TAKE_R=np.inf, X_STOP_CLOSE=1, X_STOP_HARD=2.0))
+    assert int(r[PF.O_REASON]) == V.R_STOP and int(r[PF.O_X]) == 2 and r[PF.O_FIN] == pytest.approx(93 * 0.999)
+    rows2 = [(100, 101, 99, 100), (99, 99.5, 89.0, 96)] + [(96, 97, 95, 96)] * 3
+    r2 = _path(rows2, 100.0, 95.0, _px(X_FB_DAYS=0, X_TAKE_R=np.inf, X_STOP_CLOSE=1, X_STOP_HARD=2.0))
+    assert int(r2[PF.O_REASON]) == V.R_STOP and int(r2[PF.O_X]) == 1 and r2[PF.O_FIN] == pytest.approx(90 * 0.999)
+
+
+def test_stop_buffer_moves_stop_and_risk_filter():
+    """정정 5 손절 여유: 손절 원값 − buf × ATR20(d−1) — 9.5% 사전 거르기도 여유 포함 손절가로."""
+    G = _runner()
+    F = np.full((1, len(PE.F_COLS)), np.nan)
+    vals = {"level": 100.0, "order": 101.0, "open_d": 100.5, "high_d": 102.0, "low_d": 100.0, "close_d": 101.5, "close_s": 99.0,
+            "stopE_raw": 95.0, "atr_s": 3.0, "rs": 80.0, "breadth": 0.6, "above50": 1, "tt_s": 1, "tt_h0": 1, "h0in": 0.0, "n_res": 1}
+    for k, v in vals.items():
+        F[0, PE.FI[k]] = v
+    g = G.decode(G.x0_feasible())
+    g = G.canonical({**g, "entry": "trend", "gap_max": 0.05, "stop_cap": 0.095, "stop_anchor": "E", "h0_in_pattern": 0})
+    bufs = [np.empty(1, t) for t in (np.int64, float, float, float, np.bool_, np.bool_, float, float)]
+    assert PF.filter_events(F, 0, 1, G.gene_vec(g), 1.3, *bufs) == 1 and bufs[2][0] == 95.0
+    g2 = G.canonical({**g, "stop_buf": 0.5})                                   # 95 − 1.5 = 93.5 → (101 − 93.5)/101 = 7.4%
+    assert PF.filter_events(F, 0, 1, G.gene_vec(g2), 1.3, *bufs) == 1 and bufs[2][0] == pytest.approx(93.5)
+    g3 = G.canonical({**g, "stop_buf": 1.0})                                   # 92 → 8.9% < 9.5% 통과, buf 2 면 탈락
+    assert PF.filter_events(F, 0, 1, G.gene_vec(g3), 1.3, *bufs) == 1
+    F[0, PE.FI["atr_s"]] = 6.0
+    assert PF.filter_events(F, 0, 1, G.gene_vec(g3), 1.3, *bufs) == 0         # 95 − 6 = 89 → 11.9% > 9.5%
+
+
+def test_fail_exit_prev_low_dongsuh_like():
+    """정정 6(동서 2021-01 꼴): 진입 32,500 → 01-25 종가 32,950 < 전일 저가 33,250 → 01-26 시가 전량(손절 31,050 보다 먼저)."""
+    e, sp = 32500.0, 31050.0
+    rows = [(32400, 34450, 32300, 33250), (33300, 33800, 33250, 33500), (33400, 33600, 32800, 32950), (32100, 32200, 30900, 31000),
+            (30800, 31000, 29500, 29800)] + [(29800, 30000, 29600, 29900)] * 3
+    on = _path(rows, e, sp, _px(X_FB_DAYS=0, X_FAIL_EXIT=1))
+    off = _path(rows, e, sp, _px(X_FB_DAYS=0))
+    assert int(on[PF.O_REASON]) == PF.R_FAILX and int(on[PF.O_X]) == 3 and on[PF.O_FIN] == 32100
+    assert int(off[PF.O_REASON]) == V.R_STOP and int(off[PF.O_X]) == 3
+    ent = _path(rows, e, sp, _px(X_FB_DAYS=0, X_FAIL_EXIT=2))                 # 진입일 저가 32,300 기준 — 01-25 종가는 위
+    assert int(ent[PF.O_REASON]) != PF.R_FAILX or int(ent[PF.O_X]) > 3
+
+
+def test_pyramid_upper_line_break():
+    """정정 6 상단선 돌파 불타기: 진입 뒤 종가 > 상단선 연장 → 다음날 시가 1 단위."""
+    rows = [(100, 101, 99.5, 100.5), (100.5, 102, 100, 101.8), (102, 103, 101.5, 102.5)] + [(102.5, 103, 102, 102.5)] * 3
+    r = _path(rows, 100.0, 95.0, _px(X_PYR=PF.PYR_UPPER, X_TAKE_R=np.inf, X_FB_DAYS=0), u=101.0, su=0.0)
+    assert int(r[PF.O_TA]) == 2 and r[PF.O_PA] == pytest.approx(102 * 1.001)
+    r2 = _path(rows, 100.0, 95.0, _px(X_PYR=PF.PYR_UPPER, X_TAKE_R=np.inf, X_FB_DAYS=0), u=110.0, su=0.0)
+    assert int(r2[PF.O_TA]) == -1
+
+
+def test_dynamic_lower_line_stop_isvision_like():
+    """정정 7(아이즈비전 2021-05 꼴): 수평 D 손절 4,735 는 05-14 저가 4,700 에 손절, 그날 하단선 연장 4,641(− 1호가 = 4,636)은
+    안 깨짐 → 하단선 동적(종가 기준·재난 2배)은 생존해 5,450 까지 간다."""
+    e = 5000.0
+    sl = math.log(4641.0 / 4800.0) / 6.0                 # 하단선: 진입일 4,800 → 6일 뒤 4,641
+    rows = [(4990, 5050, 4950, 5000), (5000, 5020, 4900, 4950), (4950, 4960, 4850, 4880), (4880, 4900, 4800, 4850),
+            (4850, 4870, 4780, 4800), (4800, 4820, 4750, 4790), (4790, 4810, 4700, 4780), (4780, 5000, 4770, 4990),
+            (5000, 5450, 4990, 5400)] + [(5400, 5450, 5350, 5400)] * 3
+    fixed = _path(rows, e, 4735.0, _px(X_FB_DAYS=0, X_TAKE_R=np.inf))
+    lo0 = 4800.0 - 5.0                                  # 진입일 선 값 − 1호가 = R 기준 손절가
+    dyn = _path(rows, e, lo0, _px(X_FB_DAYS=0, X_TAKE_R=np.inf, X_DYN=1, X_STOP_CLOSE=1, X_STOP_HARD=2.0),
+                lE=4800.0, liE=0, lsl=sl)
+    assert int(fixed[PF.O_REASON]) == V.R_STOP and int(fixed[PF.O_X]) == 6
+    assert int(dyn[PF.O_REASON]) == V.R_DATA_END and dyn[PF.O_PNL] > 0.05
+
+
+def _portfolio_rows(rows, px, e, sp, *, fb=-np.inf, lE=1.0, liE=0, lsl=0.0, s0=None, skip0=True):
+    """합성 한 종목 포트폴리오(비용 0 · 대조 0) — 기록 전부를 돌려준다(재진입 포함)."""
+    Op, H, L, C, ma, atr, TR, LIM = _hand_book([(rows[0][0],) * 4] + rows)
+    n = Op.shape[1]
+    i1, f1, b1 = (lambda v: np.array([v], np.int64)), (lambda v: np.array([v], float)), (lambda v: np.array([v], np.bool_))
+    ret, bench, expo = np.zeros(n), np.zeros(n), np.zeros(n)
+    rec = np.zeros((4, PF.N_Q))
+    ny = np.zeros(1, np.int64)
+    fixed = px.copy()
+    fixed[PF.X_DYN] = 0.0
+    r = PF._portfolio_py(i1(1), i1(0), f1(e), f1(sp), f1(fb), f1(np.inf), f1(np.inf), f1(0.0), f1(lE), i1(liE + 1), f1(lsl),
+                         f1(0.0), b1(False), b1(skip0), f1(sp if s0 is None else s0), i1(-1), i1(0), i1(0), i1(0), i1(7),
+                         np.ascontiguousarray(np.vstack([px, fixed])), Op, H, L, C, ma, ma, atr, TR, LIM,
+                         np.zeros((3, n, 1)), np.zeros((3, n, 1), np.int64), np.full((1, n), -1, np.int64), np.zeros((2, n)),
+                         2.0, 0.0, 0, n, 10, 0.1, ret, bench, expo, rec, np.zeros(n, np.int64), ny, 0, False, 1.3, 1)
+    return rec[:r[0]], float(np.prod(1 + ret))
+
+
+def test_reentry_after_fail_exit_dongsuh_like():
+    """정정 6 바닥 재진입: 조기 청산 뒤 새 저점 F(E × 0.99 이하 ∧ 하단선 × 0.97 이상) → F 봉 고가 + 1호가 매수정지, 손절 F − 1호가."""
+    px = _px(X_FB_DAYS=0, X_FAIL_EXIT=1, X_REENTRY=1, X_TAKE_R=np.inf)
+    rows = [(103, 105, 102, 104), (104, 104.5, 101, 101.5), (101, 101.5, 99.5, 100), (99.5, 100, 98.5, 99),
+            (99, 99.5, 98.8, 99.3), (100, 102, 99.8, 101.5)] + [(101.5, 102, 101, 101.5)] * 4
+    rec, eq = _portfolio_rows(rows, px, 104.0, 99.0, lE=100.0, liE=-1, lsl=0.0)
+    assert len(rec) == 2
+    assert rec[0][PF.Q_REASON] == PF.R_FAILX and rec[0][PF.Q_RE] == 0
+    r = rec[1]
+    assert r[PF.Q_RE] == 1 and int(r[PF.Q_D]) == 6 and r[PF.Q_E] == pytest.approx(101 * 1.001) and r[PF.Q_SP] == pytest.approx(97.5)
+    noree = _portfolio_rows(rows, _px(X_FB_DAYS=0, X_FAIL_EXIT=1, X_TAKE_R=np.inf), 104.0, 99.0, lE=100.0, liE=-1)[0]
+    assert len(noree) == 1
+
+
+def test_line_return_reentry():
+    """정정 9 선 복귀: 하단선 손절 뒤 reentry_win 안에 종가가 하단선 연장 위 → 다음날 시가 재진입, 손절 = 이탈 구간 최저 저가 − 1호가."""
+    px = _px(X_FB_DAYS=0, X_REENTRY=2, X_REENTRY_WIN=3, X_TAKE_R=np.inf)
+    rows = [(100, 101, 99, 100), (99, 99.5, 96, 97), (96.5, 97, 93, 94), (94, 96.5, 93.5, 96), (96.5, 98, 96, 97.5)] + \
+        [(97.5, 98, 97, 97.5)] * 4
+    rec, eq = _portfolio_rows(rows, px, 100.0, 94.0, lE=95.0, liE=0, lsl=0.0)
+    assert len(rec) == 2 and rec[0][PF.Q_REASON] == V.R_STOP and int(rec[0][PF.Q_X]) == 3
+    r = rec[1]
+    assert r[PF.Q_RE] == 1 and int(r[PF.Q_D]) == 5 and r[PF.Q_E] == pytest.approx(96.5 * 1.001) and r[PF.Q_SP] == pytest.approx(92.0)
+    late = [(100, 101, 99, 100), (99, 99.5, 96, 97), (96.5, 97, 93, 94), (94, 94.5, 93.5, 94), (94, 94.5, 93.5, 94),
+            (94, 94.5, 93.5, 94), (94, 97, 93.8, 96.5)] + [(96.5, 97, 96, 96.5)] * 3
+    assert len(_portfolio_rows(late, px, 100.0, 94.0, lE=95.0, liE=0)[0]) == 1          # 창(3일) 밖 복귀는 재진입 아님
+
+
+def test_case_diagnose_matches_filter():
+    """정정 8 재현표의 탈락 사유 진단은 커널 거르기와 같은 판정('ok' ⇔ 통과)."""
+    G = _runner()
+    Op, H, L, C, Vv = _rand_book(n=700, k=10, seed=17)
+    t = _tables(Op, H, L, C, Vv, thetas=(0.03, 0.05), ceil_wins=(60, 120))
+    F = t["F"].copy()
+    rng = np.random.default_rng(5)
+    F[:, PE.FI["e_yoy"]] = rng.normal(0.2, 0.5, len(F))
+    F[:, PE.FI["atr_s"]] = 1.0
+    seen = set()
+    loose = [G.encode(G.canonical({**G.decode(G.x0_feasible()), "entry": e_, "gap_max": 0.05, "stop_cap": 0.12, "h0_in_pattern": h_}))
+             for e_ in ("trend", "horiz", "bottom") for h_ in (0, 1)]
+    for x in list(G.random_x(rng, 300)) + loose:
+        g = G.decode(x)
+        g = G.canonical({**g, "theta": 0.03, "ceil_win": 60})
+        a, b = PE.table_slice(t["off"], G.table_of(g))
+        gv = G.gene_vec(g)
+        for k in range(a, min(b, a + 15)):
+            buf = [np.empty(1, tt) for tt in (np.int64, float, float, float, np.bool_, np.bool_, float, float)]
+            ok = PF.filter_events(np.ascontiguousarray(F[k][None, :]), 0, 1, gv, 1.3, *buf) == 1
+            why = G.diagnose(F[k], gv, 1.3)
+            assert (why == "ok") == ok, why
+            seen.add(why)
+    assert "ok" in seen and len(seen) >= 3
