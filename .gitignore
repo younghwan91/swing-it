@@ -37,3 +37,4 @@ research/bo_best_params.json
 
 # 에이전트용 레포 복사본 — 커밋 대상이 아니다
 .claude/worktrees/
+research/logs/sepa_explore/ga2/TRIALS.jsonl
