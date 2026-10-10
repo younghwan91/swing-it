@@ -107,7 +107,16 @@ if FW:
     SEEDS = tuple(range(int(os.environ.get("PATTERN_GA_FW_SEEDS", "10"))))
     BUDGET = int(os.environ.get("PATTERN_GA_FW_BUDGET", "10000"))
     N_NULL_B = int(os.environ.get("PATTERN_GA_FW_NULL_B", "50"))
-    SCREEN_N = int(os.environ.get("PATTERN_GA_FW_SCREEN", "40000000"))   # F4: 실현 가능 비율 2~6e-5(건수만) → 폴드당 기대 800~2,400 ≥ 500
+    SCREEN_N = int(os.environ.get("PATTERN_GA_FW_SCREEN", "300000000"))  # 리뷰 FW M1: 적응 선별 상한(폴드당)
+    RESTART_SCREEN = 1_000_000                                            # 리뷰 FW M2: 재시작 풀 선별 10만 → 100만(실제·2b 같게)
+FW_FEAS_TARGET = 1_000                 # 리뷰 FW M1: 폴드마다 실현 가능 config 가 이 수에 닿는 가장 짧은 덩어리 접두(건수만 정지 규칙)
+FW_Q_2A, FW_Q_2B = 99.0, 100.0         # 리뷰 FW M5: 사후 좁힘 다중성 — 2a p99 · 2b 50벌 전부 위
+FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fw/parent_viewed_trades.csv"   # 리뷰 FW M5: 부모 열람 OOS 거래
+
+
+def fw_ok(su: float, sl: float, g: dict) -> bool:
+    """FW F1 사건 모양: 상단선 하락 ∧ 하단선 < fw_lo ∧ 수렴(리뷰 FW M7 — 사례표도 같은 판정)."""
+    return bool(su < 0.0 and sl < g["fw_lo"] and su < sl)
 
 # --- 유전자(정정 0·1·2·3) ---
 #: 연속 (이름, 하한, 상한, 끔 끝) — [0, 1] 정규화, 끔 끝에서 :data:`OFF_ZONE` 안이면 조건 끔.
@@ -468,7 +477,8 @@ def gene_str(g: dict) -> str:
     hard_s = "" if g.get("stop_hard") is None else f" 재난{g['stop_hard']:.2f}"
     clx = "" if not g.get("climax") else f" 클라이맥스(일{g['climax_day']:.0%}·5일{g['climax_5d']:.0%}·{g['climax_r']:.1f}R)"
     span = "끔" if g["span_hw"] is None else f"[{math.exp(g['span_c'] - g['span_hw']):.0f},{math.exp(g['span_c'] + g['span_hw']):.0f}]"
-    return (f"θ{g['theta']:.0%} 창{g['ceil_win']} {g['entry']} 단계{g['stage']} rs≥{c(g['rs_min'], '{:.0f}')} br≥{c(g['breadth_min'])} "
+    fwl = f"FW하단<{g['fw_lo']:+.2f} " if g.get("fw_lo") is not None else ""      # 리뷰 FW M9
+    return (f"{fwl}θ{g['theta']:.0%} 창{g['ceil_win']} {g['entry']} 단계{g['stage']} rs≥{c(g['rs_min'], '{:.0f}')} br≥{c(g['breadth_min'])} "
             f"ŝ↑{sup} ŝ↓{slo} ρ≤{c(g['rho_max'])} 닿음{g['touch_lo']} L{span} 천장≥{c(g['ceil_min'])} 깊이≤{c(g['depth_max'])} "
             f"마름≤{c(g['dry_max'])} 급등{g['runup_win'] or ''}≥{c(g['runup_min'])} 쉼≤{c(g['rest_gap_max'], '{:.0f}')} "
             f"천장{g['ceil_kind']} H0첫점{g['h0_in_pattern']} E≥{c(g['e_min'])}{'가속' if g['e_accel'] else ''} 갭≤{g['gap_max']:.3f} "
@@ -593,6 +603,7 @@ class Engine:
         self.end_row = int(self.days.searchsorted(pd.Timestamp(END_DAY), side="right") - 1)
         self.F_orig = self.F
         self.rep = None
+        self.fw_off = False                              # 리뷰 FW M6: "F1 끔" 짝(같은 config, 하락 쐐기 거르기만 끔)
         self.pmix = float(self.meta.get("p", 0.5))
         self.n_years = int(np.max(self.year_of)) + 1
         self.reform = self.row(PE.TICK_REFORM_DAY)
@@ -628,7 +639,7 @@ class Engine:
                              B["fb"], B["amb"], B["skip0"], B["s0"], B["buf"]) if bb > aa else 0
         idx = B["idx"][:n].copy()
         keep = np.ones(n, bool) if allow is None else np.asarray(allow)[idx]
-        if FW and n:                                     # F1: 하락 쐐기(유연) — 상단선 하락 ∧ 하단선 < fw_lo ∧ 수렴, 현재 F(2b 면 섞은 서술자)
+        if FW and n and not self.fw_off:                 # F1: 하락 쐐기(유연) — 상단선 하락 ∧ 하단선 < fw_lo ∧ 수렴, 현재 F(2b 면 섞은 서술자)
             su_, sl_ = np.asarray(F_[idx, PE.FI["s_up"]], float), np.asarray(F_[idx, PE.FI["s_lo"]], float)
             keep &= (su_ < 0.0) & (sl_ < g["fw_lo"]) & (su_ < sl_)
         I_, F = self.I, self.F
@@ -869,6 +880,68 @@ def screen_task(t: dict) -> dict:
     return {"fold": t["fold"], "chunk": t["chunk"], "X": X, "n": nn}
 
 
+def fw_extras(E: "Engine", cfgs: "list[dict]", tests: "list[Win]", st: dict) -> dict:
+    """리뷰 FW M6: 노출·불타기 발동률·"F1 끔" 짝(같은 config, 하락 쐐기 거르기만 끔) — 실제와 2b 각 벌에 같은 정의."""
+    rec = st["rec"]
+    add = float(np.mean(rec[:, PF.Q_ADDED] > 0.5)) if len(rec) else np.nan
+    E.fw_off = True
+    try:
+        off = E.stitched(cfgs, tests)
+    finally:
+        E.fw_off = False
+    return {"expo": st["expo_mean"], "add_rate": add, "f1off_ann": off["ann"], "f1off_expo": off["expo_mean"],
+            "f1_gain": st["ann"] - off["ann"]}
+
+
+def fw_adaptive_screen(ex, nf_: int, cap_n: int, r_chunks: int, workers: int, t0: float) -> "tuple[dict, dict]":
+    """리뷰 FW M1: 폴드마다 덩어리 0, 1, 2, … 를 선별해 실현 가능 config 누적이 :data:`FW_FEAS_TARGET` 에 닿는 **가장 짧은 접두**
+    (최소 ``r_chunks`` 덩어리, 상한 ``cap_n``)만 쓴다. 정지는 건수만 보고, 접두는 완료 순서와 무관하다(결정적)."""
+    cap = max(r_chunks, math.ceil(cap_n / SCREEN_CHUNK))
+    got = {k: {} for k in range(nf_)}
+    nxt = {k: 0 for k in range(nf_)}
+    inflight: dict = {}
+
+    def prefix(k):
+        tot, c = 0, 0
+        while c in got[k]:
+            tot += len(got[k][c]["X"])
+            c += 1
+            if tot >= FW_FEAS_TARGET and c >= r_chunks:
+                return c, tot, True
+        return c, tot, False
+
+    def wants(k):
+        return not prefix(k)[2] and nxt[k] < cap
+
+    per = max(2, (3 * workers) // nf_)
+    last = time.time()
+    while True:
+        for k in range(nf_):
+            while wants(k) and sum(1 for v in inflight.values() if v[0] == k) < per:
+                c = nxt[k]
+                inflight[ex.submit(screen_task, {"fold": k, "chunk": c, "n": SCREEN_CHUNK})] = (k, c)
+                nxt[k] += 1
+        if not inflight:
+            break
+        done, _ = cf.wait(list(inflight), return_when=cf.FIRST_COMPLETED)
+        for f in done:
+            k, c = inflight.pop(f)
+            got[k][c] = f.result()
+        if time.time() - last > 600:
+            last = time.time()
+            _log("FW 적응 선별: " + " · ".join(f"폴드{k + 1} {prefix(k)[1]}/{FW_FEAS_TARGET}({nxt[k] * SCREEN_CHUNK / 1e6:.0f}M)"
+                                             for k in range(nf_)), t0)
+    scr, restart_x = {}, {}
+    for k in range(nf_):
+        c_end = prefix(k)[0] if prefix(k)[2] else len(got[k])
+        keep = [got[k][c] for c in range(c_end) if c in got[k]]
+        scr[k] = keep
+        restart_x[k] = np.vstack([r["X"] for r in keep[:r_chunks]]) if keep else np.zeros((0, DIM))
+    _log("FW 적응 선별 끝: " + " · ".join(f"폴드{k + 1} 실현 가능 {sum(len(r['X']) for r in scr[k]):,}개 / "
+                                       f"{len(scr[k]) * SCREEN_CHUNK / 1e6:.1f}M" for k in range(nf_)), t0)
+    return scr, restart_x
+
+
 def null_b_task(t: dict) -> dict:
     """(2b) 모양 섞은 널 한 벌 = 섞은 사건 표 위에서 절차 전체(재시작 풀 선별 → 폴드 × 시드 × 예산 → 재평가 1등 → 이어 붙인 OOS)
     + 모양 끔 짝. 재시작 풀은 실제와 같은 규칙(앞 :data:`RESTART_SCREEN` 개 선별)을 섞은 자료에서 다시 센다."""
@@ -891,6 +964,7 @@ def null_b_task(t: dict) -> dict:
     tests = [te for _, te in wins]
     st = E.stitched(pr["cfgs"], tests)
     so = E.stitched([shape_off(c) for c in pr["cfgs"]], tests)
+    fwx = fw_extras(E, pr["cfgs"], tests, st) if FW else {}
     cu = [c["sup_c"] for c in pr["cfgs"] if c["sup_hw"] is not None]
     cl = [c["slo_c"] for c in pr["cfgs"] if c["slo_hw"] is not None]
     E.set_rep(None)
@@ -898,7 +972,7 @@ def null_b_task(t: dict) -> dict:
             "shape_gain": st["ann"] - so["ann"], "sup_c_sd": float(np.std(cu)) if len(cu) > 1 else np.nan,
             "slo_c_sd": float(np.std(cl)) if len(cl) > 1 else np.nan, "restart_pool": n_pool,
             "restart_zero_frac": float(np.nanmean(zf)) if zf else np.nan,
-            "shapes": [config_shape(c) for c in pr["cfgs"]], "restarts_mean": float(np.mean(rsts)), "sec": time.time() - tt}
+            "shapes": [config_shape(c) for c in pr["cfgs"]], "restarts_mean": float(np.mean(rsts)), "sec": time.time() - tt, **fwx}
 
 
 def pool_task(t: dict) -> dict:
@@ -1113,7 +1187,8 @@ def feasibility(E: Engine, wins, folds, args, t0: float) -> dict:
              "span_c": None, "span_hw": None, "ceil_min": None, "depth_max": None, "dry_max": None, "runup_min": None,
              "runup_win": None, "rest_gap_max": None, "gap_max": 0.05, "stop_cap": 0.12, "fb_tol": 0.0, "trail_k": None,
              "stage": 0, "trail": "ma50", "pyramid": "off", "touch_lo": 2, "e_min": None, "e_accel": None, "stop_anchor": "E",
-             "fb_days": 2, "be_r": math.inf, "take_r": 2.0, "take_frac": 0.5, "tighten": None, "ceil_kind": "single"}
+             "fb_days": 2, "be_r": math.inf, "take_r": 2.0, "take_frac": 0.5, "tighten": None, "ceil_kind": "single",
+             **({"fw_lo": 0.15} if FW else {})}                       # 리뷰 FW M8: 가장 느슨한 경계
     reg_rows = []
     for rname, mask, entry, h0in in (("W", rw, "trend", 0), ("W", rw, "trend", 1), ("WD", rwd, "bottom", 1)):
         for th in PE.THETAS:
@@ -1590,6 +1665,8 @@ def case_table(E: Engine, cfgs: "list[dict]", wins) -> "tuple[pd.DataFrame, list
             d = int(I_[ev, PE.II["d"]])
             gv = gene_vec(g)
             why = diagnose(F[ev], gv)
+            if FW and why == "ok" and not fw_ok(float(F[ev, PE.FI["s_up"]]), float(F[ev, PE.FI["s_lo"]]), g):
+                why = "FW 모양(하락 쐐기 계열 아님 — 리뷰 FW M7)"
             r_.update(event_day=str(E.days[d].date()), offset=d - dd)
             if why != "ok":
                 rows.append({**r_, "status": f"거르기 탈락: {why}"})
@@ -1747,15 +1824,19 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
     with cf.ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx, initializer=worker_init,
                                 initargs=(args.cache, folds_spec)) as ex:
         # 1) 건수 선별 — 재시작 풀 덩어리 먼저(실제 GA 가 기다린다), 나머지는 2a 풀
-        sfut = {ex.submit(screen_task, {"fold": k, "chunk": c, "n": min(SCREEN_CHUNK, screen_n - c * SCREEN_CHUNK)}): (k, c)
-                for c in range(n_chunks) for k in range(nf_)}
-        restart_x = {k: [] for k in range(nf_)}
-        pending = {fut for fut, (k, c) in sfut.items() if c < r_chunks}
-        for f in cf.as_completed(pending):
-            r = f.result()
-            scr[r["fold"]].append(r)
-            restart_x[r["fold"]].append(r["X"])
-        restart_x = {k: (np.vstack(v) if v else np.zeros((0, DIM))) for k, v in restart_x.items()}
+        if FW:                                       # 리뷰 FW M1·M2: 적응 선별(건수만 정지 규칙) — 재시작 풀 = 앞 r_chunks 덩어리
+            scr, restart_x = fw_adaptive_screen(ex, nf_, screen_n, r_chunks, args.workers, t0)
+            sfut = {}
+        else:
+            sfut = {ex.submit(screen_task, {"fold": k, "chunk": c, "n": min(SCREEN_CHUNK, screen_n - c * SCREEN_CHUNK)}): (k, c)
+                    for c in range(n_chunks) for k in range(nf_)}
+            restart_x = {k: [] for k in range(nf_)}
+            pending = {fut for fut, (k, c) in sfut.items() if c < r_chunks}
+            for f in cf.as_completed(pending):
+                r = f.result()
+                scr[r["fold"]].append(r)
+                restart_x[r["fold"]].append(r["X"])
+            restart_x = {k: (np.vstack(v) if v else np.zeros((0, DIM))) for k, v in restart_x.items()}
         timings["restart_screen"] = time.time() - t1
         _log("재시작 풀(실제): " + " · ".join(f"폴드{k + 1} {len(v)}" for k, v in restart_x.items()), t0)
         # 2) 실제 GA · 무작위 탐색 풀 · 2b
@@ -1869,6 +1950,19 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
 
     # --- 기술: 모양 끔 짝·선택도, 중앙값, 민감도 ---
     so = E.stitched([shape_off(c) for c in out_cfgs], tests)
+    fw_real = fw_extras(E, out_cfgs, tests, st) if FW else {}
+    fw_parent = {}
+    if FW and os.path.exists(FW_PARENT_VIEWED):        # 리뷰 FW M5: 부모 열람 OOS 거래(종목·주문일) 제외 민감도(사전등록)
+        pv = pd.read_csv(FW_PARENT_VIEWED, dtype={"code": str})
+        cidx = {c: i for i, c in enumerate(np.asarray(E.codes))}
+        I_all = np.asarray(E.I)
+        keys = {(cidx[c], E.row(d)) for c, d in zip(pv["code"], pv["order_day"], strict=True) if c in cidx}
+        mask = np.fromiter(((int(a_), int(b_)) in keys for a_, b_ in zip(I_all[:, PE.II["ci"]], I_all[:, PE.II["d"]])), bool,
+                           count=len(I_all))
+        ex_ev = np.flatnonzero(mask)
+        s_ex = E.stitched(out_cfgs, tests, exclude=ex_ev)
+        fw_parent = {"n_parent": len(pv), "n_events_excluded": int(len(ex_ev)), "ann": s_ex["ann"], "n": s_ex["n"],
+                     "overlap_trades": int(np.isin(tr_df["ev"].to_numpy(), ex_ev).sum()) if len(tr_df) else 0}
     sel_rows = []
     for k, (c, w) in enumerate(zip(out_cfgs, tests, strict=True)):
         a_, b_ = E.candidates(c, w), E.candidates(shape_off(c), w)
@@ -1926,11 +2020,19 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
         kospi_exc = float(mo_k.mean() * 12)
     n_prior = {lab: count_trials(lab, logs_dir=d) for lab, d in (*R.PRIOR_LEDGERS, ("vcp_retest", "research/logs/sepa_explore"),
                                                                   ("wedge", "research/logs/sepa_explore"),
-                                                                  ("wedge_d", "research/logs/sepa_explore"))}
+                                                                  ("wedge_d", "research/logs/sepa_explore"),
+                                                                  *((("pattern_ga", OUT_DIR),) if FW else ()))}   # 리뷰 FW M4
     n_led = count_trials(LABEL, logs_dir=led_dir)
     n_dsr_a = n_led + sum(n_prior.values())
     dsr = {}
-    for tag, N in (("변형", n_dsr_a), ("구조", DSR_STRUCTS)):
+    parent_uniq = 0
+    if FW:                                            # 리뷰 FW M4: 부모 PATTERN_GA 런 원장의 평가 고유 config 합(겹침 무시 — 위쪽 경계)
+        pr_path = os.path.join(OUT_DIR, "pattern_ga_runs", "TRIALS.jsonl")
+        if os.path.exists(pr_path):
+            with open(pr_path, encoding="utf-8") as fh:
+                parent_uniq = sum(int(json.loads(x)["config"].get("n_unique_configs_evaluated", 0)) for x in fh if x.strip())
+    for tag, N in (("변형", n_dsr_a), ("구조", DSR_STRUCTS),
+                   *((("부모·이번 고유 config", n_dsr_a + parent_uniq + len(hashes)),) if FW else ())):
         d_ = deflated_sharpe_from_sample(st["monthly"], N) if len(st["monthly"]) > 2 else None
         dsr[tag] = {"N": N, "prob": float(d_["prob_deflated_sharpe"]) if d_ else np.nan,
                     "sr": float(d_["observed_sharpe"]) if d_ else np.nan}
@@ -1948,6 +2050,24 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
         else:
             pbo.append(np.nan)
     ws = R.wstats(R.expand(tr_df, pmix), n_dsr_a) if len(tr_df) else {"n": 0}
+    fw_b6 = {}
+    if FW:                                            # 리뷰 FW M3: 손익비를 승률과 같은 부분집합(본전 제외)으로 · 본전 비율 · 불타기 끔 판
+        def b6_stats(t_):
+            if t_ is None or not len(t_):
+                return {"n": 0}
+            xx_ = R.expand(t_, pmix)
+            ww_, n2_ = xx_["w"].to_numpy(float), xx_["net2"].to_numpy(float)
+            wi, lo_m = n2_ >= BE_BAND, n2_ <= -BE_BAND
+            glb = (float(np.average(n2_[wi], weights=ww_[wi]) / -np.average(n2_[lo_m], weights=ww_[lo_m]))
+                   if wi.any() and lo_m.any() else np.nan)
+            wr = float(ww_[wi].sum() / (ww_[wi].sum() + ww_[lo_m].sum())) if (wi | lo_m).any() else np.nan
+            return {"n": int(len(t_)), "gl_ex_be": glb, "win_ex_be": wr, "be_share": float(ww_[~(wi | lo_m)].sum() / ww_.sum()),
+                    "need": 1.0 / (1.0 + glb) + B6_MARGIN if np.isfinite(glb) else np.nan}
+        np_cfgs = [dict(c, pyramid="off") for c in out_cfgs]
+        st_np = E.stitched(np_cfgs, tests)
+        fw_b6 = {"GA": b6_stats(tr_df), "불타기 끔(첫 단위만)": b6_stats(trade_frame(E, st_np, np_cfgs)), "np_ann": st_np["ann"]}
+        n_fw_strict = int((tr_df["shape"] == "하락 쐐기").sum()) if len(tr_df) else 0
+        fw_b6["strict_share"] = n_fw_strict / len(tr_df) if len(tr_df) else np.nan
     timings["post"] = time.time() - t1
 
     # --- 바 산술 ---
@@ -1961,13 +2081,16 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
         wn, ls = ww[n2 >= BE_BAND].sum(), ww[n2 <= -BE_BAND].sum()
         w2 = float(wn / (wn + ls)) if wn + ls > 0 else np.nan
     gl = ws.get("gl_ratio2", np.nan)
+    q2a, q2b = (FW_Q_2A, FW_Q_2B) if FW else (95.0, 95.0)
+    if FW:
+        gl = fw_b6["GA"].get("gl_ex_be", np.nan)      # 리뷰 FW M3: 승률과 같은 부분집합
     be_need = 1.0 / (1.0 + gl) + B6_MARGIN if np.isfinite(gl) else np.nan
     fold_judge = [n >= FOLD_MIN_FILLS for n in st["fold_n"]]
     calm_folds = [k for k, w in enumerate(tests) if str(w.lo)[:4] in ("2022", "2023", "2024")]
     b4_judgeable = all(fold_judge[k] for k in calm_folds) and len(calm_folds) == 3
     bars = {"b1": bool(np.isfinite(st["ann"]) and st["ann"] > 0 and ci_lo > 0),
-            "b2a": bool(null_a_ok and len(null_a) and st["ann"] > p95(null_a["ann"])),
-            "b2b": bool(len(nb) and st["ann"] > p95(nb["ann"])),
+            "b2a": bool(null_a_ok and len(null_a) and st["ann"] > float(np.nanpercentile(null_a["ann"], q2a))),
+            "b2b": bool(len(nb) and st["ann"] > float(np.nanpercentile(nb["ann"], q2b))),
             "b3": bool(np.isfinite(fac.get("alpha_t", np.nan)) and fac["alpha_t"] > 2.0),
             "b4": bool(b4_judgeable and np.isfinite(st["calm_ann"]) and st["calm_ann"] > 0
                        and np.isfinite(st["ex2020_21_ann"]) and st["ex2020_21_ann"] > 0
@@ -1982,6 +2105,8 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
     elapsed = time.time() - t0
     V = locals()
     L = render(V)
+    if FW:
+        L = L[:3] + fw_lines(V) + L[3:]
     with open(os.path.join(out_dir, RESULTS_MD), "w", encoding="utf-8") as fh:
         fh.write("\n".join(L) + "\n")
     # --- 산출물 ---
@@ -2110,6 +2235,42 @@ CLAIM_SCOPE = """> **전 바 통과가 확립하는 것:** 2020-01 ~ 2026-08 한
 > **허용하는 행동:** 통과해도 전진 페이퍼(고정 config, 페이퍼 판정 규칙 사전등록)까지만이다. 독립 표본(미국)에 같은 사전등록을 한 번 적용하는 것이 다음 증거다."""
 
 
+def fw_lines(V: dict) -> "list[str]":
+    """FW 머리 절(리뷰 FW M3·M5·M6·M9) — 결과 문서 맨 앞."""
+    st, nb, b6, fr, fp, out_cfgs = V["st"], V["nb"], V["fw_b6"], V["fw_real"], V["fw_parent"], V["out_cfgs"]
+    g = b6.get("GA", {})
+    share = b6.get("strict_share", np.nan)
+    label = "하락 쐐기" if np.isfinite(share) and share >= 0.5 else "하락 쐐기 계열(유연 경계 — 엄격 하락 쐐기 50% 미만)"
+    L = ["## FW 머리 절 (리뷰 FW 필수 수정 반영)", "",
+         f"> **다중성 미보정(리뷰 FW M5):** 이 메뉴는 부모 `PATTERN_GA` 의 표본 밖 매매·차트를 본 뒤 좁혔다(모양 계열·불타기 필수·본전 0.5/1R). "
+         f"명목 p95 바는 보정되지 않은 값이라 판정 문턱을 **2a p{V['q2a']:g} · 2b {len(nb)}벌 최댓값 위**로 올렸다. 통과해도 '탐색' 이다.", "",
+         f"- **바 6(사용자 기준, 리뷰 FW M3 — 손익비·승률 모두 본전 |순 2배| < {BE_BAND:.1%} 제외):** OOS {g.get('n', 0)}건 · "
+         f"손익비 {_f(g.get('gl_ex_be', np.nan))} (≥ {B6_GL:g}) · 승률 {_f(g.get('win_ex_be', np.nan))} vs 필요 {_f(g.get('need', np.nan))} · "
+         f"본전 비율 {_f(g.get('be_share', np.nan))} → {_m(V['bars']['b6'])}"]
+    np_ = b6.get("불타기 끔(첫 단위만)", {})
+    L += [f"- 불타기 끔(같은 config·첫 단위만, 기술): {np_.get('n', 0)}건 · 손익비 {_f(np_.get('gl_ex_be', np.nan))} · "
+          f"승률 {_f(np_.get('win_ex_be', np.nan))} · 연환산 {_pct(b6.get('np_ann', np.nan))}",
+          f"- **모양 표기(리뷰 FW M9):** OOS 거래 중 엄격 하락 쐐기(`shape_name`) 비율 {_f(share)} → 이 결과를 부르는 이름: **{label}**. "
+          f"폴드별 fw_lo: " + " · ".join(f"{k + 1}: {c.get('fw_lo', np.nan):+.2f}" for k, c in enumerate(out_cfgs))]
+    if len(nb) and fr:
+        def dist(col):
+            v = nb[col].to_numpy(float) if col in nb else np.array([])
+            v = v[np.isfinite(v)]
+            return f"2b 중앙 {_f(float(np.median(v)), '{:.3f}')} · p95 {_f(float(np.percentile(v, 95)), '{:.3f}')}" if len(v) else "2b 없음"
+        L += ["- **노출·불타기·F1 끔 짝(리뷰 FW M6 — 실제 vs 2b 같은 정의):**",
+              f"  - 평균 노출 {_f(fr['expo'], '{:.3f}')} ({dist('expo')})",
+              f"  - 불타기 발동률 {_f(fr['add_rate'], '{:.3f}')} ({dist('add_rate')})",
+              f"  - F1 끔 연환산 {_pct(fr['f1off_ann'])} · F1 이득 {_pct(fr['f1_gain'])} ({dist('f1_gain')})",
+              f"  - 노출 1 단위당 연환산: 실제 {_pct(st['ann'] / fr['expo'] if fr['expo'] else np.nan)} · "
+              f"2b 중앙 {_pct(float(np.nanmedian(nb['ann'] / nb['expo'])) if 'expo' in nb else np.nan)}"]
+    if fp:
+        L += [f"- **부모 열람 거래 제외(리뷰 FW M5, 사전등록 민감도):** 부모 OOS {fp['n_parent']}건과 같은 (종목, 주문일) 사건 "
+              f"{fp['n_events_excluded']}개 제외 → 연환산 {_pct(fp['ann'])} ({fp['n']}건) · 이번 OOS 중 겹친 거래 {fp['overlap_trades']}건"]
+    d3 = V["dsr"].get("부모·이번 고유 config", {})
+    L += [f"- DSR(부모·이번 고유 config N {d3.get('N', 0):,}): {_f(d3.get('prob', np.nan))}", ""]
+    return L
+
+
 def _m(ok) -> str:
     return "✓" if ok else "✗"
 
@@ -2141,13 +2302,13 @@ def render(V: dict) -> "list[str]":  # noqa: C901
           "## 합격 바 산술 — 절차 출력(시드 최적 재평가 1등) 이어 붙인 OOS, 2배 비용, 정합 바스켓 대조", "",
           "| 바 | 문턱 | 값 | 충족 |", "|---|---|---|---|",
           f"| 1 | 연환산 초과 > 0 ∧ 월 블록 95% CI 하단 > 0 | {_pct(st['ann'])} [{_pct(V['ci_lo'])}, {_pct(V['ci_hi'])}] | {_m(bars['b1'])} |",
-          f"| 2a | > 같은 메뉴 무최적화 실현 가능 설정 p95 (폴드별 실현 가능 고유 config ≥ {V['feas_min']} 아니면 판단 불가 = ✗) | "
-          f"{_pct(st['ann'])} vs {_pct(float(np.nanpercentile(null_a['ann'], 95)) if len(null_a) else np.nan)} "
+          f"| 2a | > 같은 메뉴 무최적화 실현 가능 설정 p{V['q2a']:g} (폴드별 실현 가능 고유 config ≥ {V['feas_min']} 아니면 판단 불가 = ✗) | "
+          f"{_pct(st['ann'])} vs {_pct(float(np.nanpercentile(null_a['ann'], V['q2a'])) if len(null_a) else np.nan)} "
           f"(백분위 {_f(float((null_a['ann'] < st['ann']).mean()) if len(null_a) else np.nan)})"
           + ("" if V["null_a_ok"] else " · **실현 가능 풀 하한 미달 → 판단 불가**")
           + (" · **출력이 널 지지 밖**(실현 불가능 폴드 " + ",".join(str(k + 1) for k, o in enumerate(V["out_feas"]) if not o["feasible"]) + ")"
              if any(not o["feasible"] for o in V["out_feas"]) else "") + f" | {_m(bars['b2a'])} |",
-          f"| 2b | > 모양 섞은 널(절차 전체) p95 | {_pct(st['ann'])} vs {_pct(float(np.nanpercentile(nb['ann'], 95)) if len(nb) else np.nan)} "
+          f"| 2b | > 모양 섞은 널(절차 전체) p{V['q2b']:g} | {_pct(st['ann'])} vs {_pct(float(np.nanpercentile(nb['ann'], V['q2b'])) if len(nb) else np.nan)} "
           f"(백분위 {_f(float((nb['ann'] < st['ann']).mean()) if len(nb) else np.nan)}) · 해석(2단계 M5): 통과는 '모양 열이 급등·쉼·손절 거리·"
           f"기준선 값에 이미 든 모양 정보 **이상**을 더했다' 는 뜻(섞지 않는 열에 모양 정보가 일부 남아 널이 더 세다 — 보수 쪽) | {_m(bars['b2b'])} |",
           f"| 3 | 팩터 α t > 2 (NW 5, {', '.join(['MKT_KOSPI_TVW', 'MKT_KOSDAQ_TVW', 'UMD', 'SMB_ADV', 'LOWVOL'])}) | "
