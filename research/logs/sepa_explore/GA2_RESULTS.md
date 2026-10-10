@@ -44,7 +44,7 @@
 | 유동 | -8.26% [-31.87%, +11.63%] | -98.47% | 447 (584) |
 | 중소형 | +4.48% [-5.78%, +14.77%] | -33.32% | 520 (625) |
 
-라이브 인계: `live_candidate.json` 은 `swing_it.live.candidate.write_candidate` 스키마 1 로 썼고 `load_candidate` 왕복 검사 — load_candidate 통과 · 유전자 왕복 일치 True · strategy_hash 05b85ae5790f03ae · code_hash 5809e3912c620fb1. 페이퍼 실행(판정과 무관하게 형식만): `sw-live <job> --paper --strategy-config research/logs/sepa_explore/live_candidate.json`.
+라이브 인계: `live_candidate.json` 은 `swing_it.live.candidate.write_candidate` 스키마 1 로 썼고 `load_candidate` 왕복 검사 — load_candidate 통과 · 유전자 왕복 일치 True · strategy_hash 05b85ae5790f03ae · code_hash 5809e3912c620fb1. 페이퍼 실행(판정과 무관하게 형식만): `sw-live <job> --paper --strategy-config research/logs/sepa_explore/ga2/candidate_REJECTED_2026-10-10.json(기각 — 페이퍼에 쓰지 않음)`.
 
 ### 통과가 확립하는 것과 확립하지 않는 것 (`REVIEW_GA2_B.md` §8 문구 그대로)
 
