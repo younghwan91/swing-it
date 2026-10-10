@@ -44,3 +44,16 @@ def test_patch_accepts_integer_columns():
                            "close": [57], "volume": [99], "trade_value": [9]})
     out = patch_prices(prices, s)
     assert out.iloc[0]["krx_patched"] and out.iloc[0]["close"] == 102 * 0.5
+
+
+def test_extended_closing_auction_at_1532_is_the_close():
+    """VI 로 종가 단일가가 연장되면 15:32 에 찍힌다 — 그 값이 종가여야 한다. 15:35 NXT 애프터마켓 봉은 버린다."""
+    rows = [
+        ("A", "2026-06-12 09:00:00", 100, 101, 99, 100, 10, 1000),
+        ("A", "2026-06-12 15:19:00", 102, 103, 101, 102, 10, 1020),
+        ("A", "2026-06-12 15:32:00", 130, 130, 130, 130, 50, 6500),   # 연장된 종가 단일가(상한가)
+        ("A", "2026-06-12 15:35:00", 128, 129, 127, 128, 5, 640),     # NXT 애프터마켓 — 버림
+    ]
+    m = pd.DataFrame(rows, columns=["code", "ts", "open", "high", "low", "close", "volume", "trade_value"])
+    r = session_bars_from_minutes(m).iloc[0]
+    assert r["close"] == 130 and r["high"] == 130 and r["volume"] == 70

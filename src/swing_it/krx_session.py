@@ -24,14 +24,15 @@ import pandas as pd
 
 #: 일봉에 NXT 가 섞이기 시작한 첫 거래일.
 NXT_START = "2026-09-14"
-#: 정규장 분봉 구간(KST, 양 끝 포함 — 15:30 봉이 종가 단일가).
+#: 정규장 분봉 구간(KST, 양 끝 포함). 종가 단일가는 보통 15:30 봉이지만 **변동성 완화장치로 종가 단일가가 연장되면 15:32 에 찍힌다**
+#: (리뷰 `REVIEW_META_GEN2.md` N1 — 15:30 컷이면 그날 종가가 15:19 연속매매가가 됐다). NXT 애프터마켓 첫 봉은 15:35 라 15:32 컷은 그것을 넣지 않는다.
 SESSION_OPEN = "09:00:00"
-SESSION_CLOSE = "15:30:00"
+SESSION_CLOSE = "15:32:00"
 
 
 def session_bars_from_minutes(minutes: pd.DataFrame) -> pd.DataFrame:
     """분봉(code, ts, open, high, low, close, volume, trade_value[원]) → 정규장 일봉(code, date, open, high, low, close,
-    volume, trade_value[백만원]). ``ts`` 는 KST naive. 09:00~15:30 밖의 봉은 버린다. 종가 = 15:30 이하 마지막 봉의 종가."""
+    volume, trade_value[백만원]). ``ts`` 는 KST naive. 09:00~15:32 밖의 봉은 버린다. 종가 = 15:32 이하 마지막 봉의 종가(연장된 종가 단일가 포함)."""
     m = minutes.copy()
     m["ts"] = pd.to_datetime(m["ts"])
     t = m["ts"].dt.strftime("%H:%M:%S")
@@ -59,7 +60,7 @@ def read_session_bars(con: Any, *, start: str = NXT_START, end: "str | None" = N
 def read_session_bars_agg(con: Any, *, start: str = NXT_START, end: "str | None" = None) -> pd.DataFrame:
     """:func:`read_session_bars` 와 같은 결과를 **DB 에서 집계**해 받는다(Postgres). 분봉을 pandas 로 끌어오면 하루 ~1,800 종목 ×
     391 분 = 70만 행, 한 달이면 1,300만 행이라 RSS 가 수 GB 로 뛴다(2026-10-10 실측) — 긴 구간·메모리 상한이 있는 작업은 이쪽.
-    시가 = 첫 봉 open, 종가 = 15:30 이하 마지막 봉 close, 고저 = max/min, 거래량·거래대금 = 합(거래대금은 백만원)."""
+    시가 = 첫 봉 open, 종가 = 15:32 이하 마지막 봉 close, 고저 = max/min, 거래량·거래대금 = 합(거래대금은 백만원)."""
     q = ("SELECT code, ts::date AS date, (array_agg(open ORDER BY ts))[1] AS open, max(high) AS high, min(low) AS low, "
          "(array_agg(close ORDER BY ts DESC))[1] AS close, sum(volume) AS volume, sum(trade_value) / 1e6 AS trade_value "
          "FROM minute_bars WHERE ts >= %(lo)s AND ts < %(hi)s AND ts::time BETWEEN %(o)s AND %(c)s "
