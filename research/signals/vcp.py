@@ -113,6 +113,8 @@ BUYSTOP_PARAMS = {
     "be_mult": 1.0,      # 익절 뒤 본전선 = 진입가 × 1.0 (라이브 기본)
     "x1_chase": 0.05,    # X1 옛 시점: 시가 > 피벗 × 1.05 → 추격 금지
     "old_stop_mult": 0.99, "old_stop_floor": 0.03, "old_stop_cap": 0.10,   # X2 옛 손절
+    "fb_days": 1,        # 돌파 실패: 익절 전 연속 fb_days 일 종가 < 돌파 기준 → 다음날 시가(VCP = 1, 쐐기 = 2)
+    "ref_order": False,  # 9.5% 사전 거르기·3% 갭의 기준: False = 피벗(VCP), True = 주문가(쐐기)
 }
 
 # --- 코드표 ---
@@ -132,6 +134,48 @@ REASONS = ("stop", "stop_entry", "breakeven", "trail", "failed_breakout", "time"
 # ---------------------------------------------------------------------------
 # 1. VCP 검출
 # ---------------------------------------------------------------------------
+
+def _zigzag_py(H, L, ci, i0, t, theta, hv, hi_, lv, li_):
+    """지그재그(θ) — ``i0`` 고점 후보에서 ``t`` 까지. 확정 고점·저점을 ``hv/hi_``·``lv/li_`` 에 채우고
+    ``(nh, nl, up, hc, ihc, lc, ilc)`` 를 돌려준다(모듈 설명 2 — 극값 먼저, 반전 확인은 다음 봉부터, 동률 = 늦은 봉).
+    :mod:`research.signals.wedge` 도 같은 함수를 쓴다."""
+    nh = 0
+    nl = 0
+    up = True
+    hc = H[ci, i0]
+    ihc = i0
+    lc = 0.0
+    ilc = -1
+    for j in range(i0 + 1, t + 1):
+        hj = H[ci, j]
+        lj = L[ci, j]
+        if up:
+            if hj >= hc:
+                hc = hj
+                ihc = j
+            elif lj <= hc * (1.0 - theta):
+                hv[nh] = hc
+                hi_[nh] = ihc
+                nh += 1
+                up = False
+                lc = lj
+                ilc = j
+        else:
+            if lj <= lc:                              # 극값 먼저(정정 2 A-C1) — 반전 확인은 다음 봉부터
+                lc = lj
+                ilc = j
+            elif hj >= lc * (1.0 + theta):
+                lv[nl] = lc
+                li_[nl] = ilc
+                nl += 1
+                up = True
+                hc = hj
+                ihc = j
+    return nh, nl, up, hc, ihc, lc, ilc
+
+
+_zigzag = _jit(_zigzag_py)
+
 
 def _vcp_one_py(H, L, C, V, ci, t, win, bmin, bmax, theta, tmin, tmax, c1lo, c1hi, lastmax, pivmin, closelo,
                 volwin, volmax, drymin, confirmed_only, low_rise):
@@ -160,34 +204,8 @@ def _vcp_one_py(H, L, C, V, ci, t, win, bmin, bmax, theta, tmin, tmax, c1lo, c1h
     hv = np.empty(cap)
     hi_ = np.empty(cap, dtype=np.int64)
     lv = np.empty(cap)
-    nh = 0
-    nl = 0
-    up = True
-    hc = h0
-    ihc = i0
-    lc = 0.0
-    for j in range(i0 + 1, t + 1):
-        hj = H[ci, j]
-        lj = L[ci, j]
-        if up:
-            if hj >= hc:
-                hc = hj
-                ihc = j
-            elif lj <= hc * (1.0 - theta):
-                hv[nh] = hc
-                hi_[nh] = ihc
-                nh += 1
-                up = False
-                lc = lj
-        else:
-            if lj <= lc:                              # 극값 먼저(정정 2 A-C1) — 반전 확인은 다음 봉부터
-                lc = lj
-            elif hj >= lc * (1.0 + theta):
-                lv[nl] = lc
-                nl += 1
-                up = True
-                hc = hj
-                ihc = j
+    li_ = np.empty(cap, dtype=np.int64)
+    nh, nl, up, hc, ihc, lc, ilc = _zigzag(H, L, ci, i0, t, theta, hv, hi_, lv, li_)
     if (not confirmed_only) and up and nl == nh and nh > 0:
         hv[nh] = hc                                   # 확정 저점 뒤 진행 중 고점 = 피벗
         hi_[nh] = ihc
@@ -323,7 +341,7 @@ def vcp_setups(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, volum
 # ---------------------------------------------------------------------------
 
 def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_line, skip0, p0, take_frac, max_hold,
-                  be_line, sell_slip):
+                  be_line, sell_slip, fb_days):
     """진입 행 ``d``(오프셋 0) 이후 라이브 청산 → ``(reason, x, partial, part_x, px1, fin_px)``. 규칙은 모듈 설명 6·7.
 
     ``skip0`` = 진입일 손절을 보지 않는다(낙관 경로), ``p0`` = 진입일 2R 익절 인정(시가 진입만 — 매수정지는 False).
@@ -348,6 +366,7 @@ def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_l
     part_x = -1
     px1 = nan
     pending = -1
+    fb_run = 0
     last = 0
     for j in range(horizon + 1):
         t = d + j
@@ -381,8 +400,12 @@ def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_l
         if j >= sig_end:
             continue
         if not partial:
-            if C[ci, t] < fb_line:
-                pending = R_FB
+            if C[ci, t] < fb_line:                    # 돌파 실패 — 연속 fb_days 일(정지일은 세지도 끊지도 않는다)
+                fb_run += 1
+                if fb_run >= fb_days:
+                    pending = R_FB
+            else:
+                fb_run = 0
         else:
             m = MA[ci, t]
             if m == m and C[ci, t] < m:
@@ -394,7 +417,8 @@ def _exit_path_py(Op, H, L, C, MA, TR, PL, CUT, ci, d, entry, stop_px, tgt, fb_l
 _exit_path = _jit(_exit_path_py)
 
 
-def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops_raw, pids, old_low, stop_mode, gap_max,
+def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops_raw, pids, old_low, stop_mode, ref_order,
+                    fb_days, gap_max,
                     slip, sell_slip, risk_max, d_floor, take_r, take_frac, max_hold, be_mult, lu_ratio, old_mult,
                     old_floor, old_cap, no_overlap, st, x, fill, entry, stop, dd, tgt, gapf, amb, reason, part,
                     part_x, px1, fin):
@@ -425,7 +449,8 @@ def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops
         if not (P == P and od == od and sr == sr and P > 0 and sr > 0):
             st[i] = S_BAD
             continue
-        if (P - sr) / P > risk_max:
+        ref = od if ref_order else P                     # 9.5%·3% 갭 기준: VCP = 피벗, 쐐기 = 주문가
+        if (ref - sr) / ref > risk_max:
             st[i] = S_RISK
             continue
         if d >= CUT[ci]:
@@ -439,7 +464,7 @@ def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops
         if prev == prev and prev > 0 and op >= prev * lu_ratio:
             st[i] = S_LIMIT_UP
             continue
-        if op > P * (1.0 + gap_max):
+        if op > ref * (1.0 + gap_max):
             st[i] = S_GAP
             continue
         if H[ci, d] < od:
@@ -465,7 +490,7 @@ def _run_buystop_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, orders, stops
         open_ok = op <= P and C[ci, d] > sp               # 종가 ≤ 손절가 = 확정 진입일 손절(정정 2 B-M1)
         is_amb = open_ok and L[ci, d] <= sp
         r = _exit_path(Op, H, L, C, MA, TR, PL, CUT, ci, d, e, sp, tg, P, open_ok, False, take_frac, max_hold,
-                       e * be_mult, sell_slip)
+                       e * be_mult, sell_slip, fb_days)
         st[i] = S_OK
         fill[i] = f
         entry[i] = e
@@ -488,7 +513,7 @@ _run_buystop = _jit(_run_buystop_py)
 
 
 def _run_open_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, dds, take_r, take_frac, max_hold, be_mult, lu_ratio, sell_slip,
-                 slip, st, x, entry, reason, part, part_x, px1, fin):
+                 slip, fb_days, st, x, entry, reason, part, part_x, px1, fin):
     """대조: 행 ``d`` 시가 × (1 + slip) 진입, 손절폭 ``dds[i]``, 돌파 실패 피벗 = 진입가. 겹침 없음(독립 표본) — 병렬."""
     n = Op.shape[1]
     for i in prange(len(cis)):
@@ -516,7 +541,7 @@ def _run_open_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, dds, take_r, take_frac, 
         sp = e * (1.0 - w)
         tg = e * (1.0 + take_r * w)
         r = _exit_path(Op, H, L, C, MA, TR, PL, CUT, ci, d, e, sp, tg, e, False, True, take_frac, max_hold,
-                       e * be_mult, sell_slip)
+                       e * be_mult, sell_slip, fb_days)
         st[i] = S_OK
         entry[i] = e
         reason[i] = r[0]
@@ -531,7 +556,7 @@ _run_open = _jit(_run_open_py, parallel=True)
 
 
 def _run_x1_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, stops_raw, pids, chase, d_cap, d_floor, take_r, take_frac,
-               max_hold, be_mult, lu_ratio, sell_slip, st, x, entry, stop, dd, reason, part, part_x, px1, fin):
+               max_hold, be_mult, lu_ratio, sell_slip, fb_days, st, x, entry, stop, dd, reason, part, part_x, px1, fin):
     """X1(정정 M5): 신호 행 ``ds[i]`` 종가 돌파(러너가 고른다) → 다음 거래일 행 시가 진입, 추격 5%·상한가·정지 버림, 손절 = 새 손절
     (L_last − 1호가, 2% 하한), d > 10% 면 안 산다. 같은 피벗 첫 신호 하나·보유 중 무시. 순차."""
     n_st, n = Op.shape
@@ -580,7 +605,7 @@ def _run_x1_py(Op, H, L, C, MA, TR, PL, CUT, cis, ds, pivots, stops_raw, pids, c
             w = d_floor
         tg = op * (1.0 + take_r * w)
         r = _exit_path(Op, H, L, C, MA, TR, PL, CUT, ci, e_, op, sp, tg, P, False, True, take_frac, max_hold,
-                       op * be_mult, sell_slip)
+                       op * be_mult, sell_slip, fb_days)
         st[i] = S_OK
         entry[i] = op
         stop[i] = sp
@@ -647,7 +672,8 @@ def run_buystop(A: Arrays, cis, ds, pivots, l_last, pids, *, no_overlap: bool = 
          "fin": np.full(m, np.nan)}
     if m:
         _run_buystop(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, np.asarray(cis, np.int64), np.asarray(ds, np.int64),
-                     pivots, orders, stops_raw, np.asarray(pids, np.int64), ol, mode, float(p["gap_max"]),
+                     pivots, orders, stops_raw, np.asarray(pids, np.int64), ol, mode, bool(p["ref_order"]),
+                     int(p["fb_days"]), float(p["gap_max"]),
                      float(p["slip"]), float(p["sell_slip"]), float(p["risk_pre_max"]), float(p["d_floor"]),
                      float(p["take_r"]), float(p["take_frac"]), int(p["max_hold"]), float(p["be_mult"]),
                      float(LIMIT_UP_RATIO), float(p["old_stop_mult"]), float(p["old_stop_floor"]),
@@ -681,7 +707,8 @@ def run_open_entry(A: Arrays, cis, ds, dds, params: "dict | None" = None) -> dic
     if m:
         _run_open(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, np.asarray(cis, np.int64), np.asarray(ds, np.int64),
                   np.asarray(dds, float), float(p["take_r"]), float(p["take_frac"]), int(p["max_hold"]),
-                  float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), float(p["slip"]), o["status"], o["x"], o["entry"],
+                  float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), float(p["slip"]), int(p["fb_days"]),
+                  o["status"], o["x"], o["entry"],
                   o["reason"], o["part"], o["part_x"], o["px1"], o["fin"])
     _attach_rets(o, p)
     return o
@@ -701,7 +728,8 @@ def run_x1(A: Arrays, cis, sig_rows, pivots, l_last, pids, params: "dict | None"
         _run_x1(A.O, A.H, A.L, A.C, A.MA, A.TR, A.PL, A.CUT, np.asarray(cis, np.int64), np.asarray(sig_rows, np.int64),
                 np.asarray(pivots, float), stops_raw, np.asarray(pids, np.int64), float(p["x1_chase"]),
                 float(p["d_cap"]), float(p["d_floor"]), float(p["take_r"]), float(p["take_frac"]), int(p["max_hold"]),
-                float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), o["status"], o["x"], o["entry"],
+                float(p["be_mult"]), float(LIMIT_UP_RATIO), float(p["sell_slip"]), int(p["fb_days"]), o["status"], o["x"],
+                o["entry"],
                 o["stop"], o["dd"], o["reason"], o["part"], o["part_x"], o["px1"], o["fin"])
     _attach_rets(o, p)
     return o
@@ -726,9 +754,10 @@ def buystop_entry_check(A: Arrays, cis, ds, pivots, l_last, params: "dict | None
     tr = A.TR[cis, dsafe] & (ds < A.CUT[cis])
     with np.errstate(invalid="ignore", divide="ignore"):
         bad = ~(np.isfinite(P) & np.isfinite(sr) & (P > 0) & (sr > 0))
-        risk = (P - sr) / P > p["risk_pre_max"]
+        ref = od if p["ref_order"] else P
+        risk = (ref - sr) / ref > p["risk_pre_max"]
         lu = np.isfinite(prev) & (prev > 0) & (op >= prev * LIMIT_UP_RATIO)
-        gap = op > P * (1.0 + p["gap_max"])
+        gap = op > ref * (1.0 + p["gap_max"])
         nofill = hi < od
     for code, mk in ((S_NO_FILL, nofill), (S_GAP, gap), (S_LIMIT_UP, lu), (S_HALT, ~tr), (S_RISK, risk),
                      (S_BAD, bad), (S_NO_NEXT, (ds >= n) | (ds < 1))):
