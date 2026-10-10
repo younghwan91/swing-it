@@ -97,6 +97,18 @@ N_FEAS = 50_000                        # 실현 가능 비율 — 균등 추출 
 FLAT = 0.15                            # 모양 이름: |ŝ| ≤ 0.15 = 평평(MINOR 9, 결과 전 고정)
 REGION_RUNUP, REGION_REST = 0.30, 20.0  # 정정 2 착상 영역 좌표
 
+#: 변형(``PATTERN_GA_VARIANT`` — spawn 작업자도 같은 값을 읽도록 환경변수). "fw" = PATTERN_GA_FW.md:
+#: 사건 모양을 하락 쐐기로 고정(F1), 불타기 필수(F2), 본전 이동 0.5·1R(F3), 계산 규모(F4). 기본("")은 PATTERN_GA.md 그대로.
+VARIANT = os.environ.get("PATTERN_GA_VARIANT", "")
+FW = VARIANT == "fw"
+if FW:
+    LABEL, RUN_LABEL, SUB, RESULTS_MD = "pattern_ga_fw", "pattern_ga_fw_runs", "pattern_ga_fw", "PATTERN_GA_FW_RESULTS.md"
+    PREREG_DOC = DESIGN_PREREG = "research/logs/sepa_explore/PATTERN_GA_FW.md (PATTERN_GA.md 정정 0~11 위 변형 F1~F5)"
+    SEEDS = tuple(range(int(os.environ.get("PATTERN_GA_FW_SEEDS", "10"))))
+    BUDGET = int(os.environ.get("PATTERN_GA_FW_BUDGET", "10000"))
+    N_NULL_B = int(os.environ.get("PATTERN_GA_FW_NULL_B", "50"))
+    SCREEN_N = int(os.environ.get("PATTERN_GA_FW_SCREEN", "40000000"))   # F4: 실현 가능 비율 2~6e-5(건수만) → 폴드당 기대 800~2,400 ≥ 500
+
 # --- 유전자(정정 0·1·2·3) ---
 #: 연속 (이름, 하한, 상한, 끔 끝) — [0, 1] 정규화, 끔 끝에서 :data:`OFF_ZONE` 안이면 조건 끔.
 CONT = (("rs_min", 0.0, 90.0, "lo"), ("breadth_min", 0.0, 0.7, "lo"),
@@ -107,13 +119,15 @@ CONT = (("rs_min", 0.0, 90.0, "lo"), ("breadth_min", 0.0, 0.7, "lo"),
         ("gap_max", 0.01, 0.05, None), ("stop_cap", 0.05, 0.12, None), ("fb_tol", 0.0, 0.03, None), ("trail_k", 2.0, 5.0, None),
         ("stop_buf", 0.0, 1.0, "lo"), ("stop_hard", 1.5, 3.0, None),                       # 정정 5
         ("climax_day", 0.10, 0.25, None), ("climax_5d", 0.20, 0.50, None), ("climax_r", 2.0, 6.0, None))   # 정정 4
+if os.environ.get("PATTERN_GA_VARIANT", "") == "fw":   # FW F1(정정 FW-1, 사용자 "바운드를 유연하게"): 하단선 기울기 상한 유전자
+    CONT = (*CONT, ("fw_lo", -0.15, 0.15, None))
 #: 명목형(M2-1) — 범주별 연속 로짓 [0, 1] → argmax(동률 = 앞).
 NOM = (("stage", (0, 1, 2, 3)), ("entry", PE.BASES), ("trail", ("ma20", "ma50", "chand")),
-       ("pyramid", ("off", "1r", "newhigh", "upper")))
+       ("pyramid", ("1r", "newhigh", "upper") if FW else ("off", "1r", "newhigh", "upper")))
 #: 이산(순서형 — CMAwM 정수 축).
 DISC = (("ceil_win", PE.CEIL_WINS), ("theta", PE.THETAS), ("runup_win", PE.RUNUP_WINS), ("touch_lo", (2, 3)),
         ("e_min", (None, 0.0, 0.25, 0.5)), ("e_accel", (0, 1)), ("stop_anchor", ("E", "lower", "dynamic")), ("fb_days", (1, 2, 3, 0)),
-        ("be_r", (0.5, 1.0, 1.5, 2.0, math.inf)), ("take_r", (2.0, 3.0, 4.0, math.inf)), ("take_frac", (1 / 3, 1 / 2)),
+        ("be_r", (0.5, 1.0) if FW else (0.5, 1.0, 1.5, 2.0, math.inf)), ("take_r", (2.0, 3.0, 4.0, math.inf)), ("take_frac", (1 / 3, 1 / 2)),
         ("tighten", (0, 1)), ("ceil_kind", ("single", "resist")), ("h0_in_pattern", (0, 1)), ("climax", (0, 1)),
         ("stop_basis", ("intraday", "close")), ("fail_exit", ("off", "prev_low", "entry_low")),
         ("reentry", ("off", "F", "line")), ("reentry_win", (1, 2, 3, 4, 5)))
@@ -177,7 +191,7 @@ def canonical(g: dict) -> dict:
     if g["entry"] in ("horiz", "h0") and g.get("stop_anchor") == "dynamic":   # 정정 7: 하단선 동적은 추세선 기준선만(그 밖 = 끔 → E)
         g["stop_anchor"] = "E"
     if g["entry"] == "h0" and g["pyramid"] == "newhigh":
-        g["pyramid"] = "off"
+        g["pyramid"] = "1r" if FW else "off"            # FW F2: 불타기 필수 — 금지 조합은 1R 불타기로
     if g["entry"] == "bottom":                       # 정정 3: 손절 = E 고정, 익절 전 돌파 실패 없음
         g["stop_anchor"] = None
         g["fb_days"] = None
@@ -614,6 +628,9 @@ class Engine:
                              B["fb"], B["amb"], B["skip0"], B["s0"], B["buf"]) if bb > aa else 0
         idx = B["idx"][:n].copy()
         keep = np.ones(n, bool) if allow is None else np.asarray(allow)[idx]
+        if FW and n:                                     # F1: 하락 쐐기(유연) — 상단선 하락 ∧ 하단선 < fw_lo ∧ 수렴, 현재 F(2b 면 섞은 서술자)
+            su_, sl_ = np.asarray(F_[idx, PE.FI["s_up"]], float), np.asarray(F_[idx, PE.FI["s_lo"]], float)
+            keep &= (su_ < 0.0) & (sl_ < g["fw_lo"]) & (su_ < sl_)
         I_, F = self.I, self.F
         out = {"ev": idx[keep], "e": B["e"][:n][keep].copy(), "sp": B["sp"][:n][keep].copy(), "fb": B["fb"][:n][keep].copy(),
                "amb": B["amb"][:n][keep].copy(), "skip0": B["skip0"][:n][keep].copy(), "s0": B["s0"][:n][keep].copy(),
