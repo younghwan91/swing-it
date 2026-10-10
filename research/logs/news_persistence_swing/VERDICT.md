@@ -120,3 +120,10 @@
 - 작업 파일 위치: 쌍 `data/eval/persistence_swing/pairs/swing_2023-03_2026-02.jsonl`, 판정 작업 상태
   `data/eval/judge_runs/v2r3-haiku55/` (`judgments.jsonl` · `errors.jsonl` · `stage1.state.json` …). 다음 구간은
   `python -m swing_it.news.judge ... --run stage2` 로 같은 judge 에 쌓인다.
+
+## 실행 노트 (2026-10-10 — 판정만, 결과 없음)
+
+사용자 비용 승인(2026-10-10 "기사도 하이쿠 추가로 돌려야 되면 너가 알아서 돌려") 뒤 사전등록 그대로 2~6단계를 최신 → 과거 순으로 판정했다.
+judge `v2r3-haiku55`, Batch API, system 캐싱. 단계별 입력 해시 = 쌍 파일 표본 100% 일치(2단계 29,932 · 3단계 20,854 · 4단계 18,353 · 5단계 19,461 · 6단계 15,185).
+원장 `article_judgments` judge `v2r3-haiku55` 총 139,999행(오류 131). 실측 비용 2~6단계 합 ≈ $8.2(1단계 포함 전체 예산 $16 안).
+수익은 아직 한 줄도 계산하지 않았다 — 다음은 사전등록 러너 `news_persistence_swing.py` 실행 + 전담 리뷰.
