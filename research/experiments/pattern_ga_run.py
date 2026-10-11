@@ -117,8 +117,8 @@ FW_FEAS_TARGET = 1_000                 # 리뷰 FW M1: 폴드마다 실현 가�
 FW_Q_2A, FW_Q_2B = 99.0, 100.0         # 리뷰 FW M5: 사후 좁힘 다중성 — 2a p99 · 2b 50벌 전부 위
 FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fw/parent_viewed_trades.csv"   # 리뷰 FW M5: 부모 열람 OOS 거래
 FW_PARENT_SHA256 = "6e989c1948d8a10ce020a20cb7461f32fb4f6e6cd98949111ceaa170c49d6fdb"   # 리뷰 FW M10
-if FWL:                                # L5(사용자 "수천번 매매할 필요 없다") + 리뷰 FWL M3(바 6 OOS ≥ 60 ≈ 연 9 와 맞춤): 연 12 → 9, 연도별 4 → 3
-    FLOOR_PER_YEAR, FLOOR_YEAR = 9.0, 3.0
+if FWL:                                # L5(사용자 "수천번 매매할 필요 없다"): 연 12 → 6, 연도별 4 → 2 · 리뷰 FWL M6: 9/3 은 2a 를 막아 6/2 유지,
+    FLOOR_PER_YEAR, FLOOR_YEAR = 6.0, 2.0   # 바 6 건수만 미달은 '하한 결합 — 판단 불가'(정정 FWL-2)
     FEAS_MIN = 300                     # 리뷰 FWL M1: 폴드 6 실현 가능 비율 ≈ 1.8e-6 — 상한 3억에서 기대 ≈ 540, 2a 하한 500 → 300
 if FWL:                                # L4: 부모 186 + FW 중간 열람 155 의 합집합(종목, 주문일)
     FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fwl/parent_viewed_trades.csv"
@@ -2146,6 +2146,13 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
                              and np.isfinite(b6e.get("win_ex_be", np.nan)) and b6e["win_ex_be"] > b6e["need"])
         if FWL:
             bars["all"] = bars["all"] and bars["b1_ex"] and bars["b6_ex"]
+    b6_note = {}
+    if FWL:                                           # 정정 FWL-2: 건수만 미달(손익비·승률은 통과)이면 '하한 결합 — 판단 불가'(통과 아님)
+        b6_note["전체"] = ("하한 결합 — 판단 불가" if ws.get("n", 0) < B6_N and np.isfinite(gl) and gl >= B6_GL
+                          and np.isfinite(w2) and w2 > be_need else "")
+        e6_ = fw_parent.get("b6", {}) if fw_parent else {}
+        b6_note["열람 제외"] = ("하한 결합 — 판단 불가" if e6_.get("n", 0) < B6_N and np.isfinite(e6_.get("gl_ex_be", np.nan))
+                             and e6_["gl_ex_be"] >= B6_GL and e6_.get("win_ex_be", 0) > e6_.get("need", 1) else "")
     regions = [user_region(c) for c in out_cfgs]
     region_ovl = [region_overlap(c) for c in out_cfgs]
     region_trade = trade_region_share(E, tr_df)
@@ -2324,6 +2331,9 @@ def fw_lines(V: dict) -> "list[str]":
               f"| 6 n · 손익비 · 승률 vs 필요 | {g.get('n', 0)} · {_f(g.get('gl_ex_be', np.nan))} · {_f(g.get('win_ex_be', np.nan))} vs "
               f"{_f(g.get('need', np.nan))} {_m(bb['b6'])} | {e6.get('n', 0)} · {_f(e6.get('gl_ex_be', np.nan))} · "
               f"{_f(e6.get('win_ex_be', np.nan))} vs {_f(e6.get('need', np.nan))} {_m(bb.get('b6_ex', False))} |", ""]
+        nt = V.get("b6_note") or {}
+        if any(nt.values()):
+            L += ["- 바 6 비고(정정 FWL-2): " + " · ".join(f"{k}: {v}" for k, v in nt.items() if v), ""]
     d3 = V["dsr"].get("부모·이번 고유 config", {})
     L += [f"- DSR(부모·이번 고유 config N {d3.get('N', 0):,}): {_f(d3.get('prob', np.nan))}", ""]
     return L
@@ -2376,7 +2386,7 @@ def render(V: dict) -> "list[str]":  # noqa: C901
           f"{'' if V['b4_judgeable'] else ' · **판단 불가**'} | {_m(bars['b4'])} |",
           f"| 6 | OOS 거래 ≥ {B6_N} ∧ 손익비(2배) ≥ {B6_GL:g} ∧ 승률(본전 제외) > 손익분기 + 5%p | n {ws.get('n', 0)} · "
           f"{_f(V['gl'])}{'(본전 제외 — 리뷰 FW M3)' if FW else ''} · {_f(V['w2'])} vs {_f(V['be_need'])} | {_m(bars['b6'])} |",
-          f"| **전부** | 1·2(a∧b)·3·4·6 | | **{_m(bars['all'])}** |", "",
+          f"| **전부** | 1·2(a∧b)·3·4·6{' + 열람 제외판 1·6(FWL)' if FWL else ''} | | **{_m(bars['all'])}** |", "",
           f"바 5(기술): 폴드 내 CSCV PBO {[_f(x) for x in V['pbo']]} (리뷰 M3 — 노이즈에서도 0.37~0.59, 과적합 부재의 증거 아님). WFE 삭제. "
           f"DSR(기술): N = 보고 변형 {V['dsr']['변형']['N']} → P {_f(V['dsr']['변형']['prob'], '{:.3f}')} · N = 검증 구조 {DSR_STRUCTS} → "
           f"P {_f(V['dsr']['구조']['prob'], '{:.3f}')}. 폴드 체결 < {FOLD_MIN_FILLS} = 판단 불가: "
