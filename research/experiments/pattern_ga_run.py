@@ -199,7 +199,7 @@ if MENU_OVERRIDE:
                  "first_frac": (0.6667,), "pyr_close": (0,),
                  # 13세대(EVENT_FAMILIES.md 정정 E-1): 사건 가족 켬/끔 · P 신고가 창·진입 · C 종류·진입
                  "fam_w": (1,), "fam_p": (0,), "fam_c": (0,), "p_hiw": (60,), "p_entry": ("open",), "c_kind": ("both",),
-                 "c_entry": ("open",)}                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "c_entry": ("open",), "lock_to": (None,)}                   # 13a: +1R 본전 발동 뒤 잠금 수준(R)                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
