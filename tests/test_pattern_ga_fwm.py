@@ -264,3 +264,26 @@ def test_atr_contraction_gene():
     assert _filter(F, _gv(G_ATRMAX=0.04))[0] == 1
     assert _filter(F, _gv(G_ATRMAX=0.025))[0] == 0
     assert _filter(F, _gv())[0] == 1                                                  # 끔
+
+
+def test_gen3_profit_lock_at_3r():
+    rows = [(100, 101, 99.5, 100.5), (101, 116, 100.8, 115), (115, 116, 104, 105)] + [(105, 106, 104, 105)] * 5
+    o = _run(_book(rows), _px(X_BE_R=1.0, X_SAFE=2.0), e=100.0, sp=95.0)            # 행 1 고가 116 ≥ 115(+3R) → 행 2 손절선 105
+    assert int(o[PF.O_X]) == 2 and o[PF.O_FIN] == pytest.approx(105 * (1 - PF.LIVE_X[PF.X_SELL_SLIP]))
+
+
+def test_gen3_no_add_on_surge_day():
+    rows = [(100, 101, 99.5, 100.5), (101, 112, 100.8, 111), (111, 112, 110, 111)] + [(111, 112, 110, 111)] * 5
+    o = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=2.0), e=100.0, sp=95.0)
+    assert o[PF.O_ADDED] == 0                                                         # 발동일 종가 +10.4% → 추가 안 함
+    o = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=1.0), e=100.0, sp=95.0)
+    assert o[PF.O_ADDED] == 1
+
+
+def test_gen3_entry_quality_gene():
+    F = _event()
+    F[0, PE.FI["ma20_up"]], F[0, PE.FI["h0_wick"]] = 1.0, 0.2
+    assert _filter(F, _gv(G_ENTQ=1.0))[0] == 1
+    F[0, PE.FI["h0_wick"]] = 0.7
+    assert _filter(F, _gv(G_ENTQ=1.0))[0] == 0
+    assert _filter(F, _gv())[0] == 1

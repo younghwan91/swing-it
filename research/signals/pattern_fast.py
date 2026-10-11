@@ -77,8 +77,8 @@ from research.signals.vcp import (
 # --- 유전자 → 거르기 벡터(``gv``) 번호 ---
 (G_STAGE, G_RS, G_BR, G_SUP_LO, G_SUP_HI, G_SLO_LO, G_SLO_HI, G_RHO, G_TOUCH, G_SPAN_LO, G_SPAN_HI, G_CEIL, G_DEPTH,
  G_DRY, G_RUNUP_COL, G_RUNUP, G_REST, G_EMIN, G_EACC, G_GAP, G_ANCHOR, G_CAP, G_FB_TOL, G_SLIP, G_DFLOOR, G_BASE,
- G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL, G_ATRMAX) = range(36)
-N_G = 36                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
+ G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL, G_ATRMAX, G_ENTQ) = range(37)
+N_G = 37                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
 MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신저가 · 돌파 성공률 ≥ 60%(전 구간 중앙 ≈ 0.60, 결과 전 고정)
 # --- 청산 인자 벡터(``px``) 번호 ---
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
@@ -118,6 +118,7 @@ F_NRES, F_H0IN, F_ATR = FI["n_res"], FI["h0in"], FI["atr_s"]
 F_EQ, F_EQP = FI["e_q"], FI["e_q_prev"]
 F_MBR200, F_MNH, F_MBOS = FI["mkt_br200"], FI["mkt_nhnl"], FI["mkt_bos"]
 F_MA50UP = FI["ma50_up"]
+F_MA20UP, F_H0WICK = FI["ma20_up"], FI["h0_wick"]
 BASE_BOTTOM = 3
 
 
@@ -143,6 +144,7 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
     sbuf, sclose, shard = gv[G_STOP_BUF], gv[G_STOP_CLOSE] > 0.5, gv[G_STOP_HARD]
     eq, smax = gv[G_EQ] > 0.5, gv[G_SMAX]
     mkt = int(gv[G_MKT]) if gv[G_MKT] == gv[G_MKT] else 0
+    entq = gv[G_ENTQ] > 0.5                           # 3세대: d−1 MA20 상승 ∧ H0 봉 윗꼬리 < 50%(블로오프 천장 제외)
     amax = gv[G_ATRMAX]                               # 진화 3세대 후보: d−1 ATR20 / 종가 ≤ amax(매수 전 수축 — −5% 손절이 노이즈 밖), NaN = 끔
     spol = gv[G_SPOL] > 0.5                            # 진화 1세대: 손절폭 상한 정책 — 1 = 구조 손절이 상한보다 멀면 안 산다(미너비니), 0 = 끌어올림
     for k in range(a, b):
@@ -163,6 +165,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         if eq and not (F[k, F_EQ] > 0.0 and F[k, F_EQ] > F[k, F_EQP]):           # FWM M1: 흑자 ∧ 전년 같은 분기보다 증가
             continue
         if amax == amax and not (F[k, F_CLOSE_S] > 0 and F[k, F_ATR] / F[k, F_CLOSE_S] <= amax):
+            continue
+        if entq and not (F[k, F_MA20UP] > 0.5 and F[k, F_H0WICK] < 0.5):
             continue
         if mkt == 1 and not F[k, F_MNH] > MKT_NHNL_MIN:                          # FWM M7 시장: 신고가 > 신저가
             continue
@@ -315,6 +319,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
     t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
     t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
+    safe2 = px[X_SAFE] > 1.5                          # 3세대(검증 4차): 불타기 뒤 평단 손절 · 급등일(+10%)·+3R 위 추가 금지 · +3R 이익 잠금
     safe = px[X_SAFE] > 0.5                           # 진화 2세대(검증 차트): 추적선은 진입 뒤 종가가 그 위에 선 뒤부터 · 불타기는 본전 확보 뒤·갭 급등 시가 금지
     be_close = px[X_BE_CLOSE] > 0.5                   # 진화 2세대: 본전 이동 발동을 종가 기준으로(장중 고가 터치 털림 방지)
     armed = False
@@ -392,6 +397,14 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             if be_trig >= 0 and j > be_trig and be_stop > line:
                 line = be_stop
                 why = R_BE
+            if safe2 and add_state == 2 and sa > 0:   # 3세대: 불타기 뒤 전체 손절 ≥ 평단(주식수 가중)
+                avgc = (sb * e + sa * out[O_PA]) / (sb + sa)
+                if avgc > line:
+                    line = avgc
+                    why = R_BE
+            if safe2 and hh >= e + 3.0 * R and e + R > line:   # 3세대: +3R(전날까지 고가) 뒤 손절 ≥ 진입가 + 1R(이익 잠금)
+                line = e + R
+                why = R_TRAIL
         intra = hard if sclose else (max(line, hard) if dyn else line)     # 장중 손절선
         if j == 0:
             if (not skip0) and L[ci, t] <= intra:     # 2. 진입일 손절(장중 선)
@@ -531,7 +544,11 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
         if add_state == 0 and pyr > 0 and j >= 1 and (be_trig >= 0 or not safe):
             if (pyr == PYR_1R and H[ci, t] >= pyr_level) or (pyr == PYR_NEWHIGH and H[ci, t] > h0) or \
                     (pyr == PYR_UPPER and C[ci, t] > u_d * math.exp(su * (t - d))):
-                add_state = 1
+                # 3세대: 발동일이 급등(+10%)이거나 이미 +3R 위면 추가를 영구 취소(추격 금지)
+                if safe2 and ((prevc == prevc and prevc > 0 and C[ci, t] / prevc - 1.0 >= 0.10) or C[ci, t] > e + 3.0 * R):
+                    add_state = 3
+                else:
+                    add_state = 1
         if H[ci, t] > hh:
             hh = H[ci, t]
         if tighten and tight_j < 0 and hh >= tight_level:

@@ -84,7 +84,8 @@ F_COLS = ("level", "order", "h0", "A", "B", "Cl", "D", "E", "su", "sl", "s_up", 
           "above50", "tt_s", "tt_h0", "e_yoy", "e_yoy_prev", "market", "strat", "month", "atr_s",
           "e_q", "e_q_prev",             # FWM M1: 최신 분기·전년 같은 분기 단독 순이익(EPS 전년 동기 대비 상승 필수 — 러너가 채운다)
           "mkt_br200", "mkt_nhnl", "mkt_bos",   # FWM M7: 그 종목 시장의 d−1 국면(MA200 위 종목 비율, 신고가 비율, 돌파 성공률 20)
-          "ma50_up")                            # 진화 2세대: d−1 MA50 > 20 거래일 전 MA50(러너가 채운다)
+          "ma50_up",                            # 진화 2세대: d−1 MA50 > 20 거래일 전 MA50(러너가 채운다)
+          "ma20_up", "h0_wick")                 # 3세대: d−1 MA20 > 5 거래일 전 · H0 봉 윗꼬리 비율(러너가 채운다)
 FI = {k: i for i, k in enumerate(F_COLS)}
 #: 사건 표 정수 열(``I``) — iA = 패턴 첫 저점(정정 2 의 A), iS = 패턴 시작(``h0in`` 0: A, 1: H0).
 I_COLS = ("d", "ci", "i0", "iA", "iB", "iC", "iD", "iE", "iS", "table")

@@ -186,7 +186,7 @@ if MENU_OVERRIDE:
         return t_ * 2 if len(t_) == 1 else t_
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
-                 "exit_safe": (0,), "be_basis": ("high",)}             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,)}             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -394,6 +394,7 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200").index(g.get("mkt") or "off")   # FWM M7
     gv[PF.G_SPOL] = 1.0 if g.get("stop_policy") == "skip" else 0.0                 # 진화 1세대
     gv[PF.G_ATRMAX] = np.nan if g.get("atr_max") is None else float(g["atr_max"])   # 진화 3세대 후보
+    gv[PF.G_ENTQ] = float(g.get("entry_q") or 0)                                      # 3세대
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
@@ -1163,6 +1164,13 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
     m50 = np.asarray(ctx.ma50, float)                              # 진화 2세대: d−1 MA50 > 20 거래일 전(날짜×종목)
     s20 = np.maximum(s - 20, 0)
     with np.errstate(invalid="ignore"):
+        m20v = m20.to_numpy(float)                                   # 3세대: d−1 MA20 > 5 거래일 전
+        s5 = np.maximum(s - 5, 0)
+        F[:, PE.FI["ma20_up"]] = np.where(np.isfinite(m20v[s, ci]) & np.isfinite(m20v[s5, ci]), (m20v[s, ci] > m20v[s5, ci]).astype(float), np.nan)
+        i0 = I_[:, PE.II["i0"]]                                      # 3세대: H0 봉 윗꼬리 = (고 − max(시, 종)) / (고 − 저)
+        hh_, oo_, cc_, ll_ = (np.asarray(x)[ci, i0] for x in (A.H, A.O, A.C, A.L))
+        rng_ = hh_ - ll_
+        F[:, PE.FI["h0_wick"]] = np.where(rng_ > 0, (hh_ - np.maximum(oo_, cc_)) / np.where(rng_ > 0, rng_, 1.0), np.nan)
         F[:, PE.FI["ma50_up"]] = np.where(np.isfinite(m50[s, ci]) & np.isfinite(m50[s20, ci]), (m50[s, ci] > m50[s20, ci]).astype(float), np.nan)
     end_row = int(days.searchsorted(pd.Timestamp(END_DAY), side="right") - 1)
     LIM = np.minimum(A.CUT, end_row + 1).astype(np.int64)
