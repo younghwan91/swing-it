@@ -86,12 +86,17 @@ MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신�
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
  X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE, X_PYR_CLOSE,
- X_ENTRY_CLOSE, X_ON_HOLD) = range(43)
+ X_ENTRY_CLOSE, X_ON_HOLD, X_LOCK_TO, X_REV_R, X_REV_NEXT, X_PLOW_R, X_CLOSE_CUT) = range(48)
 #: 13세대(EVENT_FAMILIES.md): X_ENTRY_CLOSE = 진입 행 d 종가 매수(d 장중 처리 없음 · 최고가 시작 = e · 진입일 대조 0),
 #: X_ON_HOLD = 종가 진입 뒤 첫 거래일 시가 < e × (1 + 값)이면 시가 전량(오버나이트; ∞ = 늘 시가, NaN = 끔)
-N_X = 43                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+#: 13세대 청산 분석(하이쿠 8 에이전트, exitlab): X_LOCK_TO = 본전 발동 뒤 손절 = e + 값·R(NaN = 기존 e × 1.005),
+#: X_REV_R = 고가가 e + 값·R 에 닿은 뒤 종가가 그날 범위 아래 1/3 이면 반전 청산(X_REV_NEXT 1 = 다음날 시가, 0 = 그 종가),
+#: X_PLOW_R = 고가가 e + 값·R 에 닿은 다음날부터 손절 ≥ 전일 저가(올리기만), X_CLOSE_CUT = 종가 < e − 값·R 이면 그 종가 전량
+#: (진입일 포함, 조건 손절 — 시간 아님). 모두 NaN = 끔.
+N_X = 48                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
+R_REV = 10                                            # 13세대 반전봉 청산(아래 1/3 종가)
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
 REENTRY_WAIT = 20                                     # 정정 6 재진입 감시 창(청산 뒤 거래일) — 사전등록에 없어 결과 전 고정
 TRAIL_MA20, TRAIL_MA50, TRAIL_CHAND = 0, 1, 2
@@ -104,11 +109,11 @@ N_O = 15
  Q_PAR, Q_EXIT_OPEN, Q_TF, Q_PX1, Q_FIN, Q_PA, Q_PXS, Q_S0, Q_RE) = range(27)
 N_Q = 27
 #: 라이브 프로토콜(:data:`vcp.BUYSTOP_PARAMS` 기본) — 기준 청산 짝·동치 시험용.
-REASONS = (*_V_REASONS, "climax", "fail_exit")
+REASONS = (*_V_REASONS, "climax", "fail_exit", "reversal")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0, 0, np.nan])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0, 0, np.nan, np.nan, np.nan, 0, np.nan, np.nan])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -338,6 +343,13 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     be_r = px[X_BE_R]
     be_level = e + be_r * R if be_r < 1e18 else np.inf
     be_stop = e * (1.0 + BE_COST)
+    if px[X_LOCK_TO] == px[X_LOCK_TO]:                # 13세대: 본전 발동 뒤 잠금 수준(R)
+        be_stop = e + px[X_LOCK_TO] * R
+    rev_r = px[X_REV_R]
+    rev_next = px[X_REV_NEXT] > 0.5
+    plow_r = px[X_PLOW_R]
+    plow_line = -np.inf
+    ccut = px[X_CLOSE_CUT]
     be_line = e * px[X_BE_MULT]
     pyr = int(px[X_PYR])
     wb = px[X_WB] if pyr > 0 else 1.0
@@ -447,6 +459,12 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             if safe2 and (lock_on if safe3 else hh >= e + 3.0 * R) and e + R > line:   # 3세대: +3R 뒤 손절 ≥ e + 1R(4세대: 종가 발동)
                 line = e + R
                 why = R_TRAIL
+            if plow_r == plow_r and hh >= e + plow_r * R and prevl == prevl:   # 13세대: 전일까지 고가 ≥ +kR → 전일 저가 추적(올리기만)
+                if prevl > plow_line:
+                    plow_line = prevl
+                if plow_line > line:
+                    line = plow_line
+                    why = R_TRAIL
         intra = hard if sclose else (max(line, hard) if dyn else line)     # 장중 손절선
         if j == 0:
             if (not skip0) and L[ci, t] <= intra:     # 2. 진입일 손절(장중 선)
@@ -654,6 +672,29 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             up5 = ct / c5 - 1.0 if c5 == c5 and c5 > 0 else np.nan
             if (up1 == up1 and up1 >= c_day) or (up5 == up5 and up5 >= c_5d):
                 pending = R_CLIMAX
+        if ccut == ccut and C[ci, t] < e - ccut * R:  # 13세대: 종가 조기 손절(S2) — 그 종가 전량
+            ct_ = C[ci, t]
+            cash += (sb + sa) * ct_ * kx
+            out[O_REASON] = R_STOP
+            out[O_X] = t
+            out[O_FIN] = ct_ * kx
+            out[O_PNL] = cash
+            out[O_MFE] = mfe
+            return
+        if rev_r == rev_r and j >= 1 and hh >= e + rev_r * R:   # 13세대 반전봉: 고가 ≥ +kR 뒤 종가가 그날 범위 아래 1/3
+            rg_ = H[ci, t] - L[ci, t]
+            if rg_ > 0 and ct <= L[ci, t] + rg_ / 3.0:
+                if rev_next:
+                    if pending < 0:
+                        pending = R_REV
+                else:
+                    cash += (sb + sa) * ct * kx
+                    out[O_REASON] = R_REV
+                    out[O_X] = t
+                    out[O_FIN] = ct * kx
+                    out[O_PNL] = cash
+                    out[O_MFE] = mfe
+                    return
         act = ((j >= 1) if from_entry else partial) and hh >= t_start and (t_close or not ix) and (armed or not safe)   # 8. 추적
         if act and pending < 0:
             if trail == TRAIL_CHAND:

@@ -42,3 +42,33 @@ def test_stop_buy_entry_unchanged():
     rows = [(100, 106, 90, 100), (101, 103, 99, 102)]
     out = _run(_book(rows), _px(), e=100.0, sp=95.0)                         # 기존 경로: MFE 는 진입일 고가부터
     assert out[PF.O_MFE] == pytest.approx(106.0)
+
+
+def test_lock_to_raises_breakeven_stop():
+    # 1일째 고가 +1R(105) → 본전 발동, lock_to 0.5 → 2일째부터 손절 102.5
+    rows = [(100, 101, 99, 100), (101, 105, 100, 104), (104, 104, 102, 103), (103, 104, 101, 102)]
+    out = _run(_book(rows), _px(X_BE_R=1.0, X_LOCK_TO=0.5), e=100.0, sp=95.0)
+    assert out[PF.O_X] == 2 and out[PF.O_REASON] == PF.R_BE
+
+
+def test_reversal_bar_exit_at_close():
+    rows = [(100, 101, 99, 100), (101, 106, 100, 105), (105, 108, 104, 104.5), (104, 105, 103, 104)]
+    out = _run(_book(rows), _px(X_REV_R=1.0, X_REV_NEXT=0.0), e=100.0, sp=95.0)
+    assert out[PF.O_X] == 2 and out[PF.O_REASON] == PF.R_REV and out[PF.O_FIN] == pytest.approx(104.5 * (1 - PF.LIVE_X[PF.X_SELL_EXTRA]))
+
+
+def test_prior_low_trail():
+    rows = [(100, 101, 99, 100), (101, 108, 103, 107), (107, 109, 102, 105), (105, 106, 104, 105)]
+    out = _run(_book(rows), _px(X_PLOW_R=1.5), e=100.0, sp=95.0)
+    assert out[PF.O_X] == 2 and out[PF.O_REASON] == PF.R_TRAIL                 # 전일 저가 103 이탈
+
+
+def test_close_cut():
+    rows = [(100, 101, 99, 100), (99, 100, 96, 97), (97, 98, 96, 97)]
+    out = _run(_book(rows), _px(X_CLOSE_CUT=0.5), e=100.0, sp=95.0)
+    assert out[PF.O_X] == 1 and out[PF.O_FIN] == pytest.approx(97.0)          # 종가 97 < 100 − 2.5
+
+
+def test_new_exit_genes_off_by_default():
+    for k in ("X_LOCK_TO", "X_REV_R", "X_PLOW_R", "X_CLOSE_CUT", "X_ON_HOLD"):
+        assert np.isnan(PF.LIVE_X[getattr(PF, k)])

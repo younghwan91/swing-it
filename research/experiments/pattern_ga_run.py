@@ -46,6 +46,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
+from research.signals import event_families as EF  # noqa: E402
 from research.signals import ga_fast as gf  # noqa: E402
 from research.signals import pattern_events as PE  # noqa: E402
 from research.signals import pattern_eval as PEV  # noqa: E402
@@ -195,7 +196,10 @@ if MENU_OVERRIDE:
                  "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
                  "stop_max": (0.05,), "climax_basis": ("intraday",),         # 7세대: 손절 상한 · 8세대: 급등 매도 판단
                  "flow_win": (20,), "indiv_sell": (0,), "e_age_min": (1,),  # 9세대: 수급 창 · 개인 순매도 요구 · 반전봉 뒤 확인 일수
-                 "first_frac": (0.6667,), "pyr_close": (0,)}                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "first_frac": (0.6667,), "pyr_close": (0,),
+                 # 13세대(EVENT_FAMILIES.md 정정 E-1): 사건 가족 켬/끔 · P 신고가 창·진입 · C 종류·진입
+                 "fam_w": (1,), "fam_p": (0,), "fam_c": (0,), "p_hiw": (60,), "p_entry": ("open",), "c_kind": ("both",),
+                 "c_entry": ("open",)}                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -205,7 +209,11 @@ if MENU_OVERRIDE:
     #: 진화 3세대 후보 연속 유전자(이름이 있을 때만 붙는다): d−1 ATR20/종가 상한, 위쪽 끝 = 끔
     EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi"), "flow_min": ("flow_min", -0.1, 0.3, "lo"),   # 9세대: 수급 하한(아래 끝 = 끔)
                 "body_min": ("body_min", -0.02, 0.01, "lo"),           # 9세대: d−1 몸통 하한(아래 끝 = 끔)
-                "blowoff_x": ("blowoff_x", 5.0, 20.0, "hi")}           # 10세대: 블로오프 H0 거래량 배수 문턱(위쪽 끝 = 끔)
+                "blowoff_x": ("blowoff_x", 5.0, 20.0, "hi"),           # 10세대: 블로오프 H0 거래량 배수 문턱(위쪽 끝 = 끔)
+                # 13세대 P·C 문턱(메뉴의 세 번째 원소 null = 끔 없음 — 필수 문턱)
+                "p_vmult": ("p_vmult", 2.0, 8.0, None), "p_ret": ("p_ret", 0.02, 0.15, None), "p_clv": ("p_clv", 0.5, 1.0, None),
+                "p_hold": ("p_hold", 0.0, 0.05, "hi"), "p_flow": ("p_flow", -0.1, 0.3, "lo"),
+                "c_ret": ("c_ret", 0.0, 0.1, "lo"), "c_vmult": ("c_vmult", 1.0, 5.0, "lo"), "c_flow": ("c_flow", -0.1, 0.3, "lo")}
     CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, EVO_CONT[n][3])) for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
@@ -287,6 +295,19 @@ def canonical(g: dict) -> dict:
         g["reentry_win"] = None
     if g.get("stop_basis") != "close" and g.get("stop_anchor") != "dynamic":   # 재난 손절 = 종가 기준·하단선 동적에서만(정정 5·7)
         g["stop_hard"] = None
+    if "fam_p" in g or "fam_c" in g:                 # 13세대: 가족 하나는 켠다 · 꺼진 가족의 문턱은 평평(None)
+        if not (g.get("fam_w", 1) or g.get("fam_p") or g.get("fam_c")):
+            g["fam_p"] = 1
+        if not g.get("fam_p"):
+            for k in ("p_vmult", "p_ret", "p_clv", "p_hold", "p_flow", "p_hiw", "p_entry"):
+                if k in g:
+                    g[k] = None
+        elif g.get("p_entry") != "close" and "p_hold" in g:
+            g["p_hold"] = None
+        if not g.get("fam_c"):
+            for k in ("c_ret", "c_vmult", "c_flow", "c_kind", "c_entry"):
+                if k in g:
+                    g[k] = None
     return g
 
 
@@ -445,6 +466,14 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_PYR_R] = 1.0
     px[PF.X_WB] = float(g.get("first_frac") or PF.WB_PYR)   # 10세대: 첫 진입 비중(시험 매수 1/2 · 기존 2/3 · 1)
     px[PF.X_PYR_CLOSE] = float(g.get("pyr_close") or 0)
+    def _nan(v):
+        return np.nan if v is None else float(v)
+    px[PF.X_ON_HOLD] = np.nan                         # 13세대(가족 행은 fam_exit 가 채운다)
+    px[PF.X_LOCK_TO] = _nan(g.get("lock_to"))         # 13세대 청산 분석(exitlab): 끔 = NaN(기존과 비트 동일)
+    px[PF.X_REV_R] = _nan(g.get("rev_r"))
+    px[PF.X_REV_NEXT] = float(g.get("rev_next") or 0)
+    px[PF.X_PLOW_R] = _nan(g.get("plow_r"))
+    px[PF.X_CLOSE_CUT] = _nan(g.get("close_cut"))
     px[PF.X_SELL_TICK] = 1.0                     # 손절·본전 체결 −1호가(쐐기 D 와 같다)
     px[PF.X_SELL_EXTRA] = sell_extra
     px[PF.X_CLIMAX] = float(g.get("climax") or 0)
@@ -730,6 +759,12 @@ class Engine:
         self.month_year[mo] = self.days.year.to_numpy()
         ydays = pd.Series(1, index=self.days).groupby(self.days.year).sum()
         self.year_len = {int(y): float(max(v, 245)) for y, v in ydays.items()}
+        xf = os.path.join(cache, "XF.npy")                # 13세대 사건 가족 표(event_families_build.py)
+        self.fam_on = os.path.exists(xf) and len(self.off) > PE.N_TABLES + EF.N_FAM_TABLES
+        self.NF = 3 if self.fam_on else 1                 # 폴드당 청산 행: W · P · C
+        if self.fam_on:
+            self.XF = np.load(xf, allow_pickle=False)
+            self.fam_lo = int(self.off[EF.TID_P])
 
     def row(self, date_s: str) -> int:
         return int(self.days.searchsorted(pd.Timestamp(date_s)))
@@ -773,12 +808,74 @@ class Engine:
                    lsl=np.asarray(self.F_orig[ev, PE.FI["sl"]], float))
         return out
 
+    def fam_candidates(self, g: dict, w: Win, fam: str, *, par: int, extra_slip: float = 0.0) -> dict:
+        """13세대 가족 P·C 후보(EVENT_FAMILIES.md 정정 E-1) — :meth:`candidates` 와 같은 열."""
+        tid = EF.TID_P if fam == "P" else EF.TID_C
+        a, b = PE.table_slice(self.off, tid)
+        dcol = self.I[a:b, PE.II["d"]]
+        aa = a + int(np.searchsorted(dcol, w.d_lo))
+        bb = a + int(np.searchsorted(dcol, w.d_hi))
+        F_ = self.F_orig
+        rows = np.arange(aa, bb)
+        if len(rows):
+            m = EF.gene_mask(self.XF[rows - self.fam_lo], np.asarray(F_[aa:bb]), g, fam, PE.FI)
+            rows = rows[m]
+        entry = g.get("p_entry", "open") if fam == "P" else g.get("c_entry", "open")
+        slip = float(exit_vec(g)[PF.X_SLIP]) + extra_slip
+        mk = np.asarray(F_[rows, PE.FI["market"]]).astype(np.int64) if len(rows) else np.zeros(0, np.int64)
+        fx = EF.fills(rows, np.asarray(self.I), PE.II, self.O, self.H, self.L, self.C, self.TR, entry, g, slip,
+                      float(LIMIT_UP_RATIO), mk, int(self.reform)) if len(rows) else \
+            {k: np.zeros(0, t) for k, t in (("rows", np.int64), ("d", np.int64), ("ci", np.int64), ("e", float), ("sp", float),
+                                            ("amb", bool), ("skip0", bool), ("s0", float))}
+        ev = fx["rows"]
+        n = len(ev)
+        Fo, I_ = self.F_orig, self.I
+        return {"ev": ev, "e": fx["e"], "sp": fx["sp"], "fb": np.full(n, -np.inf), "amb": fx["amb"], "skip0": fx["skip0"],
+                "s0": fx["s0"], "buf": np.zeros(n), "n_pass": n, "d": fx["d"], "ci": fx["ci"],
+                "h0": np.asarray(Fo[ev, PE.FI["h0"]], float), "strat": np.asarray(Fo[ev, PE.FI["strat"]]).astype(np.int64),
+                "mkt": np.asarray(Fo[ev, PE.FI["market"]]).astype(np.int64), "par": np.full(n, par, np.int64),
+                "pid": I_[ev, PE.II["i0"]].astype(np.int64) * 100_000 + I_[ev, PE.II["iD"]].astype(np.int64),
+                "u": np.asarray(Fo[ev, PE.FI["u_d"]], float), "su": np.zeros(n), "lE": np.asarray(Fo[ev, PE.FI["E"]], float),
+                "liE": I_[ev, PE.II["iE"]].astype(np.int64), "lsl": np.zeros(n)}
+
+    def fam_exit(self, g: dict, fam: str, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.ndarray:
+        """가족 청산 행 — W 청산 유전자 공유, 돌파 실패·반등 실패·재진입·하단선 동적 끔, 종가 진입이면 X_ENTRY_CLOSE·X_ON_HOLD."""
+        px = exit_vec(g, extra_slip, sell_extra)
+        px[PF.X_FB_DAYS] = 0
+        px[PF.X_FAIL_EXIT] = 0
+        px[PF.X_REENTRY] = 0
+        px[PF.X_DYN] = 0
+        if fam == "P" and g.get("p_entry") == "close":
+            px[PF.X_ENTRY_CLOSE] = 1.0
+            ph = g.get("p_hold")
+            px[PF.X_ON_HOLD] = np.nan if ph is None else float(ph)
+        return px
+
+    def cands_all(self, g: dict, w: Win, *, k: int = 0, extra_slip: float = 0.0, sell_extra: float = 0.0,
+                  allow=None) -> "tuple[list[dict], list[np.ndarray]]":
+        """폴드 ``k`` 의 (후보 묶음, 청산 행) — 가족 캐시가 없으면 W 하나(기존과 비트 동일). 청산 행 번호 = k·NF + (W 0 · P 1 · C 2)."""
+        if not self.fam_on:
+            return [self.candidates(g, w, par=k, extra_slip=extra_slip, allow=allow)], [exit_vec(g, extra_slip, sell_extra)]
+        cs = []
+        if g.get("fam_w", 1):
+            cs.append(self.candidates(g, w, par=3 * k, extra_slip=extra_slip, allow=allow))
+        if g.get("fam_c", 0):
+            cs.append(self.fam_candidates(g, w, "C", par=3 * k + 2, extra_slip=extra_slip))
+        if g.get("fam_p", 0):
+            cs.append(self.fam_candidates(g, w, "P", par=3 * k + 1, extra_slip=extra_slip))
+        pxs = [exit_vec(g, extra_slip, sell_extra), self.fam_exit(g, "P", extra_slip, sell_extra),
+               self.fam_exit(g, "C", extra_slip, sell_extra)]
+        return cs, pxs
+
     # --- 포트폴리오 ---
     def run(self, cands: "list[dict]", pxs: "list[np.ndarray]", t_lo: int, t_end: int, *, cost_mult: float = COST_MULT,
             pmix: "float | None" = None, order_seed: "int | None" = None, exclude=None, cost_on_sell: bool = False) -> dict:
         cat = {k: np.concatenate([c[k] for c in cands]) if cands else np.zeros(0) for k in
                ("d", "ci", "e", "sp", "fb", "h0", "u", "su", "lE", "liE", "lsl", "buf", "amb", "skip0", "s0", "strat", "mkt", "par",
                 "ev", "pid")}
+        if self.fam_on and len(cat["d"]):               # 13세대: 같은 날 W → C → P(묶음 순서), 날짜 순 안정 정렬(W 단독이면 항등)
+            o = np.argsort(cat["d"], kind="stable")
+            cat = {k: v[o] for k, v in cat.items()}
         if exclude is not None and len(cat["ev"]):
             m = ~np.isin(cat["ev"], np.asarray(list(exclude), np.int64))
             cat = {k: v[m] for k, v in cat.items()}
@@ -842,7 +939,7 @@ class Engine:
                  want_monthly: bool = False) -> dict:
         """학습창 적합도 — :meth:`evaluate_fast` (njit 한 번 호출, :meth:`evaluate_ref` 와 비트 동일)가 받는 경우는
         그쪽, 아니면(``allow``·``want_monthly``·``PATTERN_GA_FAST=0``) 원래 경로."""
-        if allow is None and not want_monthly and FAST_EVAL and (FIT_MODE != "trade" or counts_only):
+        if allow is None and not want_monthly and FAST_EVAL and (FIT_MODE != "trade" or counts_only) and not self.fam_on:
             return self.evaluate_fast(g, w, seed=seed, counts_only=counts_only)
         return self.evaluate_ref(g, w, seed=seed, counts_only=counts_only, allow=allow, want_monthly=want_monthly)
 
@@ -883,12 +980,13 @@ class Engine:
     def evaluate_ref(self, g: dict, w: Win, *, seed: int = FIT_SEED, counts_only: bool = False, allow=None,
                      want_monthly: bool = False) -> dict:
         """학습창 적합도(모듈 설명). ``counts_only`` = 진입 수·벌점만(수익 숫자를 만들지 않는다 — 실현 가능 비율용)."""
-        c = self.candidates(g, w, allow=allow)
+        cs, pxs_ = self.cands_all(g, w, allow=allow)
+        c = {"n_pass": sum(x["n_pass"] for x in cs)}
         if counts_only and c["n_pass"] == 0:              # 선별 지름길 — 진입 0건(벌점만)
             r0 = {"n": 0, "ny": np.zeros(self.n_years, np.int64)}
             pen, pinfo = self.penalty(r0, w)
             return {"n": 0, "n_pass": 0, "pen": pen, "feasible": pinfo["feasible"]}
-        r = self.run([c], [exit_vec(g)], w.t_lo, w.t_end)
+        r = self.run(cs, pxs_, w.t_lo, w.t_end)
         pen, pinfo = self.penalty(r, w)
         out = {"n": r["n"], "n_pass": c["n_pass"], "pen": pen, "feasible": pinfo["feasible"]}
         if counts_only:
@@ -926,8 +1024,11 @@ class Engine:
                  cost_mult: float = COST_MULT, pmix: "float | None" = None, order_seed: "int | None" = None, exclude=None,
                  cost_on_sell: bool = False) -> dict:
         """폴드별 config → 이어 붙인 OOS 연속 포트폴리오(폴드 시험 창 진입만 그 config, 열린 포지션은 원 config 청산)."""
-        cands = [self.candidates(c, w, par=k, extra_slip=extra_slip) for k, (c, w) in enumerate(zip(cfgs, tests, strict=True))]
-        pxs = [exit_vec(c, extra_slip, sell_extra) for c in cfgs]
+        cands, pxs = [], []
+        for k, (c, w) in enumerate(zip(cfgs, tests, strict=True)):
+            cs_, px_ = self.cands_all(c, w, k=k, extra_slip=extra_slip, sell_extra=sell_extra)
+            cands += cs_
+            pxs += px_
         t_lo, t_end = tests[0].t_lo, tests[-1].t_end
         r = self.run(cands, pxs, t_lo, t_end, cost_mult=cost_mult, pmix=pmix, order_seed=order_seed, exclude=exclude,
                      cost_on_sell=cost_on_sell)
@@ -1367,6 +1468,8 @@ def meta_hash(cache: str) -> str:
 def ensure_cache(cache: str, t0: float, *, with_p: bool) -> None:
     mp_ = os.path.join(cache, "meta.json")
     meta = json.load(open(mp_, encoding="utf-8")) if os.path.exists(mp_) else {}
+    if "families" in meta and not (meta.get("version") == CACHE_VERSION and meta.get("code_hash") == code_hash()):
+        raise SystemExit(f"사건 가족 캐시 {cache} 는 기준 캐시와 링크를 공유한다 — 재빌드 금지(event_families_build.py 로 다시 만든다)")
     if meta.get("version") == CACHE_VERSION and meta.get("code_hash") == code_hash() and all(os.path.exists(os.path.join(cache, f"{k}.npy")) for k in ARR_NAMES):
         if with_p and "p" not in meta:
             import vcp_retest_run as R  # noqa: PLC0415
@@ -1625,7 +1728,7 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
     ret0 = np.where(amb_, wb * (s0 / e - 1.0), rec[:, PF.Q_PNL])   # vcp 규약: 보수 경로는 모호 거래만(그 밖 = 낙관과 같다)
     t = pd.DataFrame({"ev": ev, "code": np.asarray(E.codes)[I_[ev, PE.II["ci"]]], "ci": I_[ev, PE.II["ci"]], "d_row": d, "x_row": x,
                       "event_day": E.days[d - 1], "order_day": E.days[d], "entry_day": E.days[d], "exit_day": E.days[x],
-                      "fold": rec[:, PF.Q_PAR].astype(int), "entry_px": e, "stop_px": sp, "d": (e - sp) / e,
+                      "fold": rec[:, PF.Q_PAR].astype(int) // E.NF, "entry_px": e, "stop_px": sp, "d": (e - sp) / e,
                       "ret": rec[:, PF.Q_PNL], "ret_stop0": ret0, "amb": rec[:, PF.Q_AMB] > 0.5,
                       "exit_reason": np.asarray(PF.REASONS, dtype=object)[rec[:, PF.Q_REASON].astype(int)], "s0": s0p,
                       "hold_days": x - (d - 1), "wb": wb, "added": added, "partial": rec[:, PF.Q_TP] >= 0,
@@ -1646,7 +1749,9 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
     t["s_up"], t["s_lo"] = F[ev, PE.FI["s_up"]], F[ev, PE.FI["s_lo"]]
     t["shape"] = [shape_name(a, b) for a, b in zip(t["s_up"], t["s_lo"], strict=True)]
     t["table"] = I_[ev, PE.II["table"]]
-    t["base"] = [PE.BASES[k % len(PE.BASES)] for k in t["table"]]
+    t["base"] = [PE.BASES[k % len(PE.BASES)] if k < PE.N_TABLES else ("P" if k == EF.TID_P else "C") for k in t["table"]]
+    t["fam"] = np.where(t["table"] == EF.TID_P, "P", np.where(t["table"] == EF.TID_C, "C", "W"))   # 13세대 가족
+    t["entry_close"] = (t["fam"] == "P").to_numpy() & (d == I_[ev, PE.II["d"]] - 1)          # 종가 진입(주문 행 = s)
     return t
 
 
