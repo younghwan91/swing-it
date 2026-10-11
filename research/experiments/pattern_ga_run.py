@@ -117,8 +117,9 @@ FW_FEAS_TARGET = 1_000                 # 리뷰 FW M1: 폴드마다 실현 가�
 FW_Q_2A, FW_Q_2B = 99.0, 100.0         # 리뷰 FW M5: 사후 좁힘 다중성 — 2a p99 · 2b 50벌 전부 위
 FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fw/parent_viewed_trades.csv"   # 리뷰 FW M5: 부모 열람 OOS 거래
 FW_PARENT_SHA256 = "6e989c1948d8a10ce020a20cb7461f32fb4f6e6cd98949111ceaa170c49d6fdb"   # 리뷰 FW M10
-if FWL:                                # L5(사용자 "스윙이라 일년에 수천번 매매할 필요 없다"): 학습창 체결 하한 연 12 → 6, 연도별 4 → 2
-    FLOOR_PER_YEAR, FLOOR_YEAR = 6.0, 2.0
+if FWL:                                # L5(사용자 "수천번 매매할 필요 없다") + 리뷰 FWL M3(바 6 OOS ≥ 60 ≈ 연 9 와 맞춤): 연 12 → 9, 연도별 4 → 3
+    FLOOR_PER_YEAR, FLOOR_YEAR = 9.0, 3.0
+    FEAS_MIN = 300                     # 리뷰 FWL M1: 폴드 6 실현 가능 비율 ≈ 1.8e-6 — 상한 3억에서 기대 ≈ 540, 2a 하한 500 → 300
 if FWL:                                # L4: 부모 186 + FW 중간 열람 155 의 합집합(종목, 주문일)
     FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fwl/parent_viewed_trades.csv"
     FW_PARENT_SHA256 = "fbb985092c458e0c358bba97770264b85677b2f75468692040612f94dcc8d1d7"
@@ -838,6 +839,8 @@ def ga_run_one(E: Engine, w: Win, seed: int, budget: int, *, top: int = 0, x_res
             memo[k] = (r["fit"], r["n"], g)
         return memo[k][0], memo[k][1]
 
+    if FWL and (x_restart is None or len(x_restart) < 10):   # 리뷰 FWL M2: 재시작 풀 < 10 이면 x0 에서 재시작(실제·2b 같은 규칙)
+        x_restart = x0_feasible()[None, :]
     hist, rst = cma_bipop_x0(fn, N_CONT, DISC_SIZES, budget=budget, seed=seed, x0=x0_feasible(), x_restart=x_restart)
     bi = int(np.argmax([h[2] for h in hist]))
     best = decode(hist[bi][1])
@@ -1993,7 +1996,7 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
         ex_ev = np.flatnonzero(mask)
         s_ex = E.stitched(out_cfgs, tests, exclude=ex_ev)
         fw_parent = {"n_parent": len(pv), "n_events_excluded": int(len(ex_ev)), "ann": s_ex["ann"], "n": s_ex["n"],
-                     "overlap_trades": int(np.isin(tr_df["ev"].to_numpy(), ex_ev).sum()) if len(tr_df) else 0}
+                     "overlap_trades": int(np.isin(tr_df["ev"].to_numpy(), ex_ev).sum()) if len(tr_df) else 0, "_st": s_ex}
     sel_rows = []
     for k, (c, w) in enumerate(zip(out_cfgs, tests, strict=True)):
         a_, b_ = E.candidates(c, w), E.candidates(shape_off(c), w)
@@ -2099,6 +2102,11 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
         np_cfgs = [dict(c, pyramid="off") for c in out_cfgs]
         st_np = E.stitched(np_cfgs, tests)
         fw_b6 = {"GA": b6_stats(tr_df), "불타기 끔(첫 단위만)": b6_stats(trade_frame(E, st_np, np_cfgs)), "np_ann": st_np["ann"]}
+        if "_st" in fw_parent:                       # 리뷰 FWL M4: 열람 거래 제외판의 바 1·6
+            s_ex = fw_parent.pop("_st")
+            v_ex = gf.block_boot(np.ascontiguousarray(s_ex["monthly"]), 3, CI_BOOT, CI_SEED) if len(s_ex["monthly"]) else np.array([np.nan])
+            fw_parent["ci_lo"] = float(np.nanpercentile(v_ex, 2.5))
+            fw_parent["b6"] = b6_stats(trade_frame(E, s_ex, out_cfgs))
         n_fw_strict = int((tr_df["shape"] == "하락 쐐기").sum()) if len(tr_df) else 0
         fw_b6["strict_share"] = n_fw_strict / len(tr_df) if len(tr_df) else np.nan
     timings["post"] = time.time() - t1
@@ -2131,6 +2139,13 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
             "b6": bool(ws.get("n", 0) >= B6_N and np.isfinite(gl) and gl >= B6_GL and np.isfinite(w2) and w2 > be_need)}
     bars["b2"] = bars["b2a"] and bars["b2b"]
     bars["all"] = all(bars[k] for k in ("b1", "b2", "b3", "b4", "b6"))
+    if FW and fw_parent:                              # 리뷰 FWL M4: 열람 거래 제외판 바 1·6 (FWL 은 '탐색' 문구에 둘 다 필요)
+        b6e = fw_parent.get("b6", {})
+        bars["b1_ex"] = bool(np.isfinite(fw_parent["ann"]) and fw_parent["ann"] > 0 and fw_parent.get("ci_lo", -1.0) > 0)
+        bars["b6_ex"] = bool(b6e.get("n", 0) >= B6_N and np.isfinite(b6e.get("gl_ex_be", np.nan)) and b6e["gl_ex_be"] >= B6_GL
+                             and np.isfinite(b6e.get("win_ex_be", np.nan)) and b6e["win_ex_be"] > b6e["need"])
+        if FWL:
+            bars["all"] = bars["all"] and bars["b1_ex"] and bars["b6_ex"]
     regions = [user_region(c) for c in out_cfgs]
     region_ovl = [region_overlap(c) for c in out_cfgs]
     region_trade = trade_region_share(E, tr_df)
@@ -2301,6 +2316,14 @@ def fw_lines(V: dict) -> "list[str]":
     if fp:
         L += [f"- **부모 열람 거래 제외(리뷰 FW M5, 사전등록 민감도):** 부모 OOS {fp['n_parent']}건과 같은 (종목, 주문일) 사건 "
               f"{fp['n_events_excluded']}개 제외 → 연환산 {_pct(fp['ann'])} ({fp['n']}건) · 이번 OOS 중 겹친 거래 {fp['overlap_trades']}건"]
+        e6 = fp.get("b6", {})
+        bb = V["bars"]
+        L += ["", "| 바(리뷰 FWL M4) | 전체 | 열람 거래 제외 |", "|---|---|---|",
+              f"| 1 연환산 · CI 하단 | {_pct(st['ann'])} · {_pct(V['ci_lo'])} {_m(bb['b1'])} | {_pct(fp['ann'])} · "
+              f"{_pct(fp.get('ci_lo', np.nan))} {_m(bb.get('b1_ex', False))} |",
+              f"| 6 n · 손익비 · 승률 vs 필요 | {g.get('n', 0)} · {_f(g.get('gl_ex_be', np.nan))} · {_f(g.get('win_ex_be', np.nan))} vs "
+              f"{_f(g.get('need', np.nan))} {_m(bb['b6'])} | {e6.get('n', 0)} · {_f(e6.get('gl_ex_be', np.nan))} · "
+              f"{_f(e6.get('win_ex_be', np.nan))} vs {_f(e6.get('need', np.nan))} {_m(bb.get('b6_ex', False))} |", ""]
     d3 = V["dsr"].get("부모·이번 고유 config", {})
     L += [f"- DSR(부모·이번 고유 config N {d3.get('N', 0):,}): {_f(d3.get('prob', np.nan))}", ""]
     return L

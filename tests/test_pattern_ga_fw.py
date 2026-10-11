@@ -46,7 +46,7 @@ import sys
 sys.path[:0] = ['.', 'src']
 import numpy as np
 import research.experiments.pattern_ga_run as G
-assert G.FW and G.FWL and G.SUB == 'pattern_ga_fwl' and G.FLOOR_PER_YEAR == 6.0 and G.FLOOR_YEAR == 2.0
+assert G.FW and G.FWL and G.SUB == 'pattern_ga_fwl' and G.FLOOR_PER_YEAR == 9.0 and G.FLOOR_YEAR == 3.0 and G.FEAS_MIN == 300
 gs = [G.decode(x) for x in G.random_x(np.random.default_rng(0), 3000)]
 assert all(g['e_min'] in (0.25, 0.5) and g['e_accel'] == 1 for g in gs)
 assert all(70.0 <= g['rs_min'] <= 90.0 for g in gs) and all(g['stage'] in (2, 3) for g in gs)
