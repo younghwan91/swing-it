@@ -147,6 +147,12 @@ def main() -> None:
             vals = np.full(len(t), np.nan)
             vals[ok] = ur[src].to_numpy()[pos[ok]]
             t[col] = vals
+        if "ewy_open" in us.columns:                  # 야간선물 무료 대용: EWY 미국 장중(시가→종가, 한국 22:30~05:00) 수익률
+            ew = (us["ewy_close"] / us["ewy_open"] - 1.0).dropna()
+            p2 = ew.index.searchsorted(t["order_day"].to_numpy(), side="left") - 1
+            v2 = np.full(len(t), np.nan)
+            v2[p2 >= 0] = ew.to_numpy()[p2[p2 >= 0]]
+            t["us_ewy_oc"] = v2
 
     # 기사 오버레이(기술)
     t["news_neg"], t["news_pos"], t["news_n"] = np.nan, np.nan, np.nan
@@ -203,6 +209,10 @@ def main() -> None:
     l5 = t[t["loss5"]]
     usd = t["us_nq"] <= US_DROP
     us_split = {"down": stats(t.loc[usd, "mix"]), "rest": stats(t.loc[~usd & t["us_nq"].notna(), "mix"])}
+    if "us_ewy_oc" in t.columns:                      # 기술 분해 문턱(결과 전 고정): EWY 장중 −1% 이하
+        ewd = t["us_ewy_oc"] <= US_DROP
+        us_split["ewy_down"] = stats(t.loc[ewd, "mix"])
+        us_split["ewy_rest"] = stats(t.loc[~ewd & t["us_ewy_oc"].notna(), "mix"])
     summ = dict(n=len(t), win=s_all["win"], avgwin=float(t["mix"][t["mix"] > 0.005].mean()), avgloss=float(t["mix"][t["mix"] < -0.005].mean()),
                 mean=s_all["mean"], Rmean=float(t["R"].mean()), ann=st["ann"], expo=float(np.mean(st["expo"])), fold_ann=st["fold_ann"],
                 fold_n=st["fold_n"], folds=[[str(tr.lo), str(tr.hi), str(te.lo), str(te.hi)] for tr, te in wins],
@@ -249,6 +259,9 @@ def notes(s: dict) -> list:
     if u.get("down", {}).get("n") is not None:
         out.append(f"전날 밤 나스닥 선물 −1% 이하인 날 주문 {u['down']['n']}건: 승률 {_p(u['down']['win'])}, 거래당 {_sp(u['down']['mean'])} · "
                    f"나머지 {u['rest']['n']}건: 승률 {_p(u['rest']['win'])}, 거래당 {_sp(u['rest']['mean'])} (기술).")
+    if u.get("ewy_down", {}).get("n") is not None:
+        out.append(f"야간 대용(EWY 미국 장중) −1% 이하인 밤 다음 주문 {u['ewy_down']['n']}건: 거래당 {_sp(u['ewy_down']['mean'])} · "
+                   f"나머지 {u['ewy_rest']['n']}건: 거래당 {_sp(u['ewy_rest']['mean'])} (기술).")
     nw = s.get("news") or {}
     if nw.get("n"):
         out.append(f"기사(2023-04 ~ 2026-02 주문 {nw['n']}건, 주문 전 7일 기사 있음 {nw['with_news']}건): 부정 기사 있음 {nw['neg']['n']}건 거래당 "

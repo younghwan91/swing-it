@@ -167,3 +167,14 @@ KRX 자체 야간시장 규칙(KRX 글로벌 페이지 기준):
 - Eurex 미니 KOSPI(2016): https://mondovisione.com/news/eurex-and-korea-exchange-extend-cooperation-introduction-of-new-index-futures-2016420/ , https://eurex.com/ex-en/find/tc/news/mini-kospi-after-hours-2253200
 - Eurex 연계 상품 정산가 정의: https://eurex.com/resource/blob/2703192/e517ad23a32b441a2f345dcb188de871/data/factsheet-eurex-KRX-link-products.pdf
 - 문헌(초록만 확인, 원문 미확인 — 저자·연도 대응은 검색 요약 기준이라 인용 전 재확인): https://ideas.repec.org/a/taf/applec/v47y2015i54p5868-5885.html , https://www.earticle.net/Article/A166629 , https://dspace.kaist.ac.kr/handle/10203/10378
+
+## 무료 요청 확인 (2026-10-11 18:50, 사용자 "우리 클라이언트 레포들이 받을 수 없는지 봐봐, 무료로 요청 보내")
+
+| 경로 | 결과 |
+|---|---|
+| kiwoom-client(키움 REST) | 국내주식·업종 엔드포인트만 있다. 선물 없음(호출은 하지 않음 — 실매매 토큰 보호) |
+| krx-fundamentals-client 방식(data.krx.co.kr OTP·getJsonData, 파생 통계) | `LOGOUT` — 로그인 벽 |
+| KRX Open API `drv/fut_bydd_trd`(선물 일별매매정보) | `401 Unauthorized Key` — 엔드포인트는 있다. **무료 인증키를 사용자가 openapi.krx.co.kr 에서 신청**하면 시험할 수 있다(야간 구분 여부는 키로 하루치를 받아 확인) |
+| Yahoo | KOSPI200 선물 없음. **EWY(미국 상장 MSCI Korea ETF) 일봉 2017-01~ 무료** |
+
+**무료 대용을 넣었다:** EWY 미국 장중 수익률(시가 → 종가 = 한국 22:30 ~ 05:00)을 `regime/us_overnight.csv` 의 `ewy_open`·`ewy_close` 로 넣었다. 야간선물 창(15:45 ~ 06:00) 중 18:00 ~ 22:30 과 05:00 ~ 06:00 은 빠진다. 열람 도구의 기술 분해 문턱은 −1% 이하다(결과 전 고정).
