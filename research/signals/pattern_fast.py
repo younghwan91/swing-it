@@ -78,8 +78,8 @@ from research.signals.vcp import (
 (G_STAGE, G_RS, G_BR, G_SUP_LO, G_SUP_HI, G_SLO_LO, G_SLO_HI, G_RHO, G_TOUCH, G_SPAN_LO, G_SPAN_HI, G_CEIL, G_DEPTH,
  G_DRY, G_RUNUP_COL, G_RUNUP, G_REST, G_EMIN, G_EACC, G_GAP, G_ANCHOR, G_CAP, G_FB_TOL, G_SLIP, G_DFLOOR, G_BASE,
  G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL, G_ATRMAX, G_ENTQ, G_FLMIN, G_FLWIN,
- G_INDSELL) = range(40)
-N_G = 40                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
+ G_INDSELL, G_BODYMIN, G_EAGEMIN) = range(42)
+N_G = 42                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
 MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신저가 · 돌파 성공률 ≥ 60%(전 구간 중앙 ≈ 0.60, 결과 전 고정)
 # --- 청산 인자 벡터(``px``) 번호 ---
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
@@ -121,6 +121,7 @@ F_MBR200, F_MNH, F_MBOS = FI["mkt_br200"], FI["mkt_nhnl"], FI["mkt_bos"]
 F_MA50UP = FI["ma50_up"]
 F_MA20UP, F_H0WICK = FI["ma20_up"], FI["h0_wick"]
 F_FS5, F_FS20, F_FI5, F_FI20 = FI["fl_smart5"], FI["fl_smart20"], FI["fl_indiv5"], FI["fl_indiv20"]
+F_BODY, F_EAGE = FI["body_s"], FI["e_age"]
 BASE_BOTTOM = 3
 
 
@@ -150,6 +151,7 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
     entq = entq_lv == 1                           # 3세대: d−1 MA20 상승 ∧ H0 봉 윗꼬리 < 50%(블로오프 천장 제외)
     flmin = gv[G_FLMIN]                               # 9세대(사용자 "기관에 타올라 개미 돈을 먹는다"): (기관+외국인) 순매수/거래량 ≥ flmin
     flw20 = gv[G_FLWIN] > 0.5                         # 0 = 5일 · 1 = 20일
+    bodymin, eagemin = gv[G_BODYMIN], gv[G_EAGEMIN]  # 9세대(빠른 실패 분석): d−1 몸통 하한 · 반전봉 뒤 확인 일수
     indsell = gv[G_INDSELL] > 0.5                     # 1 = 같은 창의 개인 순매도 요구(매집)
     amax = gv[G_ATRMAX]                               # 진화 3세대 후보: d−1 ATR20 / 종가 ≤ amax(매수 전 수축 — −5% 손절이 노이즈 밖), NaN = 끔
     spol = gv[G_SPOL] > 0.5                            # 진화 1세대: 손절폭 상한 정책 — 1 = 구조 손절이 상한보다 멀면 안 산다(미너비니), 0 = 끌어올림
@@ -181,6 +183,10 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
             continue
         fi_ = F[k, F_FI20] if flw20 else F[k, F_FI5]
         if indsell and fi_ == fi_ and not fi_ < 0.0:
+            continue
+        if bodymin == bodymin and not F[k, F_BODY] >= bodymin:
+            continue
+        if eagemin == eagemin and not F[k, F_EAGE] >= eagemin:
             continue
         if entq_lv == 3 and not F[k, F_MA20UP] > 0.5:
             continue

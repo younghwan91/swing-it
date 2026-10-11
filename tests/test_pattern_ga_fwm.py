@@ -353,3 +353,11 @@ def test_gen9_flow_genes():
     assert _filter(F, _gv(G_FLWIN=0.0, G_INDSELL=1.0))[0] == 0                     # 5일 개인 순매수
     F[0, fi["fl_smart20"]] = np.nan
     assert _filter(F, _gv(G_FLMIN=0.1, G_FLWIN=1.0))[0] == 1                       # 모르면 통과(거부권)
+
+
+def test_gen9_body_and_e_age():
+    F = _event()
+    fi = PE.FI
+    F[0, fi["body_s"]], F[0, fi["e_age"]] = -0.01, 1.0
+    assert _filter(F, _gv(G_BODYMIN=-0.004))[0] == 0 and _filter(F, _gv(G_BODYMIN=-0.012))[0] == 1
+    assert _filter(F, _gv(G_EAGEMIN=2.0))[0] == 0 and _filter(F, _gv(G_EAGEMIN=1.0))[0] == 1

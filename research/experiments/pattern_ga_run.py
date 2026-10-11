@@ -191,7 +191,7 @@ if MENU_OVERRIDE:
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
                  "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
                  "stop_max": (0.05,), "climax_basis": ("intraday",),         # 7세대: 손절 상한 · 8세대: 급등 매도 판단
-                 "flow_win": (20,), "indiv_sell": (0,)}                     # 9세대: 수급 창 · 개인 순매도 요구             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "flow_win": (20,), "indiv_sell": (0,), "e_age_min": (1,)}  # 9세대: 수급 창 · 개인 순매도 요구 · 반전봉 뒤 확인 일수             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -199,7 +199,8 @@ if MENU_OVERRIDE:
         return _co[n][2] if len(_co[n]) >= 3 else c3
     CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), _off(c[0], c[3])) if c[0] in _co else c for c in CONT)
     #: 진화 3세대 후보 연속 유전자(이름이 있을 때만 붙는다): d−1 ATR20/종가 상한, 위쪽 끝 = 끔
-    EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi"), "flow_min": ("flow_min", -0.1, 0.3, "lo")}   # 9세대: 수급 하한(아래 끝 = 끔)
+    EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi"), "flow_min": ("flow_min", -0.1, 0.3, "lo"),   # 9세대: 수급 하한(아래 끝 = 끔)
+                "body_min": ("body_min", -0.02, 0.01, "lo")}           # 9세대: d−1 몸통 하한(아래 끝 = 끔)
     CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, EVO_CONT[n][3])) for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
@@ -410,6 +411,8 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_FLMIN] = np.nan if g.get("flow_min") is None else float(g["flow_min"])     # 9세대 수급
     gv[PF.G_FLWIN] = 1.0 if int(g.get("flow_win") or 20) == 20 else 0.0
     gv[PF.G_INDSELL] = float(g.get("indiv_sell") or 0)
+    gv[PF.G_BODYMIN] = np.nan if g.get("body_min") is None else float(g["body_min"])
+    gv[PF.G_EAGEMIN] = float(g["e_age_min"]) if g.get("e_age_min") is not None else np.nan
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
@@ -1244,6 +1247,10 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
     s20 = np.maximum(s - 20, 0)
     with np.errstate(invalid="ignore"):
         _fill_flows(F, ctx, days, codes, ci, s)                      # 9세대 수급 열
+        oo1, cc1 = np.asarray(A.O)[ci, s], np.asarray(A.C)[ci, s]     # 9세대: d−1 봉 몸통 · d − 행(E)
+        F[:, PE.FI["body_s"]] = np.where(oo1 > 0, cc1 / np.where(oo1 > 0, oo1, 1.0) - 1.0, np.nan)
+        iE_ = I_[:, PE.II["iE"]]
+        F[:, PE.FI["e_age"]] = np.where(iE_ >= 0, (s + 1 - iE_).astype(float), np.nan)
         m20v = m20.to_numpy(float)                                   # 3세대: d−1 MA20 > 5 거래일 전
         s5 = np.maximum(s - 5, 0)
         F[:, PE.FI["ma20_up"]] = np.where(np.isfinite(m20v[s, ci]) & np.isfinite(m20v[s5, ci]), (m20v[s, ci] > m20v[s5, ci]).astype(float), np.nan)
