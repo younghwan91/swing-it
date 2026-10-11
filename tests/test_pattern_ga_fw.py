@@ -38,3 +38,21 @@ def test_default_variant_unchanged():
             "assert not G.FW and 'fw_lo' not in G.GENE_NAMES and dict(G.NOM)['pyramid'][0] == 'off' and G.RESTART_SCREEN == 100_000; print('ok')")
     r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr[-2000:]
+
+
+def test_fwl_variant_menu():
+    code = r"""
+import sys
+sys.path[:0] = ['.', 'src']
+import numpy as np
+import research.experiments.pattern_ga_run as G
+assert G.FW and G.FWL and G.SUB == 'pattern_ga_fwl' and G.FLOOR_PER_YEAR == 6.0 and G.FLOOR_YEAR == 2.0
+gs = [G.decode(x) for x in G.random_x(np.random.default_rng(0), 3000)]
+assert all(g['e_min'] in (0.25, 0.5) and g['e_accel'] == 1 for g in gs)
+assert all(70.0 <= g['rs_min'] <= 90.0 for g in gs) and all(g['stage'] in (2, 3) for g in gs)
+assert all(g['pyramid'] != 'off' and -0.15 <= g['fw_lo'] <= 0.15 for g in gs)
+print('ok')
+"""
+    env = {**os.environ, "PATTERN_GA_VARIANT": "fwl"}
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stderr[-2000:]

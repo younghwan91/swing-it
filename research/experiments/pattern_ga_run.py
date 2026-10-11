@@ -99,11 +99,15 @@ REGION_RUNUP, REGION_REST = 0.30, 20.0  # 정정 2 착상 영역 좌표
 
 #: 변형(``PATTERN_GA_VARIANT`` — spawn 작업자도 같은 값을 읽도록 환경변수). "fw" = PATTERN_GA_FW.md:
 #: 사건 모양을 하락 쐐기로 고정(F1), 불타기 필수(F2), 본전 이동 0.5·1R(F3), 계산 규모(F4). 기본("")은 PATTERN_GA.md 그대로.
+#: "fwl" = PATTERN_GA_FWL.md: FW 전부 + 주도주 고정(EPS YoY ≥ 25% ∧ 가속, RS ≥ 70, 추세 템플릿) — 같은 데이터 세 번째 좁힘(탐색 전용).
 VARIANT = os.environ.get("PATTERN_GA_VARIANT", "")
-FW = VARIANT == "fw"
+FW = VARIANT in ("fw", "fwl")
+FWL = VARIANT == "fwl"
 if FW:
-    LABEL, RUN_LABEL, SUB, RESULTS_MD = "pattern_ga_fw", "pattern_ga_fw_runs", "pattern_ga_fw", "PATTERN_GA_FW_RESULTS.md"
-    PREREG_DOC = DESIGN_PREREG = "research/logs/sepa_explore/PATTERN_GA_FW.md (PATTERN_GA.md 정정 0~11 위 변형 F1~F5)"
+    _T = "fwl" if FWL else "fw"
+    LABEL, RUN_LABEL, SUB, RESULTS_MD = f"pattern_ga_{_T}", f"pattern_ga_{_T}_runs", f"pattern_ga_{_T}", f"PATTERN_GA_{_T.upper()}_RESULTS.md"
+    PREREG_DOC = DESIGN_PREREG = ("research/logs/sepa_explore/PATTERN_GA_FWL.md (PATTERN_GA_FW.md 위 주도주 고정 L1~L4 — 탐색 전용)" if FWL else
+                                  "research/logs/sepa_explore/PATTERN_GA_FW.md (PATTERN_GA.md 정정 0~11 위 변형 F1~F5)")
     SEEDS = tuple(range(int(os.environ.get("PATTERN_GA_FW_SEEDS", "10"))))
     BUDGET = int(os.environ.get("PATTERN_GA_FW_BUDGET", "10000"))
     N_NULL_B = int(os.environ.get("PATTERN_GA_FW_NULL_B", "50"))
@@ -113,6 +117,11 @@ FW_FEAS_TARGET = 1_000                 # 리뷰 FW M1: 폴드마다 실현 가�
 FW_Q_2A, FW_Q_2B = 99.0, 100.0         # 리뷰 FW M5: 사후 좁힘 다중성 — 2a p99 · 2b 50벌 전부 위
 FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fw/parent_viewed_trades.csv"   # 리뷰 FW M5: 부모 열람 OOS 거래
 FW_PARENT_SHA256 = "6e989c1948d8a10ce020a20cb7461f32fb4f6e6cd98949111ceaa170c49d6fdb"   # 리뷰 FW M10
+if FWL:                                # L5(사용자 "스윙이라 일년에 수천번 매매할 필요 없다"): 학습창 체결 하한 연 12 → 6, 연도별 4 → 2
+    FLOOR_PER_YEAR, FLOOR_YEAR = 6.0, 2.0
+if FWL:                                # L4: 부모 186 + FW 중간 열람 155 의 합집합(종목, 주문일)
+    FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fwl/parent_viewed_trades.csv"
+    FW_PARENT_SHA256 = "fbb985092c458e0c358bba97770264b85677b2f75468692040612f94dcc8d1d7"
 
 
 def fw_ok(su: float, sl: float, g: dict) -> bool:
@@ -129,14 +138,18 @@ CONT = (("rs_min", 0.0, 90.0, "lo"), ("breadth_min", 0.0, 0.7, "lo"),
         ("gap_max", 0.01, 0.05, None), ("stop_cap", 0.05, 0.12, None), ("fb_tol", 0.0, 0.03, None), ("trail_k", 2.0, 5.0, None),
         ("stop_buf", 0.0, 1.0, "lo"), ("stop_hard", 1.5, 3.0, None),                       # 정정 5
         ("climax_day", 0.10, 0.25, None), ("climax_5d", 0.20, 0.50, None), ("climax_r", 2.0, 6.0, None))   # 정정 4
-if os.environ.get("PATTERN_GA_VARIANT", "") == "fw":   # FW F1(정정 FW-1, 사용자 "바운드를 유연하게"): 하단선 기울기 상한 유전자
+if FW:                                 # FW F1(정정 FW-1, 사용자 "바운드를 유연하게"): 하단선 기울기 상한 유전자
     CONT = (*CONT, ("fw_lo", -0.15, 0.15, None))
+if FWL:                                # L2: RS 하한 70~90(끔 없음)
+    CONT = (("rs_min", 70.0, 90.0, None), *CONT[1:])
 #: 명목형(M2-1) — 범주별 연속 로짓 [0, 1] → argmax(동률 = 앞).
-NOM = (("stage", (0, 1, 2, 3)), ("entry", PE.BASES), ("trail", ("ma20", "ma50", "chand")),
+#: FWL L3: stage = 추세 템플릿(d−1 전부 · H0 일 TT)만.
+NOM = (("stage", (2, 3) if FWL else (0, 1, 2, 3)), ("entry", PE.BASES), ("trail", ("ma20", "ma50", "chand")),
        ("pyramid", ("1r", "newhigh", "upper") if FW else ("off", "1r", "newhigh", "upper")))
 #: 이산(순서형 — CMAwM 정수 축).
 DISC = (("ceil_win", PE.CEIL_WINS), ("theta", PE.THETAS), ("runup_win", PE.RUNUP_WINS), ("touch_lo", (2, 3)),
-        ("e_min", (None, 0.0, 0.25, 0.5)), ("e_accel", (0, 1)), ("stop_anchor", ("E", "lower", "dynamic")), ("fb_days", (1, 2, 3, 0)),
+        ("e_min", (0.25, 0.5) if FWL else (None, 0.0, 0.25, 0.5)), ("e_accel", (1, 1) if FWL else (0, 1)),   # FWL L1: EPS 가속 필수
+        ("stop_anchor", ("E", "lower", "dynamic")), ("fb_days", (1, 2, 3, 0)),
         ("be_r", (0.5, 1.0) if FW else (0.5, 1.0, 1.5, 2.0, math.inf)), ("take_r", (2.0, 3.0, 4.0, math.inf)), ("take_frac", (1 / 3, 1 / 2)),
         ("tighten", (0, 1)), ("ceil_kind", ("single", "resist")), ("h0_in_pattern", (0, 1)), ("climax", (0, 1)),
         ("stop_basis", ("intraday", "close")), ("fail_exit", ("off", "prev_low", "entry_low")),
@@ -279,6 +292,19 @@ def x0_feasible() -> np.ndarray:
     for q, (name, levels) in enumerate(DISC):
         x[N_CONT + q] = {"e_min": 0.0, "touch_lo": 0.0, "ceil_kind": 0.0, "climax": 0.0, "stop_basis": 0.0, "fail_exit": 0.0,
                          "reentry": 0.0, "stop_anchor": 0.0, "reentry_win": 0.0}.get(name, (len(levels) - 1) / 2.0)
+    if FWL:                                           # FWL L6: 주도주 고정 안에서 가장 느슨한 실현 가능점(건수만 탐색 — 6폴드 모두 실현 가능)
+        names = [n for n, *_ in CONT]
+        x[names.index("rs_min")], x[names.index("fw_lo")] = 0.0, 1.0          # RS 70 · 하단선 < +0.15
+        j = len(CONT)
+        for name, levels in NOM:
+            want = {"stage": 3, "entry": "bottom"}.get(name)
+            if want is not None:
+                x[j:j + len(levels)] = 0.0
+                x[j + levels.index(want)] = 1.0
+            j += len(levels)
+        for q, (name, levels) in enumerate(DISC):
+            if name in ("theta", "ceil_win"):
+                x[N_CONT + q] = float(levels.index({"theta": 0.08, "ceil_win": 120}[name]))
     return x
 
 
@@ -2026,16 +2052,18 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
     n_prior = {lab: count_trials(lab, logs_dir=d) for lab, d in (*R.PRIOR_LEDGERS, ("vcp_retest", "research/logs/sepa_explore"),
                                                                   ("wedge", "research/logs/sepa_explore"),
                                                                   ("wedge_d", "research/logs/sepa_explore"),
-                                                                  *((("pattern_ga", OUT_DIR),) if FW else ()))}   # 리뷰 FW M4
+                                                                  *((("pattern_ga", OUT_DIR),) if FW else ()),
+                                                                  *((("pattern_ga_fw", OUT_DIR),) if FWL else ()))}   # 리뷰 FW M4
     n_led = count_trials(LABEL, logs_dir=led_dir)
     n_dsr_a = n_led + sum(n_prior.values())
     dsr = {}
     parent_uniq = 0
     if FW:                                            # 리뷰 FW M4: 부모 PATTERN_GA 런 원장의 평가 고유 config 합(겹침 무시 — 위쪽 경계)
-        pr_path = os.path.join(OUT_DIR, "pattern_ga_runs", "TRIALS.jsonl")
-        if os.path.exists(pr_path):
-            with open(pr_path, encoding="utf-8") as fh:
-                parent_uniq = sum(int(json.loads(x)["config"].get("n_unique_configs_evaluated", 0)) for x in fh if x.strip())
+        for sub_ in ("pattern_ga_runs", *(("pattern_ga_fw_runs",) if FWL else ())):
+            pr_path = os.path.join(OUT_DIR, sub_, "TRIALS.jsonl")
+            if os.path.exists(pr_path):
+                with open(pr_path, encoding="utf-8") as fh:
+                    parent_uniq += sum(int(json.loads(x)["config"].get("n_unique_configs_evaluated", 0)) for x in fh if x.strip())
     for tag, N in (("변형", n_dsr_a), ("구조", DSR_STRUCTS),
                    *((("부모·이번 고유 config", n_dsr_a + parent_uniq + len(hashes)),) if FW else ())):
         d_ = deflated_sharpe_from_sample(st["monthly"], N) if len(st["monthly"]) > 2 else None
@@ -2247,6 +2275,8 @@ def fw_lines(V: dict) -> "list[str]":
     share = b6.get("strict_share", np.nan)
     label = "하락 쐐기" if np.isfinite(share) and share >= 0.5 else "하락 쐐기 계열(유연 경계 — 엄격 하락 쐐기 50% 미만)"
     L = ["## FW 머리 절 (리뷰 FW 필수 수정 반영)", "",
+         *(["> **탐색 전용(FWL):** 같은 2020~2026 데이터에서 세 번째로 좁힌 메뉴(부모 → FW → 주도주 고정)다. 바를 다 넘어도 판정이 아니며, "
+            "근거는 전진 페이퍼에서만 나온다.", ""] if FWL else []),
          f"> **다중성 미보정(리뷰 FW M5):** 이 메뉴는 부모 `PATTERN_GA` 의 표본 밖 매매·차트를 본 뒤 좁혔다(모양 계열·불타기 필수·본전 0.5/1R). "
          f"명목 p95 바는 보정되지 않은 값이라 판정 문턱을 **2a p{V['q2a']:g} · 2b {len(nb)}벌 최댓값 위**로 올렸다. 통과해도 '탐색' 이다.", "",
          f"- **바 6(사용자 기준, 리뷰 FW M3 — 손익비·승률 모두 본전 |순 2배| < {BE_BAND:.1%} 제외):** OOS {g.get('n', 0)}건 · "
