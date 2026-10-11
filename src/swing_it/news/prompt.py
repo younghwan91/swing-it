@@ -228,8 +228,8 @@ def build_prompt(
     return _SYSTEM, user
 
 
-#: 운영 v2 를 판정한 모델(Haiku 4.5 스냅샷). 스윙 2호는 ``claude-haiku-5-5`` 로 판정한다.
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+#: 판정 모델 — Haiku 5.5 만 쓴다(2026-10-12 결정, Haiku 4.5 판정은 quant-airflow 018 이 ``legacy`` 로 보관).
+DEFAULT_MODEL = "claude-haiku-5-5"
 _MAX_OUTPUT_TOKENS = 400
 
 

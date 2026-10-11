@@ -4,10 +4,12 @@ swing-it 스윙 2호(LLM 지속성) 판정 프롬프트를 정하는 단계. **�
 (Opus 5.5, 자세한 채점표 + 생각)이 기사 내용만 보고 매긴다. 수익 데이터는 이 파일 어디에도 없다.
 
     # 1) 400쌍 표본(2026-03~09, 연구 구간 밖) — 4.5 판정상 main 260 + 나머지 140, train/val/test
-    python -m swing_it.news.labelset sample
+    #    (층화에 쓴 4.5 판정 캐시는 2026-10-12 보관 — tar 에서 풀어 --cache45 로 넘긴다)
+    python -m swing_it.news.labelset sample --cache45 .../universe_v2.jsonl
     # 2) 교사 라벨(Opus 5.5)
     python -m swing_it.news.labelset teacher
     # 3) Haiku 5.5 프롬프트 변형 채점 (--split train 으로 고르고, val 은 마지막에 한 번, test 는 한 번만)
+    #    (Haiku 4.5 기준선 열은 기본 끔 — --baseline45 면 표본 행에 박힌 v45 와 비교한다)
     python -m swing_it.news.labelset eval --variant v2 --split train
 
 **출처:** daytrade-it ``scripts/eval/persistence_labelset.py`` (브랜치 ``research/news-persistence-judge`` @ ba0662a).
@@ -43,7 +45,9 @@ D = Path("data/eval/persistence_swing")
 #: ``sample`` 의 입력 — daytrade-it 데이터(이 레포로 옮기지 않았다): 2026-03~09 운영 사전필터 쌍과 Haiku 4.5 판정.
 _DT = Path.home() / "git" / "daytrade-it" / "data" / "eval"
 PAIRS = _DT / "universe_pairs_n300_prefiltered.jsonl"
-CACHE45 = _DT / "cache" / "universe_v2.jsonl"
+#: 표본을 층화한 Haiku 4.5 판정 캐시(``universe_v2.jsonl``)는 2026-10-12 Haiku 5.5 단일화로 이 tar 에 보관됐다.
+#: 기본값으로 쓰지 않는다 — ``sample`` 을 다시 돌릴 때만 ``--cache45`` 로 풀어서 넘긴다.
+CACHE45_ARCHIVE = Path.home() / "git" / "daytrade-it" / "data" / "legacy" / "haiku45-judgments-2026-10-12.tar.gz"
 LABELSET = D / "labelset"
 SAMPLE = LABELSET / "sample.jsonl"
 TEACHER = LABELSET / "teacher.jsonl"
@@ -80,6 +84,10 @@ def _text(resp: dict) -> str:
 
 
 def cmd_sample(args) -> None:
+    # 표본은 4.5 판정의 subject 로 층화했다(main 260 + 나머지 140) — 같은 표본을 다시 뽑으려면 그 캐시가 있어야 한다.
+    if not args.cache45:
+        sys.exit(f"sample 은 Haiku 4.5 판정 캐시로 층화한다 — {CACHE45_ARCHIVE} 에서 universe_v2.jsonl 을 풀어 "
+                 "--cache45 로 넘겨라(표본은 이미 뽑혀 있어 보통 다시 돌릴 일이 없다)")
     v45 = {}
     for line in Path(args.cache45).open():
         r = json.loads(line)
@@ -263,7 +271,8 @@ def cmd_eval(args) -> None:
         for k, v in ex.map(_haiku_one, todo):
             have[k] = v
             fh.write(json.dumps({"key": k, "v": v}, ensure_ascii=False) + "\n")
-    summ = report(keys, teacher, have, sample, f"haiku55 {args.variant} {args.split} r{args.rep}")
+    summ = report(keys, teacher, have, sample, f"haiku55 {args.variant} {args.split} r{args.rep}",
+                  baseline45=args.baseline45)
     with (RUNS / "summary.jsonl").open("a") as fh:
         fh.write(
             json.dumps({"variant": args.variant, "split": args.split, "rep": args.rep, **summ})
@@ -281,26 +290,29 @@ def is_event(v: dict) -> bool:
     )
 
 
-def report(keys, teacher, cand, sample, name) -> dict:
+def report(keys, teacher, cand, sample, name, baseline45: bool = False) -> dict:
+    """채점 요약을 찍고 돌려준다. ``baseline45`` 면 표본 행에 박힌 Haiku 4.5 판정(``v45``)과의 비교 열도 찍는다 —
+    기본 끔(2026-10-12 Haiku 5.5 단일화). 켜도 ``v45`` 가 없는 표본 행이 있으면 그 열은 건너뛴다. 반환값엔 넣지 않는다.
+    """
     ok = [k for k in keys if cand.get(k)]
+    b45 = baseline45 and all(sample[k].get("v45") for k in ok)
     print(f"\n== {name} · n={len(keys)} parsed={len(ok)}")
+    if baseline45 and not b45:
+        print("  (haiku45 기준선 건너뜀 — 표본 행에 v45 가 없다)")
     acc = {}
     for f in FIELDS:
         acc[f] = sum(cand[k][f] == teacher[k][f] for k in ok) / max(1, len(ok))
-        b = sum(sample[k]["v45"][f] == teacher[k][f] for k in ok) / max(1, len(ok))
-        print(f"  {f:20s} {acc[f]:6.1%}   (haiku45 {b:6.1%})")
+        line = f"  {f:20s} {acc[f]:6.1%}"
+        if b45:
+            b = sum(sample[k]["v45"][f] == teacher[k][f] for k in ok) / max(1, len(ok))
+            line += f"   (haiku45 {b:6.1%})"
+        print(line)
     te = {k for k in ok if is_event(teacher[k])}
     ce = {k for k in ok if is_event(cand[k])}
     tp = len(te & ce)
     prec, rec = tp / max(1, len(ce)), tp / max(1, len(te))
     f1 = 2 * prec * rec / max(1e-9, prec + rec)
     pers = sum(cand[k]["persistence"] == teacher[k]["persistence"] for k in te) / max(1, len(te))
-    h45e = {k for k in ok if is_event(sample[k]["v45"])}
-    tp45 = len(te & h45e)
-    f1_45 = 2 * tp45 / max(1, len(te) + len(h45e))
-    pers45 = sum(sample[k]["v45"]["persistence"] == teacher[k]["persistence"] for k in te) / max(
-        1, len(te)
-    )
     tm = [k for k in ok if teacher[k]["subject"] == "main"]
 
     def macro(get):
@@ -314,14 +326,16 @@ def report(keys, teacher, cand, sample, name) -> dict:
         return sum(f1s) / 3, f1s
 
     pm, pm_c = macro(lambda k: cand[k]["persistence"])
-    pm45, _ = macro(lambda k: sample[k]["v45"]["persistence"])
-    print(
-        f"  PERSIST macro-F1 | teacher main (n={len(tm)}): {pm:.3f} {[round(x, 2) for x in pm_c]}   haiku45 {pm45:.3f}"
-    )
-    print(
-        f"  EVENT  F1 {f1:.3f} (P {prec:.2f} R {rec:.2f}, teacher {len(te)} · cand {len(ce)})   haiku45 F1 {f1_45:.3f}"
-    )
-    print(f"  PERSISTENCE | teacher events: {pers:.1%}   haiku45 {pers45:.1%}")
+    s_pm = s_f1 = s_pers = ""
+    if b45:
+        h45e = {k for k in ok if is_event(sample[k]["v45"])}
+        f1_45 = 2 * len(te & h45e) / max(1, len(te) + len(h45e))
+        pers45 = sum(sample[k]["v45"]["persistence"] == teacher[k]["persistence"] for k in te) / max(1, len(te))
+        pm45, _ = macro(lambda k: sample[k]["v45"]["persistence"])
+        s_pm, s_f1, s_pers = f"   haiku45 {pm45:.3f}", f"   haiku45 F1 {f1_45:.3f}", f"   haiku45 {pers45:.1%}"
+    print(f"  PERSIST macro-F1 | teacher main (n={len(tm)}): {pm:.3f} {[round(x, 2) for x in pm_c]}{s_pm}")
+    print(f"  EVENT  F1 {f1:.3f} (P {prec:.2f} R {rec:.2f}, teacher {len(te)} · cand {len(ce)}){s_f1}")
+    print(f"  PERSISTENCE | teacher events: {pers:.1%}{s_pers}")
     print(
         "  teacher events persistence:",
         Counter(teacher[k]["persistence"] for k in te),
@@ -344,7 +358,8 @@ def main() -> None:
     s = sub.add_parser("sample")
     s.add_argument("--seed", type=int, default=11)
     s.add_argument("--pairs", default=str(PAIRS), help="2026-03~09 쌍(daytrade-it 운영 사전필터)")
-    s.add_argument("--cache45", default=str(CACHE45), help="그 쌍의 Haiku 4.5 판정 캐시")
+    s.add_argument("--cache45", default=None,
+                   help=f"그 쌍의 Haiku 4.5 판정 캐시(universe_v2.jsonl) — 필수, {CACHE45_ARCHIVE.name} 에 보관")
     t = sub.add_parser("teacher")
     t.add_argument("--workers", type=int, default=8)
     e = sub.add_parser("eval")
@@ -352,6 +367,8 @@ def main() -> None:
     e.add_argument("--rep", type=int, default=1)
     e.add_argument("--split", default="train", choices=("train", "val", "test"))
     e.add_argument("--workers", type=int, default=8)
+    e.add_argument("--baseline45", action="store_true",
+                   help="표본 행에 박힌 Haiku 4.5 판정(v45)과의 비교 열도 찍는다(기본 끔)")
     args = ap.parse_args()
     {"sample": cmd_sample, "teacher": cmd_teacher, "eval": cmd_eval}[args.cmd](args)
 

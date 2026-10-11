@@ -9,7 +9,8 @@
 - (기사, 종목, judge) 당 한 행. **성공 행은 덮어쓰지 않는다** — 실패 행(output NULL)만 나중 성공이 바꾼다
   (:func:`write_judgments` 의 ``ON CONFLICT ... WHERE article_judgments.output IS NULL``).
 - 각 레포는 자기가 등록한(owner_repo) judge 의 행만 쓴다. 옛 파일의 일회성 이전만 예외이고, 그 사실을
-  judge ``description`` 에 적는다(``v2-haiku45`` — daytrade-it 소유, swing-it 이 2026-10-09 한 번 이전).
+  judge ``description`` 에 적는다(2026-10-09 ``v2-haiku45`` — daytrade-it 소유 — 를 한 번 이전했고, 2026-10-12
+  quant-airflow 018 이 그 judge 를 ``legacy`` 스키마로 보관했다. swing-it 은 Haiku 5.5 judge 만 안다).
 
 쌍 키 ``uuid|code`` 의 uuid 는 ``pair_key_article(news_articles.id)`` (uuid5) 라 거꾸로 풀 수 없다 —
 :func:`key_map` 이 ``news_company_feed`` 에 있는 기사 id 전부로 역사전을 만든다. 못 푸는 키는 추측하지 않고
@@ -31,7 +32,6 @@ from swing_it.news.prompt import (
     _SYSTEM,
     _USER_TEMPLATE,
     ADDENDUM_R3,
-    DEFAULT_MODEL,
     system_with_addendum,
 )
 from swing_it.news.sweep import pair_key_article
@@ -67,22 +67,12 @@ def _canon(params: dict) -> str:
     return json.dumps(params, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-#: daytrade-it 운영 v2(Haiku 4.5). 판정 요청: system 평문, temperature 0, max_tokens 400.
-V2_HAIKU45 = JudgeSpec(
-    judge="v2-haiku45",
-    model=DEFAULT_MODEL,
-    system_prompt=_SYSTEM,
-    user_template=_USER_TEMPLATE,
-    params={"max_tokens": _MAX_OUTPUT_TOKENS, "temperature": 0},
-    output_schema="v2",
-    owner_repo="daytrade-it",
-    description=(
-        "daytrade-it 운영 v2 추출 프롬프트(anthropic_client._SYSTEM/_USER_TEMPLATE), Haiku 4.5. "
-        "2026-10-09 swing-it 이 daytrade-it data/eval/cache/universe_v2.jsonl(종목 유니버스 백필 배치 판정, "
-        "2026-09-15~17)과 universe_v2_errors.jsonl 을 한 번 이전했다(일회성 import — 이후 쓰기는 daytrade-it 만). "
-        "judged_at = 그 쌍을 담은 배치의 제출 시각(judged_at_exact FALSE)."
-    ),
-)
+# ``v2-haiku45`` (daytrade-it 운영 v2, Haiku 4.5 — 2026-10-09 swing-it 이 universe_v2 캐시를 한 번 이전)는
+# 2026-10-12 Haiku 5.5 단일화로 quant-airflow migration 018 이 legacy.judges_haiku45 ·
+# legacy.article_judgments_haiku45 로 옮기고 judges / article_judgments 에서 지웠다. 여기 정의를 다시 두지 않는다 —
+# KNOWN_JUDGES 에 없으면 spec_for_request·import_legacy 어느 경로로도 judges 에 다시 등록되지 않는다.
+# 손으로 JudgeSpec 을 만들어도 :func:`register_judge` 가 ARCHIVED_JUDGES 이름은 거절한다.
+ARCHIVED_JUDGES = frozenset({"v2-haiku45"})
 
 #: 스윙 2호 판정(사전등록 수정 1): 운영 v2 + "\n\n" + r3 보충, Haiku 5.5, 생각 끔.
 V2R3_HAIKU55 = JudgeSpec(
@@ -117,7 +107,7 @@ V2_HAIKU55 = JudgeSpec(
     ),
 )
 
-KNOWN_JUDGES = {s.judge: s for s in (V2_HAIKU45, V2R3_HAIKU55, V2_HAIKU55)}
+KNOWN_JUDGES = {s.judge: s for s in (V2R3_HAIKU55, V2_HAIKU55)}
 
 
 def spec_for_request(model: str, system: str, params: dict) -> JudgeSpec:
@@ -136,7 +126,12 @@ def spec_for_request(model: str, system: str, params: dict) -> JudgeSpec:
 
 
 def register_judge(con, spec: JudgeSpec) -> bool:
-    """없으면 등록(True), 같은 정의로 있으면 그대로(False), 다른 정의로 있으면 :class:`JudgeCollision`."""
+    """없으면 등록(True), 같은 정의로 있으면 그대로(False), 다른 정의로 있으면 :class:`JudgeCollision`.
+
+    보관된 judge(:data:`ARCHIVED_JUDGES`)는 DB 를 묻기 전에 거절한다 — legacy 로 옮긴 이름을 되살리지 않는다.
+    """
+    if spec.judge in ARCHIVED_JUDGES:
+        raise JudgeCollision(f"judge {spec.judge!r} 는 보관됐다(legacy 스키마) — 다시 등록하지 않는다")
     cur = con.cursor()
     cur.execute(
         "SELECT model, system_sha256, user_template, params FROM judges WHERE judge = %s", (spec.judge,)

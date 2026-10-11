@@ -67,7 +67,7 @@ def _pair(i: int, month: str = "2026-09", sector: str = "IT", session: str = "in
 
 def test_build_request_uses_live_prompt_and_limits() -> None:
     p = _pair(1)
-    req = build_request(p, model="claude-haiku-4-5")
+    req = build_request(p, model="claude-haiku-5-5")
     system, user = build_prompt(
         code=p["code"],
         name=p["name"],
@@ -80,14 +80,32 @@ def test_build_request_uses_live_prompt_and_limits() -> None:
     assert req["custom_id"] == custom_id_of(p["key"])
     assert len(req["custom_id"]) <= 64 and "|" not in req["custom_id"]
     assert req["params"] == {
-        "model": "claude-haiku-4-5",
+        "model": "claude-haiku-5-5",
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        "temperature": 0,
+        "thinking": {"type": "disabled"},
         "max_tokens": _MAX_OUTPUT_TOKENS,
         "messages": [{"role": "user", "content": user}],
     }
-    plain = build_request(p, model="claude-haiku-4-5", cache_system=False)
+    plain = build_request(p, model="claude-haiku-5-5", cache_system=False)
     assert plain["params"]["system"] == system
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-4-5", "claude-haiku-4-5-20251001", "m"])
+def test_only_haiku55_builds_requests(tmp_path: Path, model: str) -> None:
+    """2026-10-12 Haiku 5.5 단일화 — 다른 모델은 요청도, 판정기도 만들지 않는다(다른 모델 가격으로 추정하지도 않는다)."""
+    with pytest.raises(ValueError):
+        build_request(_pair(1), model=model)
+    with pytest.raises(ValueError):
+        usage_cost({"input_tokens": 1}, model)
+    with pytest.raises(ValueError):
+        BatchJudge(client=httpx.Client(), api_key=None, model=model, cache=tmp_path / "c.jsonl",
+                   errors=tmp_path / "e.jsonl", state=tmp_path / "s.json", budget_usd=0.0)
+
+
+def test_cli_rejects_haiku45_before_reading_anything(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="claude-haiku-5-5"):
+        judge_batch.main(["--model", "claude-haiku-4-5-20251001", "--collect-only", "--run", "x",
+                          "--state", str(tmp_path / "s.json")])
 
 
 def test_stratified_sample_is_proportional_seeded_and_covers_strata() -> None:
@@ -101,13 +119,13 @@ def test_stratified_sample_is_proportional_seeded_and_covers_strata() -> None:
 
 
 def test_estimate_cost_is_batch_discounted_haiku_price() -> None:
-    reqs = [build_request(_pair(i), model="m", cache_system=False) for i in range(10)]
+    reqs = [build_request(_pair(i), model="claude-haiku-5-5", cache_system=False) for i in range(10)]
     est = estimate_cost(reqs, chars_per_token=1.0, output_tokens=200)
     chars = sum(
         len(r["params"]["system"]) + len(r["params"]["messages"][0]["content"]) for r in reqs
     )
     assert est["input_tokens"] == chars and est["cached_system_tokens"] == 0 and est["is_estimate"]
-    assert est["usd"] == pytest.approx((chars * 1.0 + 10 * 200 * 5.0) / 1e6 * 0.5)
+    assert est["usd"] == pytest.approx((chars * 0.10 + 10 * 200 * 0.50) / 1e6 * 0.5)
 
 
 def test_estimate_cost_prices_cached_system_as_one_write_then_reads() -> None:
@@ -209,7 +227,7 @@ def _judge(tmp_path: Path, api: FakeAPI, budget: float = 100.0, chunk: int = 10_
     return BatchJudge(
         client=client,
         api_key="k",
-        model="claude-haiku-4-5",
+        model="claude-haiku-5-5",
         cache=tmp_path / "cache.jsonl",
         errors=tmp_path / "errors.jsonl",
         state=tmp_path / "state.json",
@@ -413,7 +431,7 @@ def test_dry_run_makes_no_http_calls(tmp_path: Path) -> None:
     j = BatchJudge(
         client=client,
         api_key=None,
-        model="claude-haiku-4-5",
+        model="claude-haiku-5-5",
         cache=tmp_path / "c.jsonl",
         errors=tmp_path / "e.jsonl",
         state=tmp_path / "s.json",
@@ -456,9 +474,9 @@ def test_cache_rows_store_the_input_hash_of_what_was_judged(tmp_path: Path) -> N
     pairs = [_pair(1)]
     _judge(tmp_path, FakeAPI()).run(pairs, sample=10, stratify=["month"], seed=1)
     (row,) = [json.loads(line) for line in (tmp_path / "cache.jsonl").open()]
-    req = build_request(pairs[0], "claude-haiku-4-5", cache_system=False)["params"]
+    req = build_request(pairs[0], "claude-haiku-5-5", cache_system=False)["params"]
     expected = judgment_input_hash(req["model"], req["system"], req["messages"][0]["content"])
-    assert row["input_hash"] == expected == pair_input_hash(pairs[0], "claude-haiku-4-5")
+    assert row["input_hash"] == expected == pair_input_hash(pairs[0], "claude-haiku-5-5")
 
 
 def test_changed_input_is_rejudged(tmp_path: Path) -> None:
@@ -805,7 +823,7 @@ def test_collect_records_billed_usage_per_result_in_state_and_summary(tmp_path: 
     assert u["input_tokens"] == 3 * 1030 and u["output_tokens"] == 3 * 97
     assert u["cache_creation_input_tokens"] == 1044 and u["cache_read_input_tokens"] == 2 * 1044
     assert u["results_with_usage"] == 3 and u["results_with_cache_read"] == 2
-    assert summary["measured_usd"] == pytest.approx(usage_cost(u, "claude-haiku-4-5"))
+    assert summary["measured_usd"] == pytest.approx(usage_cost(u, "claude-haiku-5-5"))
     rows = [json.loads(line) for line in (tmp_path / "state.usage.jsonl").open()]
     assert len(rows) == 3 and {r["batch_id"] for r in rows} == {"b1"}
     assert set(rows[0]["usage"]) == set(judge_batch.USAGE_FIELDS)
@@ -925,9 +943,9 @@ def test_ledger_failure_leaves_files_untouched_and_the_batch_unprocessed(tmp_pat
 
 
 def test_run_files_are_named_after_the_run(tmp_path: Path) -> None:
-    j = BatchJudge(client=httpx.Client(), api_key=None, model="m", cache=tmp_path / "judgments.jsonl",
+    j = BatchJudge(client=httpx.Client(), api_key=None, model="claude-haiku-5-5", cache=tmp_path / "judgments.jsonl",
                    errors=tmp_path / "errors.jsonl", state=tmp_path / "stage2.state.json", budget_usd=0)
     assert j.batches_log.name == "stage2.batches.log" and j.usage_log.name == "stage2.usage.jsonl"
-    old = BatchJudge(client=httpx.Client(), api_key=None, model="m", cache=tmp_path / "c", errors=tmp_path / "e",
+    old = BatchJudge(client=httpx.Client(), api_key=None, model="claude-haiku-5-5", cache=tmp_path / "c", errors=tmp_path / "e",
                      state=tmp_path / "persistence_stage1_state.json", budget_usd=0)
     assert old.batches_log.name == "persistence_stage1_state.batches.log"

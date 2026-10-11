@@ -2,10 +2,12 @@
 
 실제 DB 이전 결과(2026-10-09): v2-haiku45 157,834행(성공 156,605 + 오류 1,229), v2r3-haiku55 36,214
 (36,171 + 43), v2-haiku55 500(496 + 4). 미해결 키 0. 재실행은 전부 unchanged(멱등).
+2026-10-12: v2-haiku45 는 quant-airflow 018 이 legacy 스키마로 보관 — swing-it 은 Haiku 5.5 judge 만 안다.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import hashlib
 import json
@@ -14,8 +16,8 @@ import pytest
 
 from swing_it.news.judge import judge_spec, request_params
 from swing_it.news.judgments_db import (
+    ARCHIVED_JUDGES,
     KNOWN_JUDGES,
-    V2_HAIKU45,
     V2_HAIKU55,
     V2R3_HAIKU55,
     JudgeCollision,
@@ -35,13 +37,13 @@ AT = dt.datetime(2026, 10, 9, tzinfo=dt.UTC)
 
 
 def test_judge_definitions_are_pinned() -> None:
-    assert V2_HAIKU45.params == {"max_tokens": 400, "temperature": 0}
-    assert V2_HAIKU45.owner_repo == "daytrade-it" and V2_HAIKU45.model == "claude-haiku-4-5-20251001"
     assert V2R3_HAIKU55.system_prompt == _SYSTEM + "\n\n" + ADDENDUM_R3.strip()
     assert V2R3_HAIKU55.params == {"max_tokens": 400, "thinking": {"type": "disabled"}}
     assert V2R3_HAIKU55.system_sha256 == hashlib.sha256(V2R3_HAIKU55.system_prompt.encode()).hexdigest()
     assert V2_HAIKU55.system_prompt == _SYSTEM
-    assert set(KNOWN_JUDGES) == {"v2-haiku45", "v2r3-haiku55", "v2-haiku55"}
+    assert set(KNOWN_JUDGES) == {"v2r3-haiku55", "v2-haiku55"}
+    assert {s.model for s in KNOWN_JUDGES.values()} == {"claude-haiku-5-5"}
+    assert "v2-haiku45" in ARCHIVED_JUDGES and not ARCHIVED_JUDGES & set(KNOWN_JUDGES)
 
 
 def test_r3_constant_is_the_committed_prereg_file() -> None:
@@ -55,7 +57,8 @@ def test_r3_constant_is_the_committed_prereg_file() -> None:
 def test_judge_cli_definitions_resolve_to_the_registered_names() -> None:
     assert judge_spec("claude-haiku-5-5", ADDENDUM_R3.strip()) is V2R3_HAIKU55
     assert judge_spec("claude-haiku-5-5", None) is V2_HAIKU55
-    assert judge_spec("claude-haiku-4-5-20251001", None) is V2_HAIKU45
+    with pytest.raises(ValueError):  # Haiku 4.5 은퇴(2026-10-12) — 요청 정의조차 만들지 않는다
+        judge_spec("claude-haiku-4-5-20251001", None)
     with pytest.raises(JudgeCollision):
         judge_spec("claude-haiku-5-5", "다른 보충")
     with pytest.raises(JudgeCollision):
@@ -138,7 +141,15 @@ def test_write_rejects_rows_with_both_or_neither() -> None:
 
 def test_ledger_refuses_judges_owned_by_another_repo() -> None:
     with pytest.raises(PermissionError):
-        JudgmentLedger(FakeCon(), V2_HAIKU45)
+        JudgmentLedger(FakeCon(), dataclasses.replace(V2_HAIKU55, judge="x", owner_repo="daytrade-it"))
+
+
+def test_archived_judge_is_never_registered_again() -> None:
+    con = FakeCon()
+    archived = dataclasses.replace(V2_HAIKU55, judge="v2-haiku45", owner_repo="daytrade-it")
+    with pytest.raises(JudgeCollision):
+        register_judge(con, archived)
+    assert con.db == {}
 
 
 def test_ledger_refuses_unmapped_keys_before_writing() -> None:

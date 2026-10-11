@@ -1,10 +1,13 @@
 """옛 배치 판정 캐시(JSONL) → 판정 원장(``article_judgments``) 일회성 이전. 멱등 — 다시 돌려도 같다.
 
-    python -m swing_it.news.import_legacy --judge v2-haiku45 \\
-        --cache ~/git/daytrade-it/data/eval/cache/universe_v2.jsonl \\
-        --errors ~/git/daytrade-it/data/eval/cache/universe_v2_errors.jsonl \\
-        --states ~/git/daytrade-it/data/eval/cache/universe_batch_state*.json
-    python -m swing_it.news.import_legacy --judge v2r3-haiku55 --cache .../judgments.jsonl ... --dry-run
+    python -m swing_it.news.import_legacy --judge v2r3-haiku55 \\
+        --cache data/eval/judge_runs/v2r3-haiku55/judgments.jsonl \\
+        --errors data/eval/judge_runs/v2r3-haiku55/errors.jsonl \\
+        --states data/eval/judge_runs/v2r3-haiku55/stage*.state.json --dry-run
+
+``--judge`` 는 :data:`~swing_it.news.judgments_db.KNOWN_JUDGES` (Haiku 5.5 judge)만 받는다. 2026-10-09 에 이 도구로
+옮긴 ``v2-haiku45`` (daytrade-it universe_v2 캐시)는 2026-10-12 quant-airflow migration 018 이 ``legacy`` 스키마로
+보관했고, 그 경로는 지웠다 — 다시 들일 수 없다(:data:`~swing_it.news.judgments_db.ARCHIVED_JUDGES`).
 
 순서(하나라도 어긋나면 쓰지 않고 멈춘다):
 

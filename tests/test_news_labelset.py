@@ -40,3 +40,17 @@ def test_rules_baseline_uses_text_only() -> None:
 
 def test_teacher_rubric_is_the_shared_constant() -> None:
     assert labelset.RUBRIC is RUBRIC
+
+
+def test_report_needs_no_haiku45_baseline_by_default(capsys) -> None:
+    """2026-10-12 Haiku 5.5 단일화 — 4.5 기준선은 기본 끔. 표본 행에 v45 가 없어도 채점은 돈다."""
+    ev = {"subject": "main", "persistence": "multi_quarter", "sentiment_direction": 1, "freshness": "new",
+          "reports_price_move": False}
+    sample = {"k": {"key": "k"}}
+    summ = labelset.report(["k"], {"k": ev}, {"k": ev}, sample, "t")
+    assert summ["event_f1"] == 1.0 and "haiku45" not in capsys.readouterr().out
+    labelset.report(["k"], {"k": ev}, {"k": ev}, sample, "t", baseline45=True)  # v45 없으면 그 열만 건너뛴다
+    assert "건너뜀" in capsys.readouterr().out
+    sample45 = {"k": {"key": "k", "v45": ev}}
+    labelset.report(["k"], {"k": ev}, {"k": ev}, sample45, "t", baseline45=True)
+    assert "haiku45 F1 1.000" in capsys.readouterr().out

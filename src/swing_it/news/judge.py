@@ -11,7 +11,8 @@
 ``--adopt-batch``), 스키마 오류 파일, 입력 해시로 캐시 행 검증, ``MAX_ATTEMPTS``. raw httpx(SDK 없음).
 기본값은 스윙 2호 판정 그대로다: 모델 ``claude-haiku-5-5``(``temperature`` 를 받지 않아 빼고,
 ``thinking: disabled`` — 운영 v2 를 판정한 Haiku 4.5 는 생각하지 않았다), 운영 v2 프롬프트 +
-사전등록 보충 ``research/logs/news_persistence_swing/prompt_r3.txt``.
+사전등록 보충 ``research/logs/news_persistence_swing/prompt_r3.txt``. **모델은 Haiku 5.5 만 받는다**(2026-10-12 —
+Haiku 4.5 판정은 quant-airflow 018 이 ``legacy`` 스키마로 보관했다; :func:`check_model`).
 
 **판정의 정본은 DB 원장이다(2026-10-09).** 배치를 수집할 때마다 결과를 quant-airflow ``article_judgments`` 에
 judge 이름(:mod:`swing_it.news.judgments_db` — 모델·system·파라미터로 정해진다, 기본 = ``v2r3-haiku55``)으로 **먼저**
@@ -73,6 +74,7 @@ from swing_it.news.prefilter import PairFilter, add_filter_args, filter_from_arg
 from swing_it.news.prompt import (
     _MAX_OUTPUT_TOKENS,
     _SYSTEM,
+    DEFAULT_MODEL,
     SchemaError,
     build_prompt,
     judgment_input_hash,
@@ -88,14 +90,12 @@ REPO = Path(__file__).resolve().parents[3]
 RUNS = Path("data/eval/judge_runs")
 #: 사전등록(수정 1)이 고정한 보충. data/eval/persistence_swing/prompts/r3.txt 와 바이트 동일.
 ADDENDUM = REPO / "research" / "logs" / "news_persistence_swing" / "prompt_r3.txt"
-MODEL = "claude-haiku-5-5"
+MODEL = DEFAULT_MODEL
 
-INPUT_USD_PER_M = 1.0  # Haiku 4.5
-OUTPUT_USD_PER_M = 5.0
-#: (input, output) $/M by model (standard; the Batch API halves both) — Haiku 5.5 (2026-10-07) is 1/10 of 4.5.
+#: (input, output) $/M by model (standard; the Batch API halves both). 판정 모델은 Haiku 5.5 하나뿐이다
+#: (2026-10-12 결정) — 여기 없는 모델은 요청을 만들지 않는다(:func:`check_model`). 예전처럼 모르는 모델에 다른
+#: 모델 가격을 조용히 쓰지 않는다.
 PRICES = {"claude-haiku-5-5": (0.10, 0.50)}
-#: Models that reject `temperature` (400 "`temperature` is deprecated for this model").
-NO_TEMPERATURE = {"claude-haiku-5-5"}
 BATCH_DISCOUNT = 0.5
 #: Prompt-cache multipliers on the input price: 5-minute write, read.
 CACHE_WRITE_MULT = 1.25
@@ -190,14 +190,21 @@ def build_request(pair: dict, model: str, addendum: str | None = None, cache_sys
     }
 
 
+def check_model(model: str) -> None:
+    """판정 모델은 :data:`PRICES` 에 있는 것만(= Haiku 5.5). 아니면 ``ValueError`` — 요청을 만들기 전에 막는다."""
+    if model not in PRICES:
+        raise ValueError(f"판정 모델은 {sorted(PRICES)} 만 쓴다, got {model!r}")
+
+
 def request_params(model: str) -> dict:
     """모델 입력 외 판정 파라미터 — judge 정의(``judges.params``)의 일부."""
+    check_model(model)
     return {
         "max_tokens": _MAX_OUTPUT_TOKENS,
-        **({} if model in NO_TEMPERATURE else {"temperature": 0}),
-        # Haiku 5.5 thinks by default and the 400-token cap went entirely to thinking (pilot 2026-10-08:
-        # 320/500 empty, 90 truncated). The live v2 judge (Haiku 4.5) never thought — disable to replicate it.
-        **({"thinking": {"type": "disabled"}} if model in NO_TEMPERATURE else {}),
+        # Haiku 5.5 rejects `temperature` (400 "`temperature` is deprecated for this model"), and it thinks by
+        # default: the 400-token cap went entirely to thinking (pilot 2026-10-08: 320/500 empty, 90 truncated).
+        # The live v2 judge (Haiku 4.5) never thought — disable to replicate it.
+        "thinking": {"type": "disabled"},
     }
 
 
@@ -259,7 +266,8 @@ def _cached_system(req: dict) -> bool:
 
 def prices_for(model: str) -> tuple[float, float]:
     """(input, output) 표준 $/M — 배치 할인 전."""
-    return PRICES.get(model, (INPUT_USD_PER_M, OUTPUT_USD_PER_M))
+    check_model(model)
+    return PRICES[model]
 
 
 def estimate_cost(
@@ -272,7 +280,7 @@ def estimate_cost(
     처리돼 캐시 적중이 보장되지 않는다 — 적중률을 낮춰 잡으면 보수적이다. (system 이 모델의 최소 캐시 길이보다
     짧으면 실제로는 캐시되지 않는다 — 운영 v2 평문 system 만으로는 짧다.)
     """
-    model = requests[0]["params"]["model"] if requests else ""
+    model = requests[0]["params"]["model"] if requests else MODEL
     in_usd, out_usd = prices_for(model)
     total = round(sum(_chars(r) for r in requests) / chars_per_token)
     cached = [r for r in requests if _cached_system(r)]
@@ -385,6 +393,7 @@ class BatchJudge:
         sleep: Callable[[float], None] = time.sleep,
         log: Callable[[str], None] = print,
     ) -> None:
+        check_model(model)
         self.client = client
         self.api_key = api_key
         self.model = model
@@ -1007,7 +1016,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--sample", type=int)
     ap.add_argument("--stratify", default="month,sector,session")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--model", default=MODEL, help="스윙 2호 = claude-haiku-5-5 (Haiku 4.5 도 허용)")
+    ap.add_argument("--model", default=MODEL, help="claude-haiku-5-5 만(2026-10-12 Haiku 4.5 은퇴)")
     ap.add_argument("--run", default=None,
                     help="런 이름(예: stage2) → judge_runs/<judge>/<run>.state.json. 구간(단계)마다 따로 — 끝난 런은 "
                     "--new-run 없이 새 표본을 막는다")
@@ -1064,9 +1073,9 @@ def main(argv: list[str] | None = None) -> None:
         missing = [f for f in ("pairs", "budget_usd", "sample") if getattr(args, f) is None]
         if missing:
             ap.error("required unless --collect-only: " + ", ".join(f"--{m}" for m in missing))
-    # Haiku 4.5 (daytrade-it 운영 판정)와 5.5(스윙 2호)는 캐시를 공유하지 않는다 — 입력 해시에 모델이 들어간다.
-    if not (args.model.startswith("claude-haiku-4-5") or args.model == "claude-haiku-5-5"):
-        sys.exit(f"model must be Haiku 4.5 or 5.5, got {args.model}")
+    # 2026-10-12 부터 Haiku 5.5 만 — 4.5 판정은 quant-airflow 018 이 legacy 스키마로 보관했다.
+    if args.model not in PRICES:
+        sys.exit(f"model must be one of {sorted(PRICES)}, got {args.model}")
     addendum = None if args.no_addendum else read_addendum(args.system_addendum)
     spec = judge_spec(args.model, addendum)
     run_dir = RUNS / spec.judge

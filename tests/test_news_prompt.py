@@ -53,7 +53,7 @@ def test_prompt_strings_are_byte_identical_to_the_live_v2_prompt() -> None:
     assert _sha(RUBRIC) == "c5c0df271aa478a69b7fc88942470dfed0d8d8d071ebaa497e99bd8d0ff30313"
     assert MATERIAL_TYPES == ("수주", "실적", "신약", "증설", "정책", "테마", "루머", "지분", "기타")
     assert _MAX_OUTPUT_TOKENS == 400
-    assert DEFAULT_MODEL == "claude-haiku-4-5-20251001"
+    assert DEFAULT_MODEL == "claude-haiku-5-5"  # 2026-10-12 Haiku 5.5 단일화
 
 
 def test_prereg_addendum_r3_is_the_committed_file() -> None:
