@@ -105,6 +105,7 @@ REGION_RUNUP, REGION_REST = 0.30, 20.0  # 정정 2 착상 영역 좌표
 #: 짧고 날카로운 쐐기 허용(위생 간격 ≥ 1·길이 ≥ 5), stage 3/4(d−1 종가 > MA50). 탐색 전용.
 VARIANT = os.environ.get("PATTERN_GA_VARIANT", "")
 FAST_EVAL = os.environ.get("PATTERN_GA_FAST", "1") != "0"   # 0 이면 evaluate 가 원래 파이썬 경로(evaluate_ref)
+CORE_BIPOP = os.environ.get("PATTERN_GA_CORE_BIPOP", "1") != "0"   # 0 이면 ga_run_one 이 cma_bipop_x0(cmaes 순정)
 FW = VARIANT in ("fw", "fwl", "fwm")
 FWL = VARIANT in ("fwl", "fwm")
 FWM = VARIANT == "fwm"
@@ -945,22 +946,39 @@ def ga_run_one(E: Engine, w: Win, seed: int, budget: int, *, top: int = 0, x_res
     ``x_restart`` = BIPOP 재시작 평균 후보(그 학습창의 실현 가능 config 벡터 — 2단계 M2)."""
     memo: dict = {}
     tt = time.time()
-
-    def fn(x):
-        g = decode(x)
-        k = gkey(g)
-        if k not in memo:
-            r = E.evaluate(g, w)
-            memo[k] = (r["fit"], r["n"], g)
-        return memo[k][0], memo[k][1]
-
     if FWL and (x_restart is None or len(x_restart) < 10):   # 리뷰 FWL M2: 재시작 풀 < 10 이면 x0 에서 재시작(실제·2b 같은 규칙)
         x_restart = x0_feasible()[None, :]
-    hist, rst = cma_bipop_x0(fn, N_CONT, DISC_SIZES, budget=budget, seed=seed, x0=x0_feasible(), x_restart=x_restart)
-    bi = int(np.argmax([h[2] for h in hist]))
-    best = decode(hist[bi][1])
+    if CORE_BIPOP:                                            # 코어 0.8 bipop — cma_bipop_x0 과 이력·memo·재시작 비트 동일
+        from krx_quant_core.research.evolve import bipop  # noqa: PLC0415
+
+        def keyfn(X):
+            gs = [decode(x) for x in X]
+            return [gkey(g) for g in gs], gs
+
+        def ev(gs):
+            rs = [E.evaluate(g, w) for g in gs]
+            return [r["fit"] for r in rs], [r["n"] for r in rs]
+
+        res = bipop(ev, budget=budget, seed=seed, x0=x0_feasible(), x_restart=x_restart, keyfn=keyfn,
+                    n_cont=N_CONT, disc_sizes=DISC_SIZES)
+        memo = res.memo                                       # 키 → (적합도, 진입 수, g) — 처음 본 순서
+        hv, rst = res.hist_values, res.restarts
+        best = decode(res.hist_x[res.best_index])             # 원래와 같이 이력 x 를 다시 복호화
+    else:
+        def fn(x):
+            g = decode(x)
+            k = gkey(g)
+            if k not in memo:
+                r = E.evaluate(g, w)
+                memo[k] = (r["fit"], r["n"], g)
+            return memo[k][0], memo[k][1]
+
+        hist, rst = cma_bipop_x0(fn, N_CONT, DISC_SIZES, budget=budget, seed=seed, x0=x0_feasible(), x_restart=x_restart)
+        hv = np.array([h[2] for h in hist])
+        best = decode(hist[int(np.argmax(hv))][1])
     fit, n, _ = memo[gkey(best)]
-    curve = np.maximum.accumulate([h[2] for h in hist])
+    curve = np.maximum.accumulate(hv)
+    hist = hv
     out = {"best": best, "fit": fit, "n": n, "restarts": rst, "uniq": len(memo), "sec": time.time() - tt,
            "n_eval": len(hist), "curve": {m: float(curve[m - 1]) for m in (100, 1000, 3000, 10000, len(curve)) if m <= len(curve)}}
     out["hashes"] = np.array([ghash(v[2]) for v in memo.values()], np.int64)

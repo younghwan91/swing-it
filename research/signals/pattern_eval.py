@@ -66,7 +66,7 @@ def _year_mean_py(v, m):
 year_mean_np = _jit(_year_mean_py)
 
 
-def _eval_py(F, Fo, I, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf,
+def _eval_py(F, Fo, Iv, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf,
              fw_on, fw_lo, xv, Op, H, L, C, MA20, MA50, ATR, TR, LIM, bs, bn, strat_cs, cost_tab,
              cost_mult, pmix, t_lo, t_end, slots, slot_w, year_of, n_years, reform,
              month_of, ffloor, yidx, yfrac, floor_year, lam, counts_only, block, n_boot, seed, q, out):
@@ -123,16 +123,16 @@ def _eval_py(F, Fo, I, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_sk
             cskip0[k] = b_skip0[j]
             cs0[k] = b_s0[j]
             cbuf[k] = b_buf[j]
-            cd[k] = I[ev, _I_D]
-            cci[k] = I[ev, _I_CI]
+            cd[k] = Iv[ev, _I_D]
+            cci[k] = Iv[ev, _I_CI]
             ch0[k] = F[ev, _F_H0]
             cstrat[k] = np.int64(Fo[ev, _F_STRAT])
             cmkt[k] = np.int64(Fo[ev, _F_MKT])
-            cpid[k] = I[ev, _I_I0] * 100_000 + I[ev, _I_ID]
+            cpid[k] = Iv[ev, _I_I0] * 100_000 + Iv[ev, _I_ID]
             cu[k] = Fo[ev, _F_U]
             csu[k] = Fo[ev, _F_SU]
             cE[k] = Fo[ev, _F_E]
-            ciE[k] = I[ev, _I_IE]
+            ciE[k] = Iv[ev, _I_IE]
             csl[k] = Fo[ev, _F_SL]
             k += 1
         PX = np.empty((2, _N_X))
