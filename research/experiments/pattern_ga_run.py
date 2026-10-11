@@ -100,19 +100,29 @@ REGION_RUNUP, REGION_REST = 0.30, 20.0  # 정정 2 착상 영역 좌표
 #: 변형(``PATTERN_GA_VARIANT`` — spawn 작업자도 같은 값을 읽도록 환경변수). "fw" = PATTERN_GA_FW.md:
 #: 사건 모양을 하락 쐐기로 고정(F1), 불타기 필수(F2), 본전 이동 0.5·1R(F3), 계산 규모(F4). 기본("")은 PATTERN_GA.md 그대로.
 #: "fwl" = PATTERN_GA_FWL.md: FW 전부 + 주도주 고정(EPS YoY ≥ 25% ∧ 가속, RS ≥ 70, 추세 템플릿) — 같은 데이터 세 번째 좁힘(탐색 전용).
+#: "fwm" = PATTERN_GA_FWM.md: FWL 위 미너비니 정합(사용자 차트 지적) — EPS 직전 분기 대비 상승 필수, 손절폭 ≤ 5%(손절선을 끌어올림),
+#: 짧고 날카로운 쐐기 허용(위생 간격 ≥ 1·길이 ≥ 5), stage 3/4(d−1 종가 > MA50). 탐색 전용.
 VARIANT = os.environ.get("PATTERN_GA_VARIANT", "")
-FW = VARIANT in ("fw", "fwl")
-FWL = VARIANT == "fwl"
+FW = VARIANT in ("fw", "fwl", "fwm")
+FWL = VARIANT in ("fwl", "fwm")
+FWM = VARIANT == "fwm"
+REGIME_CSV = "research/logs/sepa_explore/regime/regime_panel.csv"   # FWM M7: 시장 국면 패널(d 종가까지 자료, 뒤쪽 창만)
+VIEW_TOL = 20                          # 리뷰 FWM M7: 열람 제외 = 같은 종목 ± 20 거래일
+STOP_MAX = 0.05                        # FWM M2(사용자 "−5% 이상 손실은 잘못 · 스탑로스를 거기에 건다")
+HYGIENE_FWM = {"gap_min": 1, "span_min": 5}   # FWM M3: 대한해운 2021-01(H0 → 첫 저점 2일, 패턴 7~9일)이 지워지지 않게
+if FWM:
+    CACHE_VERSION = "pga-v5-fwm"
 if FW:
-    _T = "fwl" if FWL else "fw"
+    _T = VARIANT
     LABEL, RUN_LABEL, SUB, RESULTS_MD = f"pattern_ga_{_T}", f"pattern_ga_{_T}_runs", f"pattern_ga_{_T}", f"PATTERN_GA_{_T.upper()}_RESULTS.md"
-    PREREG_DOC = DESIGN_PREREG = ("research/logs/sepa_explore/PATTERN_GA_FWL.md (PATTERN_GA_FW.md 위 주도주 고정 L1~L4 — 탐색 전용)" if FWL else
+    PREREG_DOC = DESIGN_PREREG = ("research/logs/sepa_explore/PATTERN_GA_FWM.md (PATTERN_GA_FWL.md 위 미너비니 정합 M1~M5 — 탐색 전용)" if FWM else
+                                  "research/logs/sepa_explore/PATTERN_GA_FWL.md (PATTERN_GA_FW.md 위 주도주 고정 L1~L4 — 탐색 전용)" if FWL else
                                   "research/logs/sepa_explore/PATTERN_GA_FW.md (PATTERN_GA.md 정정 0~11 위 변형 F1~F5)")
     SEEDS = tuple(range(int(os.environ.get("PATTERN_GA_FW_SEEDS", "10"))))
     BUDGET = int(os.environ.get("PATTERN_GA_FW_BUDGET", "10000"))
     N_NULL_B = int(os.environ.get("PATTERN_GA_FW_NULL_B", "50"))
     SCREEN_N = int(os.environ.get("PATTERN_GA_FW_SCREEN", "300000000"))  # 리뷰 FW M1: 적응 선별 상한(폴드당)
-    RESTART_SCREEN = 1_000_000                                            # 리뷰 FW M2: 재시작 풀 선별 10만 → 100만(실제·2b 같게)
+    RESTART_SCREEN = 200_000 if FWM else 1_000_000                        # 리뷰 FW M2: 10만 → 100만 · 리뷰 FWM S2: FWM 20만(4배 보정 투영 ≈ 19h > 18h)
 FW_FEAS_TARGET = 1_000                 # 리뷰 FW M1: 폴드마다 실현 가능 config 가 이 수에 닿는 가장 짧은 덩어리 접두(건수만 정지 규칙)
 FW_Q_2A, FW_Q_2B = 99.0, 100.0         # 리뷰 FW M5: 사후 좁힘 다중성 — 2a p99 · 2b 50벌 전부 위
 FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fw/parent_viewed_trades.csv"   # 리뷰 FW M5: 부모 열람 OOS 거래
@@ -123,6 +133,9 @@ if FWL:                                # L5(사용자 "수천번 매매할 필�
 if FWL:                                # L4: 부모 186 + FW 중간 열람 155 의 합집합(종목, 주문일)
     FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fwl/parent_viewed_trades.csv"
     FW_PARENT_SHA256 = "fbb985092c458e0c358bba97770264b85677b2f75468692040612f94dcc8d1d7"
+if FWM:                                # FWM M5: FWL 339 + FW 최종 실제 GA 99 의 합집합(종목, 주문일)
+    FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fwm/parent_viewed_trades.csv"
+    FW_PARENT_SHA256 = "d92bbd8a14461748957cfd57e04a4dcdeb51964fe8037f6fc3c89e7e78474ef1"
 
 
 def fw_ok(su: float, sl: float, g: dict) -> bool:
@@ -143,24 +156,30 @@ if FW:                                 # FW F1(정정 FW-1, 사용자 "바운드
     CONT = (*CONT, ("fw_lo", -0.15, 0.15, None))
 if FWL:                                # L2: RS 하한 70~90(끔 없음)
     CONT = (("rs_min", 70.0, 90.0, None), *CONT[1:])
+if FWM:                                # M3 짧은 쐐기: 길이 중심 하한 15 → 5 · M2: 손절 원값 거리 상한(소진)은 25%까지(손절선은 5% 로 끌어올림)
+    CONT = tuple(("span_c", math.log(5.0), math.log(120.0), None) if c[0] == "span_c" else
+                 ("stop_cap", 0.05, 0.25, None) if c[0] == "stop_cap" else c for c in CONT)
 #: 명목형(M2-1) — 범주별 연속 로짓 [0, 1] → argmax(동률 = 앞).
 #: FWL L3: stage = 추세 템플릿(d−1 전부 · H0 일 TT)만.
-NOM = (("stage", (2, 3) if FWL else (0, 1, 2, 3)), ("entry", PE.BASES), ("trail", ("ma20", "ma50", "chand")),
-       ("pyramid", ("1r", "newhigh", "upper") if FW else ("off", "1r", "newhigh", "upper")))
+NOM = (("stage", (3, 4) if FWM else (2, 3) if FWL else (0, 1, 2, 3)), ("entry", PE.BASES), ("trail", ("ma20", "ma50", "chand")),
+       ("pyramid", ("1r", "newhigh", "upper") if FW else ("off", "1r", "newhigh", "upper")),
+       *((("mkt", ("off", "nhnl", "bos", "br200")),) if FWM else ()))   # FWM M7: 시장 국면(그 종목 시장, d−1)
 #: 이산(순서형 — CMAwM 정수 축).
 DISC = (("ceil_win", PE.CEIL_WINS), ("theta", PE.THETAS), ("runup_win", PE.RUNUP_WINS), ("touch_lo", (2, 3)),
-        ("e_min", (0.25, 0.5) if FWL else (None, 0.0, 0.25, 0.5)), ("e_accel", (1, 1) if FWL else (0, 1)),   # FWL L1: EPS 가속 필수
-        ("stop_anchor", ("E", "lower", "dynamic")), ("fb_days", (1, 2, 3, 0)),
+        ("e_min", (None, 0.25, 0.5) if FWM else (0.25, 0.5) if FWL else (None, 0.0, 0.25, 0.5)),
+        ("e_accel", (0, 1) if FWM else (1, 1) if FWL else (0, 1)),   # FWL L1: EPS 가속 필수 · FWM M1: 직전 분기 대비 상승은 늘, YoY 는 선택
+        ("stop_anchor", ("E", "lower") if FWM else ("E", "lower", "dynamic")), ("fb_days", (1, 2, 3, 0)),
         ("be_r", (0.5, 1.0) if FW else (0.5, 1.0, 1.5, 2.0, math.inf)), ("take_r", (2.0, 3.0, 4.0, math.inf)), ("take_frac", (1 / 3, 1 / 2)),
         ("tighten", (0, 1)), ("ceil_kind", ("single", "resist")), ("h0_in_pattern", (0, 1)), ("climax", (0, 1)),
-        ("stop_basis", ("intraday", "close")), ("fail_exit", ("off", "prev_low", "entry_low")),
+        ("stop_basis", ("intraday", "intraday") if FWM else ("intraday", "close")),   # FWM M2: 종가 손절은 −5% 를 넘긴다
+        ("fail_exit", ("off", "prev_low", "entry_low")),
         ("reentry", ("off", "F", "line")), ("reentry_win", (1, 2, 3, 4, 5)))
 N_LOGIT = sum(len(v) for _, v in NOM)
 N_CONT = len(CONT) + N_LOGIT
 DISC_SIZES = tuple(len(v) for _, v in DISC)
 DIM = N_CONT + len(DISC)
 GENE_NAMES = tuple(n for n, *_ in CONT) + tuple(n for n, _ in NOM) + tuple(n for n, _ in DISC)
-STAGE_NAMES = ("MA 정렬만", "+ 종가 > MA50", "추세 템플릿 전부(d−1)", "H0 일 TT ∧ d−1 MA 정렬")
+STAGE_NAMES = ("MA 정렬만", "+ 종가 > MA50", "추세 템플릿 전부(d−1)", "H0 일 TT ∧ d−1 MA 정렬", "H0 일 TT ∧ d−1 종가 > MA50")
 #: 모양 유전자(M6 모양 비활성 짝·C1-2b 와 같은 묶음 — 정정 3 의 천장 종류·H0 첫 점 포함).
 SHAPE_GENES = ("sup_c", "sup_hw", "slo_c", "slo_hw", "rho_max", "touch_lo", "span_c", "span_hw", "ceil_min", "depth_max",
                "dry_max", "ceil_kind", "h0_in_pattern")
@@ -343,6 +362,9 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_BASE] = PE.BASES.index(g["entry"])
     gv[PF.G_H0IN] = float(g["h0_in_pattern"])
     gv[PF.G_CEILKIND] = 1.0 if g["ceil_kind"] == "resist" else 0.0
+    gv[PF.G_EQ] = 1.0 if FWM else 0.0                # FWM M1: EPS 전년 같은 분기 대비 상승(흑자) 필수(정정 FWM-1 M9)
+    gv[PF.G_SMAX] = STOP_MAX if FWM else np.nan       # FWM M2
+    gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200").index(g.get("mkt") or "off")   # FWM M7
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
@@ -384,6 +406,8 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_CAP] = g["stop_cap"]
     px[PF.X_BUF] = g.get("stop_buf") or 0.0
     px[PF.X_DFLOOR] = 0.02
+    px[PF.X_SMAX] = STOP_MAX if FWM else np.nan     # FWM M2: 재진입 손절에도 같은 상한
+    px[PF.X_INTRA] = 1.0 if FWM else 0.0            # FWM M6: 장중 청산(알고리즘 매매)
     return px
 
 
@@ -705,6 +729,7 @@ class Engine:
         ny = np.zeros(self.n_years, np.int64)
         if not pxs:
             pxs = [np.zeros(PF.N_X)]
+            pxs[0][PF.X_SMAX] = np.nan
         fixed = [p.copy() for p in pxs]                   # 재진입 트레이드용 행(하단선 동적 끔 — 재진입 손절은 고정)
         for p in fixed:
             p[PF.X_DYN] = 0.0
@@ -1086,12 +1111,22 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
             "tick_reform_row": int(days.searchsorted(pd.Timestamp(PE.TICK_REFORM_DAY))), "atr": T(atr.to_numpy(float))}
     d_lo = int(days.searchsorted(pd.Timestamp(EVENT_LO)))
     d_hi = int(days.searchsorted(pd.Timestamp(EVENT_HI), side="right") - 1)
-    tb = PE.build_tables(A.H, A.L, A.C, ctx.VOL, A.O, A.TR, ctxd, d_lo=d_lo, d_hi=d_hi, log=lambda m: _log(m, t0))
+    tb = PE.build_tables(A.H, A.L, A.C, ctx.VOL, A.O, A.TR, ctxd, d_lo=d_lo, d_hi=d_hi, log=lambda m: _log(m, t0),
+                         hygiene=HYGIENE_FWM if FWM else None)
     F, I_ = tb["F"], tb["I"]
     ci, s = I_[:, PE.II["ci"]], I_[:, PE.II["d"]] - 1
     Ee = V.e_accel_asof(ctx.est, codes[ci], days[s])
     F[:, PE.FI["e_yoy"]] = Ee["e_yoy"].to_numpy(float)
     F[:, PE.FI["e_yoy_prev"]] = Ee["e_yoy_prev"].to_numpy(float)
+    F[:, PE.FI["e_q"]] = Ee["e_netinc"].to_numpy(float)            # FWM M1: 최신 분기 단독 순이익(그날 알던 것)
+    F[:, PE.FI["e_q_prev"]] = Ee["e_netinc_prior"].to_numpy(float)  # 정정 FWM-1 M9(사용자 확인): 전년 같은 분기 단독 순이익
+    rg = pd.read_csv(REGIME_CSV, usecols=["date", "market", "breadth_ma200", "nh_nl_ratio", "breakout_success20"])   # FWM M7
+    rg = rg[rg["market"].isin(["KOSPI", "KOSDAQ"])].assign(date=lambda x: pd.to_datetime(x["date"]))
+    key = pd.DataFrame({"date": days[s], "market": np.where(ctx.mkt[ci] == 1, "KOSDAQ", "KOSPI")})
+    mg = key.merge(rg, on=["date", "market"], how="left")
+    F[:, PE.FI["mkt_br200"]] = mg["breadth_ma200"].to_numpy(float)   # 리뷰 FWM M6: 지수 대용(KOSDAQ 편향) 대신 MA200 위 비율
+    F[:, PE.FI["mkt_nhnl"]] = mg["nh_nl_ratio"].to_numpy(float)
+    F[:, PE.FI["mkt_bos"]] = mg["breakout_success20"].to_numpy(float)
     end_row = int(days.searchsorted(pd.Timestamp(END_DAY), side="right") - 1)
     LIM = np.minimum(A.CUT, end_row + 1).astype(np.int64)
     strat_cs = T(strat).astype(np.int64)
@@ -1171,7 +1206,7 @@ def _record_design(out_dir: str) -> None:
 def _proc_config(budget: int, seeds: tuple, fac_sha: str, pmix: float) -> dict:
     return {"prereg": PREREG_DOC, "universe": f"위생 ∧ ADV20 ≥ {ADV_FLOOR:,.0f} 백만원 ∧ d−1 MA50>MA150>MA200 ∧ 분할 60일 제외",
             "event": [EVENT_LO, EVENT_HI], "end_mark": END_DAY, "tables": f"θ {PE.THETAS} × 창 {PE.CEIL_WINS} × 기준선 {PE.BASES}",
-            "hygiene": PE.HYGIENE, "genes": {"cont": [list(c[:3]) for c in CONT], "nominal": [[n, list(map(str, v))] for n, v in NOM],
+            "hygiene": {**PE.HYGIENE, **(HYGIENE_FWM if FWM else {})}, "genes": {"cont": [list(c[:3]) for c in CONT], "nominal": [[n, list(map(str, v))] for n, v in NOM],
                                               "disc": [[n, list(map(str, v))] for n, v in DISC]},
             "fitness": f"10 슬롯 포트폴리오 − 종목별 모멘텀 정합 바스켓, 월합 3개월 블록 부트스트랩 {FIT_BOOT} 2.5% 하단 − "
                        f"λ{LAMBDA}·(연 {FLOOR_PER_YEAR:g} 하한·연도별 {FLOOR_YEAR:g}) 연속 벌점, 비용 {COST_MULT:g}배, p 혼합 {pmix:.3f}",
@@ -1391,7 +1426,8 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
     mk_ = np.asarray(E.F_orig)[ev, PE.FI["market"]].astype(int)
     s0p = rec[:, PF.Q_S0]                                            # 진입일 장중 손절선(장중 기준 = 손절가, 종가 기준 = 재난선)
     s0 = s0p * 0.999 - PE.tick_dated_vec(s0p, d, mk_, E.reform)      # 보수 경로 진입일 손절 체결(−0.1% − 1호가)
-    ret0 = wb * (s0 / e - 1.0)
+    amb_ = rec[:, PF.Q_AMB] > 0.5
+    ret0 = np.where(amb_, wb * (s0 / e - 1.0), rec[:, PF.Q_PNL])   # vcp 규약: 보수 경로는 모호 거래만(그 밖 = 낙관과 같다)
     t = pd.DataFrame({"ev": ev, "code": np.asarray(E.codes)[I_[ev, PE.II["ci"]]], "ci": I_[ev, PE.II["ci"]], "d_row": d, "x_row": x,
                       "event_day": E.days[d - 1], "order_day": E.days[d], "entry_day": E.days[d], "exit_day": E.days[x],
                       "fold": rec[:, PF.Q_PAR].astype(int), "entry_px": e, "stop_px": sp, "d": (e - sp) / e,
@@ -1403,8 +1439,8 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
                       "exit_px": rec[:, PF.Q_FIN], "partial_px": rec[:, PF.Q_PX1], "add_px": rec[:, PF.Q_PA]})
     t["net"] = t["ret"] - c1
     t["net2"] = t["ret"] - 2 * c1
-    t["net_stop0"] = t["ret_stop0"] - rec[:, PF.Q_CD] * wb
-    t["net2_stop0"] = t["ret_stop0"] - 2 * rec[:, PF.Q_CD] * wb
+    t["net_stop0"] = np.where(amb_, t["ret_stop0"] - rec[:, PF.Q_CD] * wb, t["net"])
+    t["net2_stop0"] = np.where(amb_, t["ret_stop0"] - 2 * rec[:, PF.Q_CD] * wb, t["net2"])
     t["mfe_R"] = (t["mfe_px"] - e) / (e - sp)
     t["real_R_post"] = t["net"] / (wb * t["d"])       # 분모 = 호가·매수 미끄러짐 뒤 R(MINOR 3)
     t["order_px"] = F[ev, PE.FI["order"]]
@@ -1419,11 +1455,17 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
     return t
 
 
+def pmix_net(t: pd.DataFrame, p: float, col: str = "net") -> pd.Series:
+    """거래별 p 혼합 순 — 진입일 손절 보수 경로는 모호(``amb``) 거래에만 섞는다(:func:`vcp_retest_run.expand` 와 같은 정의).
+    2026-10-11 발견: 보고용 혼합이 모든 거래에 보수 경로를 섞어 승률·손익비를 깎았다(바 6 판정 경로 ``R.expand`` 는 정상)."""
+    return t[col].where(~t["amb"].astype(bool), p * t[f"{col}_stop0"] + (1 - p) * t[col])
+
+
 def mfe_table(t: pd.DataFrame, p: float) -> dict:
     """M1-d: MFE 구간(<1, 1~2, 2~4, ≥4 R)별 실현 R 평균·되돌림, '+1R → 손실' 비율, 승자 포착률(기술) — 낙관 경로·p 혼합 순."""
     if t is None or t.empty:
         return {}
-    mix = p * t["net_stop0"] + (1 - p) * t["net"]
+    mix = pmix_net(t, p)
     rr = mix / (t["wb"] * t["d"])
     b = pd.cut(t["mfe_R"], [-np.inf, 1, 2, 4, np.inf], right=False, labels=["<1R", "1~2R", "2~4R", "≥4R"])
     out = {"buckets": {str(k): {"n": int(len(g)), "real_R": float(rr[g.index].mean()),
@@ -1557,7 +1599,7 @@ def reentry_report(t: pd.DataFrame, p: float) -> dict:
     if t is None or t.empty or not t["reentry"].any():
         return {"n": 0}
     x = t[t["reentry"]]
-    mix = p * x["net2_stop0"] + (1 - p) * x["net2"]
+    mix = pmix_net(x, p, "net2")
     return {"n": int(len(x)), "net2_mean": float(mix.mean()), "win": float((mix > 0).mean()),
             "reasons": x["exit_reason"].value_counts().to_dict()}
 
@@ -1991,8 +2033,14 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
         cidx = {c: i for i, c in enumerate(np.asarray(E.codes))}
         I_all = np.asarray(E.I)
         keys = {(cidx[c], E.row(d)) for c, d in zip(pv["code"], pv["order_day"], strict=True) if c in cidx}
-        mask = np.fromiter(((int(a_), int(b_)) in keys for a_, b_ in zip(I_all[:, PE.II["ci"]], I_all[:, PE.II["d"]])), bool,
-                           count=len(I_all))
+        if FWM:                                       # 리뷰 FWM M7: 같은 종목 ± VIEW_TOL 거래일(같은 셋업의 다른 기준선·재진입까지)
+            eci, ed = I_all[:, PE.II["ci"]], I_all[:, PE.II["d"]]
+            mask = np.zeros(len(I_all), bool)
+            for c_, r_ in keys:
+                mask |= (eci == c_) & (np.abs(ed - r_) <= VIEW_TOL)
+        else:
+            mask = np.fromiter(((int(a_), int(b_)) in keys for a_, b_ in zip(I_all[:, PE.II["ci"]], I_all[:, PE.II["d"]])), bool,
+                               count=len(I_all))
         ex_ev = np.flatnonzero(mask)
         s_ex = E.stitched(out_cfgs, tests, exclude=ex_ev)
         fw_parent = {"n_parent": len(pv), "n_events_excluded": int(len(ex_ev)), "ann": s_ex["ann"], "n": s_ex["n"],
@@ -2034,7 +2082,7 @@ def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_
     idea_flags = idea_data_flags(out_cfgs, wins)
     trade_ci = {}                                    # 2단계 MINOR 4: 거래당 순 2배(p 혼합) 주문일 군집 CI
     if len(tr_df) >= 3:
-        mix2 = pmix * tr_df["net2_stop0"] + (1 - pmix) * tr_df["net2"]
+        mix2 = pmix_net(tr_df, pmix, "net2")
         lo_, hi_, _ = cluster_bootstrap_ci(mix2.to_numpy(), tr_df["order_day"].dt.strftime("%Y%m%d").to_numpy(),
                                           n_boot=CI_BOOT, seed=CI_SEED)
         trade_ci = {"mean": float(mix2.mean()), "lo": lo_, "hi": hi_}

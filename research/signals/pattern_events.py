@@ -81,7 +81,9 @@ HYG_STATUS = ("ok", "spacing<3", "span<15", "integrity_upper", "integrity_lower"
 F_COLS = ("level", "order", "h0", "A", "B", "Cl", "D", "E", "su", "sl", "s_up", "s_lo", "rho", "touch", "span", "hgt",
           "ceil", "depth", "dry", "runup20", "runup40", "runup60", "rest_gap", "lower_d", "u_d", "hE", "n_res", "h0in",
           "stopE_raw", "stopL_raw", "open_d", "high_d", "low_d", "close_d", "close_s", "adv20", "rs", "breadth",
-          "above50", "tt_s", "tt_h0", "e_yoy", "e_yoy_prev", "market", "strat", "month", "atr_s")
+          "above50", "tt_s", "tt_h0", "e_yoy", "e_yoy_prev", "market", "strat", "month", "atr_s",
+          "e_q", "e_q_prev",             # FWM M1: 최신 분기·전년 같은 분기 단독 순이익(EPS 전년 동기 대비 상승 필수 — 러너가 채운다)
+          "mkt_br200", "mkt_nhnl", "mkt_bos")   # FWM M7: 그 종목 시장의 d−1 국면(MA200 위 종목 비율, 신고가 비율, 돌파 성공률 20)
 FI = {k: i for i, k in enumerate(F_COLS)}
 #: 사건 표 정수 열(``I``) — iA = 패턴 첫 저점(정정 2 의 A), iS = 패턴 시작(``h0in`` 0: A, 1: H0).
 I_COLS = ("d", "ci", "i0", "iA", "iB", "iC", "iD", "iE", "iS", "table")
@@ -473,7 +475,7 @@ def scan_rows(valid: np.ndarray, s_lo: int, s_hi: int) -> "tuple[np.ndarray, np.
 
 
 def build_tables(H, L, C, Vv, Op, TR, ctx: dict, *, d_lo: int, d_hi: int, thetas=THETAS, ceil_wins=CEIL_WINS,
-                 log=None) -> dict:
+                 log=None, hygiene: "dict | None" = None) -> dict:
     """사건 표 전부(:data:`N_TABLES` 개를 한 배열에 이어 붙임, 표 안 정렬 = (d, ADV20 내림, 종목)).
 
     ``ctx`` (전부 종목×날짜): ``base``(bool — 모듈 설명 8 의 기본 맥락, s 행), ``above50``·``tt``(bool), ``rs``·``breadth``·``adv20``
@@ -488,7 +490,7 @@ def build_tables(H, L, C, Vv, Op, TR, ctx: dict, *, d_lo: int, d_hi: int, thetas
     reform = int(ctx.get("tick_reform_row", 0))
     Fs, Is, funnel = [], [], {}
     off = [0]
-    hy = HYGIENE
+    hy = {**HYGIENE, **(hygiene or {})}             # FWM M3: 변형별 위생(기본 = HYGIENE)
     for ti, th in enumerate(THETAS):
         for wi, cw in enumerate(CEIL_WINS):
             if th not in thetas or cw not in ceil_wins:

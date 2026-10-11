@@ -77,13 +77,15 @@ from research.signals.vcp import (
 # --- 유전자 → 거르기 벡터(``gv``) 번호 ---
 (G_STAGE, G_RS, G_BR, G_SUP_LO, G_SUP_HI, G_SLO_LO, G_SLO_HI, G_RHO, G_TOUCH, G_SPAN_LO, G_SPAN_HI, G_CEIL, G_DEPTH,
  G_DRY, G_RUNUP_COL, G_RUNUP, G_REST, G_EMIN, G_EACC, G_GAP, G_ANCHOR, G_CAP, G_FB_TOL, G_SLIP, G_DFLOOR, G_BASE,
- G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD) = range(31)
-N_G = 31
+ G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT) = range(34)
+N_G = 34                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
+MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신저가 · 돌파 성공률 ≥ 60%(전 구간 중앙 ≈ 0.60, 결과 전 고정)
 # --- 청산 인자 벡터(``px``) 번호 ---
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
- X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN) = range(32)
-N_X = 32
+ X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
+ X_SMAX, X_INTRA) = range(34)
+N_X = 34                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -102,7 +104,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -113,6 +115,8 @@ F_LOWER, F_STOPE, F_STOPL, F_OPEN, F_HIGH, F_LOW, F_CLOSE, F_CLOSE_S = (FI["lowe
 F_RS, F_BR, F_ABOVE50, F_TTS, F_TTH0, F_EYOY, F_EPREV = (FI["rs"], FI["breadth"], FI["above50"], FI["tt_s"], FI["tt_h0"],
                                                          FI["e_yoy"], FI["e_yoy_prev"])
 F_NRES, F_H0IN, F_ATR = FI["n_res"], FI["h0in"], FI["atr_s"]
+F_EQ, F_EQP = FI["e_q"], FI["e_q_prev"]
+F_MBR200, F_MNH, F_MBOS = FI["mkt_br200"], FI["mkt_nhnl"], FI["mkt_bos"]
 BASE_BOTTOM = 3
 
 
@@ -136,6 +140,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         anchor = 0                                    # 정정 3: 바닥 반전 손절 = E − 1호가 고정
     h0in, ckind = gv[G_H0IN], int(gv[G_CEILKIND])
     sbuf, sclose, shard = gv[G_STOP_BUF], gv[G_STOP_CLOSE] > 0.5, gv[G_STOP_HARD]
+    eq, smax = gv[G_EQ] > 0.5, gv[G_SMAX]
+    mkt = int(gv[G_MKT]) if gv[G_MKT] == gv[G_MKT] else 0
     for k in range(a, b):
         if h0in == h0in and F[k, F_H0IN] != h0in:
             continue
@@ -146,6 +152,16 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         if stage == 2 and not F[k, F_TTS] > 0.5:
             continue
         if stage == 3 and not F[k, F_TTH0] > 0.5:
+            continue
+        if stage == 4 and not (F[k, F_TTH0] > 0.5 and F[k, F_ABOVE50] > 0.5):   # FWM M4: H0 일 TT ∧ d−1 종가 > MA50
+            continue
+        if eq and not (F[k, F_EQ] > 0.0 and F[k, F_EQ] > F[k, F_EQP]):           # FWM M1: 흑자 ∧ 전년 같은 분기보다 증가
+            continue
+        if mkt == 1 and not F[k, F_MNH] > MKT_NHNL_MIN:                          # FWM M7 시장: 신고가 > 신저가
+            continue
+        if mkt == 2 and not F[k, F_MBOS] >= MKT_BOS_MIN:                         # 돌파가 먹히는 장
+            continue
+        if mkt == 3 and not F[k, F_MBR200] > 0.5:                                # MA200 위 종목 > 절반(리뷰 FWM M6: 지수 대용 편향 대신)
             continue
         if rs_min == rs_min and not F[k, F_RS] >= rs_min:
             continue
@@ -206,6 +222,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
             continue
         e = f * (1.0 + slip)
         sp = sr
+        if smax == smax and (e - sp) / e > smax:      # FWM M2: 손절폭 상한 — 손절선을 진입가 × (1 − smax) 로 끌어올린다(거래는 산다)
+            sp = e * (1.0 - smax)
         if (e - sp) / e < dfloor:
             sp = e * (1.0 - dfloor)
         cl = F[k, F_CLOSE]
@@ -285,6 +303,9 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     kk = px[X_TRAIL_K]
     tighten = px[X_TIGHTEN] > 0.5
     tight_level = e + px[X_TIGHT_R] * R
+    smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
+    ix = px[X_INTRA] > 0.5                            # FWM M6(사용자 "알고리즘 매매라 장중에도 판다"): 반등 실패·추적·클라이맥스를
+    #                                                   전날까지 정보로 정한 선에 걸어 두고 장중에 닿으면 그 선(시가가 넘으면 시가)에 판다
     fb_days = int(px[X_FB_DAYS])
     from_entry = px[X_FROM_ENTRY] > 0.5
     climax = px[X_CLIMAX] > 0.5
@@ -379,6 +400,38 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 out[O_PNL] = cash
                 out[O_MFE] = mfe
                 return
+            lx = -np.inf                              # FWM M6 장중 하방 선 — 선 = max(반등 실패 기준, 추적선), 손절선보다 높을 때만
+            why_x = -1
+            if ix:
+                if fx > 0 and hh < e + 2.0 * R:
+                    ref = prevl if fx == 1 else low_d
+                    if ref == ref and ref > lx:
+                        lx = ref
+                        why_x = R_FAILX
+                if (j >= 1) if from_entry else partial:
+                    tl = np.nan
+                    if trail == TRAIL_CHAND:
+                        a = ATR[ci, t - 1]
+                        k_use = kk * 0.5 if (tight_j >= 0 and j > tight_j) else kk
+                        if a == a:
+                            tl = hh - k_use * a
+                    else:
+                        tl = MA20[ci, t - 1] if trail == TRAIL_MA20 else MA50[ci, t - 1]
+                    if tl == tl and tl > lx:
+                        lx = tl
+                        why_x = R_TRAIL
+                if not (why_x >= 0 and lx > intra):
+                    why_x = -1
+                if why_x >= 0 and op <= lx:           # 시가가 이미 선 아래 — 시가 전량(리뷰 FWM M3: 추가 전에 판다)
+                    px_ = _sellp(op, ks, stick, t, mkt, reform)
+                    cash += (sb + sa) * px_
+                    out[O_REASON] = why_x
+                    out[O_X] = t
+                    out[O_FIN] = px_
+                    out[O_EXIT_OPEN] = 1
+                    out[O_PNL] = cash
+                    out[O_MFE] = mfe
+                    return
             al = max(e, line)                         # 추가분 손절선 = max(본전, 그날 손절선)
             if add_state == 1:                        # 6. 시가 추가 — 시가 정보만(C1)
                 if op > al:
@@ -391,6 +444,24 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     out[O_ADDED] = 1
                 else:
                     add_state = 3
+            if smx == smx and add_state == 2:         # 리뷰 FWM M2: 추가분 손절 = max(본전, 손절선, 추가가 × (1 − 상한))
+                al = max(al, out[O_PA] * (1.0 - smx))
+            if smx == smx and add_state == 2 and (L[ci, t] <= al or op <= al) and al >= intra and (why_x < 0 or al >= lx):
+                pxs = _sellp(min(op, al), ks, stick, t, mkt, reform)   # 리뷰 FWM S1: 내려가는 길에 더 높은 추가분 선을 먼저 지난다
+                cash += sa * pxs
+                sa = 0.0
+                add_state = 3
+                out[O_TS] = t
+                out[O_PXS] = pxs
+            if why_x >= 0 and L[ci, t] <= lx:         # FWM M6 장중 — 손절선 위의 선을 먼저 지난다(내려가는 길)
+                px_ = _sellp(lx, ks, stick, t, mkt, reform)
+                cash += (sb + sa) * px_
+                out[O_REASON] = why_x
+                out[O_X] = t
+                out[O_FIN] = px_
+                out[O_PNL] = cash
+                out[O_MFE] = mfe
+                return
             if L[ci, t] <= intra:                     # 장중 선 — 전량(그날 산 추가분 포함)
                 px_ = _sellp(intra, ks, stick, t, mkt, reform)
                 cash += (sb + sa) * px_
@@ -426,6 +497,21 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     out[O_PNL] = cash
                     out[O_MFE] = mfe
                     return
+        if ix and climax and j >= 1:                  # FWM M6 장중 클라이맥스 매도: 가격 ≥ max(+kR, min(전일 종가 × (1+당일), 5일 전 종가 × (1+5일)))
+            c5_ = C[ci, t - 5] if t >= 5 else np.nan
+            lv1 = prevc * (1.0 + c_day) if prevc == prevc and prevc > 0 else np.inf
+            lv5 = c5_ * (1.0 + c_5d) if c5_ == c5_ and c5_ > 0 else np.inf
+            pst = max(c_lvl, min(lv1, lv5))
+            if pst < 1e300 and H[ci, t] >= pst:       # 하방 선은 위에서 먼저 처리(같은 날 순서 모름 → 보수)
+                p_ = (op if op >= pst else pst) * kx
+                cash += (sb + sa) * p_
+                out[O_REASON] = R_CLIMAX
+                out[O_X] = t
+                out[O_FIN] = p_
+                out[O_EXIT_OPEN] = 1 if op >= pst else 0
+                out[O_PNL] = cash
+                out[O_MFE] = mfe
+                return
         if be_trig < 0 and (H[ci, t] >= be_level or op >= be_level):
             be_trig = j
         if add_state == 0 and pyr > 0 and j >= 1:
@@ -461,17 +547,17 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     pending = R_FB
             else:
                 fb_run = 0
-        if pending < 0 and fx > 0 and j >= 1 and hh < e + 2.0 * R:          # 정정 6 반등 실패(2R 전)
+        if pending < 0 and fx > 0 and j >= 1 and hh < e + 2.0 * R and not ix:   # 정정 6 반등 실패(2R 전) — 장중 모드는 위에서
             ref = prevl if fx == 1 else low_d
             if ref == ref and ct < ref:
                 pending = R_FAILX
-        if pending < 0 and climax and j >= 1 and ct >= c_lvl:      # 11. 클라이맥스(정정 4): 당일 ∨ 5일 급등 ∧ +kR
+        if pending < 0 and climax and j >= 1 and ct >= c_lvl and not ix:   # 11. 클라이맥스(정정 4): 당일 ∨ 5일 급등 ∧ +kR
             up1 = ct / prevc - 1.0 if prevc == prevc and prevc > 0 else np.nan
             c5 = C[ci, t - 5] if t >= 5 else np.nan
             up5 = ct / c5 - 1.0 if c5 == c5 and c5 > 0 else np.nan
             if (up1 == up1 and up1 >= c_day) or (up5 == up5 and up5 >= c_5d):
                 pending = R_CLIMAX
-        act = (j >= 1) if from_entry else partial     # 8. 추적
+        act = ((j >= 1) if from_entry else partial) and not ix   # 8. 추적(장중 모드는 위에서)
         if act and pending < 0:
             if trail == TRAIL_CHAND:
                 a = ATR[ci, t - 1] if t >= 1 else np.nan
@@ -710,6 +796,8 @@ def _portfolio_py(cd, cci, ce, csp, cfb, ch0, cu, csu, cE, ciE, csl, cbuf, camb,
                 if not (sr == sr and sr > 0 and sr < e) or (e - sr) / e > LINE_RE_CAP:
                     continue
                 sp = sr
+                if px[X_SMAX] == px[X_SMAX] and (e - sp) / e > px[X_SMAX]:
+                    sp = e * (1.0 - px[X_SMAX])
                 if (e - sp) / e < px[X_DFLOOR]:
                     sp = e * (1.0 - px[X_DFLOOR])
                 s0 = e - px[X_STOP_HARD] * (e - sp) if px[X_STOP_CLOSE] > 0.5 else sp
@@ -782,6 +870,8 @@ def _portfolio_py(cd, cci, ce, csp, cfb, ch0, cu, csu, cE, ciE, csl, cbuf, camb,
                 continue
             e = f * (1.0 + px[X_SLIP])
             sp = sr
+            if px[X_SMAX] == px[X_SMAX] and (e - sp) / e > px[X_SMAX]:
+                sp = e * (1.0 - px[X_SMAX])
             if (e - sp) / e < px[X_DFLOOR]:
                 sp = e * (1.0 - px[X_DFLOOR])
             s0 = e - px[X_STOP_HARD] * (e - sp) if px[X_STOP_CLOSE] > 0.5 else sp
