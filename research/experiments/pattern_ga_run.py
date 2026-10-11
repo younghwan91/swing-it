@@ -398,7 +398,7 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_CEILKIND] = 1.0 if g["ceil_kind"] == "resist" else 0.0
     gv[PF.G_EQ] = 1.0 if FWM else 0.0                # FWM M1: EPS 전년 같은 분기 대비 상승(흑자) 필수(정정 FWM-1 M9)
     gv[PF.G_SMAX] = STOP_MAX if FWM else np.nan       # FWM M2
-    gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200").index(g.get("mkt") or "off")   # FWM M7
+    gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200", "nhnl_br200").index(g.get("mkt") or "off")   # FWM M7 · 5세대 nhnl_br200
     gv[PF.G_SPOL] = 1.0 if g.get("stop_policy") == "skip" else 0.0                 # 진화 1세대
     gv[PF.G_ATRMAX] = np.nan if g.get("atr_max") is None else float(g["atr_max"])   # 진화 3세대 후보
     gv[PF.G_ENTQ] = float(g.get("entry_q") or 0)                                      # 3세대

@@ -305,3 +305,12 @@ def test_gen4_lock_on_close_not_wick():
     o3 = _run(_book(rows), _px(X_BE_R=1.0, X_SAFE=3.0), e=100.0, sp=95.0)
     assert int(o2[PF.O_X]) == 2                                                       # 3세대: 윗꼬리로 잠금 → 행 2 저가 104 ≤ 105
     assert int(o3[PF.O_X]) != 2                                                       # 4세대: 종가 106 < 115 → 잠금 없음
+
+
+def test_gen5_market_both():
+    F = _event()
+    fi = PE.FI
+    F[0, fi["mkt_nhnl"]], F[0, fi["mkt_br200"]] = 0.6, 0.45
+    assert _filter(F, _gv(G_MKT=1))[0] == 1 and _filter(F, _gv(G_MKT=4))[0] == 0
+    F[0, fi["mkt_br200"]] = 0.55
+    assert _filter(F, _gv(G_MKT=4))[0] == 1

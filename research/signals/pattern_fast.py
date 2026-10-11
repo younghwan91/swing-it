@@ -174,6 +174,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
             continue
         if mkt == 3 and not F[k, F_MBR200] > 0.5:                                # MA200 위 종목 > 절반(리뷰 FWM M6: 지수 대용 편향 대신)
             continue
+        if mkt == 4 and not (F[k, F_MNH] > MKT_NHNL_MIN and F[k, F_MBR200] > 0.5):   # 5세대: 신고가 > 신저가 ∧ MA200 위 종목 > 절반
+            continue
         if rs_min == rs_min and not F[k, F_RS] >= rs_min:
             continue
         if br_min == br_min and not F[k, F_BR] >= br_min:
