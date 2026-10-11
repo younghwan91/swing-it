@@ -2698,10 +2698,15 @@ def chart_points(E: Engine, t: pd.DataFrame, cfgs: "list[dict]") -> list:
     F = np.asarray(E.F_orig)
     for i in sorted(pick):
         r = t.iloc[i]
-        th, cw, bn = PE.table_key(int(r["table"]))
         ci, d = int(r["ci"]), int(r["d_row"])
-        pt = PE.pattern_points(np.asarray(E.H), np.asarray(E.L), np.asarray(E.C), ci, d - 1, th, cw)
-        lo = max(0, (pt.get("i0", d) if pt.get("i0", -1) >= 0 else d) - 20)
+        if int(r["table"]) >= PE.N_TABLES:            # 13세대 가족 사건(P·C) — 쐐기 반전점 없음, 신호 전 60봉
+            th, cw, bn = None, None, str(r.get("fam", "P"))
+            pt = {}
+            lo = max(0, d - 60)
+        else:
+            th, cw, bn = PE.table_key(int(r["table"]))
+            pt = PE.pattern_points(np.asarray(E.H), np.asarray(E.L), np.asarray(E.C), ci, d - 1, th, cw)
+            lo = max(0, (pt.get("i0", d) if pt.get("i0", -1) >= 0 else d) - 20)
         hi = min(len(E.days) - 1, int(E.end_row), int(r["x_row"]) + 10)   # 검증 MUST-FIX 5: 봉인(잘린 end_row) 너머 봉을 그리지 않는다
 
         def dd(row):
