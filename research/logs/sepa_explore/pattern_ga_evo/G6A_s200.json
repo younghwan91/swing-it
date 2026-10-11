@@ -1,0 +1,373 @@
+{
+ "variant": "fwm",
+ "menu": {
+  "nom": {
+   "pyramid": [
+    "off",
+    "1r",
+    "newhigh",
+    "upper"
+   ],
+   "entry": [
+    "bottom"
+   ],
+   "stage": [
+    4,
+    5
+   ],
+   "mkt": [
+    "nhnl"
+   ]
+  },
+  "disc": {
+   "theta": [
+    0.05,
+    0.06
+   ],
+   "h0_in_pattern": [
+    1
+   ],
+   "ceil_kind": [
+    "single"
+   ],
+   "trail_start": [
+    1,
+    2
+   ],
+   "trail_basis": [
+    "intraday",
+    "close"
+   ],
+   "stop_policy": [
+    "clamp",
+    "skip"
+   ],
+   "be_r": [
+    1.0,
+    2.0
+   ],
+   "be_basis": [
+    "high",
+    "close"
+   ],
+   "exit_safe": [
+    3
+   ],
+   "climax": [
+    1
+   ],
+   "reentry": [
+    "off"
+   ],
+   "entry_q": [
+    1
+   ]
+  },
+  "cont": {
+   "fw_lo": [
+    -0.15,
+    0.0
+   ],
+   "atr_max": [
+    0.02,
+    0.04,
+    null
+   ],
+   "runup_min": [
+    0.2,
+    0.6,
+    null
+   ],
+   "dry_max": [
+    0.4,
+    1.0,
+    null
+   ]
+  }
+ },
+ "candidate": "G6A_s200",
+ "folds": [
+  0,
+  1,
+  2,
+  3
+ ],
+ "seeds": [
+  200,
+  201,
+  202,
+  203,
+  204,
+  205,
+  206,
+  207,
+  208,
+  209
+ ],
+ "budget": 10000,
+ "git_head": "0104b0b7bc5609978a408afac00775d0d1262294",
+ "metrics": {
+  "ann": 0.005246488228556679,
+  "fold_ann": [
+   -0.004253167285727947,
+   0.02523912019995466,
+   0.0,
+   0.0
+  ],
+  "fold_n": [
+   1,
+   3,
+   0,
+   0
+  ],
+  "n": 4,
+  "expo": 0.002738665482981707,
+  "c1": {
+   "win": 0.5,
+   "mean": 0.06072949976389999,
+   "gl": 7.550553828632019
+  },
+  "c2": {
+   "win": 0.5,
+   "mean": 0.056987833097233334,
+   "gl": 6.282735099660107
+  },
+  "reasons": {
+   "fail_exit": 2,
+   "trail": 1,
+   "climax": 1
+  },
+  "loss55": 0,
+  "cfgs": [
+   {
+    "rs_min": 80.8357,
+    "breadth_min": 0.1499,
+    "sup_c": -0.1117,
+    "sup_hw": 1.2887,
+    "slo_c": -0.3757,
+    "slo_hw": 1.3233,
+    "rho_max": 1.2589,
+    "span_c": 3.2268,
+    "span_hw": 1.1601,
+    "ceil_min": 0.8438,
+    "depth_max": 0.4463,
+    "dry_max": 0.8889,
+    "runup_min": 0.2351,
+    "rest_gap_max": 12.8202,
+    "gap_max": 0.016,
+    "stop_cap": 0.1783,
+    "fb_tol": null,
+    "trail_k": 3.5923,
+    "stop_buf": 0.7269,
+    "stop_hard": null,
+    "climax_day": 0.1992,
+    "climax_5d": 0.3212,
+    "climax_r": 2.7123,
+    "fw_lo": -0.0156,
+    "atr_max": 0.0395,
+    "stage": 4,
+    "entry": "bottom",
+    "trail": "chand",
+    "pyramid": "1r",
+    "mkt": "nhnl",
+    "ceil_win": 60,
+    "theta": 0.05,
+    "runup_win": 60,
+    "touch_lo": 2,
+    "e_min": 0.25,
+    "e_accel": 1,
+    "stop_anchor": null,
+    "fb_days": null,
+    "be_r": 1.0,
+    "take_r": 4.0,
+    "take_frac": 0.3333333333333333,
+    "tighten": 0,
+    "ceil_kind": "single",
+    "h0_in_pattern": 1,
+    "climax": 1,
+    "stop_basis": "intraday",
+    "fail_exit": "prev_low",
+    "reentry": "off",
+    "reentry_win": null,
+    "trail_start": 1,
+    "trail_basis": "close",
+    "stop_policy": "clamp",
+    "exit_safe": 3,
+    "be_basis": "high",
+    "entry_q": 1
+   },
+   {
+    "rs_min": 74.3839,
+    "breadth_min": 0.0868,
+    "sup_c": 0.0461,
+    "sup_hw": 1.2393,
+    "slo_c": -0.7129,
+    "slo_hw": 1.3889,
+    "rho_max": 1.2942,
+    "span_c": 3.1546,
+    "span_hw": 0.9371,
+    "ceil_min": 0.7523,
+    "depth_max": 0.4174,
+    "dry_max": 0.9488,
+    "runup_min": 0.2526,
+    "rest_gap_max": 115.7028,
+    "gap_max": 0.0245,
+    "stop_cap": 0.126,
+    "fb_tol": null,
+    "trail_k": null,
+    "stop_buf": 0.0479,
+    "stop_hard": null,
+    "climax_day": 0.1557,
+    "climax_5d": 0.3811,
+    "climax_r": 3.4624,
+    "fw_lo": -0.0177,
+    "atr_max": 0.0393,
+    "stage": 4,
+    "entry": "bottom",
+    "trail": "ma20",
+    "pyramid": "newhigh",
+    "mkt": "nhnl",
+    "ceil_win": 60,
+    "theta": 0.05,
+    "runup_win": 60,
+    "touch_lo": 2,
+    "e_min": 0.25,
+    "e_accel": 0,
+    "stop_anchor": null,
+    "fb_days": null,
+    "be_r": 1.0,
+    "take_r": Infinity,
+    "take_frac": null,
+    "tighten": null,
+    "ceil_kind": "single",
+    "h0_in_pattern": 1,
+    "climax": 1,
+    "stop_basis": "intraday",
+    "fail_exit": "entry_low",
+    "reentry": "off",
+    "reentry_win": null,
+    "trail_start": 1,
+    "trail_basis": "intraday",
+    "stop_policy": "clamp",
+    "exit_safe": 3,
+    "be_basis": "close",
+    "entry_q": 1
+   },
+   {
+    "rs_min": 71.1951,
+    "breadth_min": 0.0838,
+    "sup_c": -0.7532,
+    "sup_hw": 0.8133,
+    "slo_c": 0.1022,
+    "slo_hw": 1.4494,
+    "rho_max": 0.9804,
+    "span_c": 2.005,
+    "span_hw": 1.046,
+    "ceil_min": 0.8182,
+    "depth_max": 0.4135,
+    "dry_max": 0.9319,
+    "runup_min": 0.2588,
+    "rest_gap_max": 11.0368,
+    "gap_max": 0.0319,
+    "stop_cap": 0.1756,
+    "fb_tol": null,
+    "trail_k": null,
+    "stop_buf": 0.5774,
+    "stop_hard": null,
+    "climax_day": 0.2147,
+    "climax_5d": 0.4133,
+    "climax_r": 3.2849,
+    "fw_lo": -0.1444,
+    "atr_max": 0.04,
+    "stage": 5,
+    "entry": "bottom",
+    "trail": "ma20",
+    "pyramid": "upper",
+    "mkt": "nhnl",
+    "ceil_win": 60,
+    "theta": 0.05,
+    "runup_win": 60,
+    "touch_lo": 2,
+    "e_min": null,
+    "e_accel": null,
+    "stop_anchor": null,
+    "fb_days": null,
+    "be_r": 1.0,
+    "take_r": 4.0,
+    "take_frac": 0.5,
+    "tighten": null,
+    "ceil_kind": "single",
+    "h0_in_pattern": 1,
+    "climax": 1,
+    "stop_basis": "intraday",
+    "fail_exit": "entry_low",
+    "reentry": "off",
+    "reentry_win": null,
+    "trail_start": 1,
+    "trail_basis": "intraday",
+    "stop_policy": "clamp",
+    "exit_safe": 3,
+    "be_basis": "high",
+    "entry_q": 1
+   },
+   {
+    "rs_min": 71.0358,
+    "breadth_min": 0.1302,
+    "sup_c": -0.4854,
+    "sup_hw": 0.5633,
+    "slo_c": 0.248,
+    "slo_hw": 1.305,
+    "rho_max": 1.0974,
+    "span_c": 2.1945,
+    "span_hw": 1.2858,
+    "ceil_min": 0.7498,
+    "depth_max": 0.2543,
+    "dry_max": 0.9357,
+    "runup_min": 0.2181,
+    "rest_gap_max": 40.2227,
+    "gap_max": 0.0294,
+    "stop_cap": 0.1014,
+    "fb_tol": null,
+    "trail_k": null,
+    "stop_buf": null,
+    "stop_hard": null,
+    "climax_day": 0.2171,
+    "climax_5d": 0.2899,
+    "climax_r": 3.1497,
+    "fw_lo": -0.0197,
+    "atr_max": 0.04,
+    "stage": 4,
+    "entry": "bottom",
+    "trail": "ma50",
+    "pyramid": "upper",
+    "mkt": "nhnl",
+    "ceil_win": 60,
+    "theta": 0.05,
+    "runup_win": 60,
+    "touch_lo": 2,
+    "e_min": null,
+    "e_accel": null,
+    "stop_anchor": null,
+    "fb_days": null,
+    "be_r": 1.0,
+    "take_r": 4.0,
+    "take_frac": 0.3333333333333333,
+    "tighten": null,
+    "ceil_kind": "single",
+    "h0_in_pattern": 1,
+    "climax": 1,
+    "stop_basis": "intraday",
+    "fail_exit": "entry_low",
+    "reentry": "off",
+    "reentry_win": null,
+    "trail_start": 1,
+    "trail_basis": "close",
+    "stop_policy": "clamp",
+    "exit_safe": 3,
+    "be_basis": "high",
+    "entry_q": 1
+   }
+  ]
+ },
+ "sec": 739.2843577861786
+}
