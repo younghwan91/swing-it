@@ -85,8 +85,11 @@ MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신�
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
- X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE, X_PYR_CLOSE) = range(41)
-N_X = 41                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+ X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE, X_PYR_CLOSE,
+ X_ENTRY_CLOSE, X_ON_HOLD) = range(43)
+#: 13세대(EVENT_FAMILIES.md): X_ENTRY_CLOSE = 진입 행 d 종가 매수(d 장중 처리 없음 · 최고가 시작 = e · 진입일 대조 0),
+#: X_ON_HOLD = 종가 진입 뒤 첫 거래일 시가 < e × (1 + 값)이면 시가 전량(오버나이트; ∞ = 늘 시가, NaN = 끔)
+N_X = 43                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -105,7 +108,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0, 0, np.nan])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -389,8 +392,11 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     fb_run = 0
     last = 0
     add_state = 0                                     # 0 없음 · 1 다음날 시가 대기 · 2 보유 · 3 끝(손절·취소)
-    hh = H[ci, d]
-    mfe = H[ci, d]
+    ec = px[X_ENTRY_CLOSE] > 0.5                      # 13세대: 종가 진입(오버나이트 가족)
+    onh = px[X_ON_HOLD]
+    first_after = ec
+    hh = e if ec else H[ci, d]
+    mfe = e if ec else H[ci, d]
     tight_j = -1
     prevc = np.nan
     for j in range(horizon + 1):
@@ -398,6 +404,10 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
         if not TR[ci, t]:
             continue
         last = j
+        if ec and j == 0:                             # 13세대: 종가에 샀다 — 그날 장중·종가 판단 없음(검증 15차: 전일 값은 s 봉)
+            prevc = C[ci, t]
+            prevl = L[ci, t]
+            continue
         op = Op[ci, t]
         if pending >= 0:                              # 1. 전날 결정 → 시가 전량
             px_ = _sellp(op, ks, stick, t, mkt, reform) if (pending == R_STOP or pending == R_BE) else op * kx
@@ -459,6 +469,18 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 out[O_PNL] = cash
                 out[O_MFE] = mfe
                 return
+            if first_after:                           # 13세대 오버나이트: 다음 거래일 시가가 e × (1 + onh) 미만이면 시가 전량
+                first_after = False
+                if onh == onh and op < e * (1.0 + onh):
+                    px_ = op * kx
+                    cash += (sb + sa) * px_
+                    out[O_REASON] = R_TIME
+                    out[O_X] = t
+                    out[O_FIN] = px_
+                    out[O_EXIT_OPEN] = 1
+                    out[O_PNL] = cash
+                    out[O_MFE] = mfe
+                    return
             lx = -np.inf                              # FWM M6 장중 하방 선 — 선 = max(반등 실패 기준, 추적선), 손절선보다 높을 때만
             why_x = -1
             if ix:
@@ -777,6 +799,8 @@ def _open_py(q, t, ci, e, sp, fb, h0, u, su, lE, liE, lsl, lbuf, amb, skip0, s0,
     r[Q_PXS] = out[O_PXS]
     r[Q_S0] = s0
     r[Q_RE] = is_re
+    if px[X_ENTRY_CLOSE] > 0.5:                       # 13세대: 종가 진입 — 진입일 대조 기여 없음
+        return 0.0, False
     b, emp = basket(bs, bn, strat_cs, Op, C, 1, t, k, ci)
     return wb * alloc / eq_prev * b, emp
 
