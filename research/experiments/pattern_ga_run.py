@@ -336,13 +336,16 @@ def x0_feasible() -> np.ndarray:
         j = len(CONT)
         for name, levels in NOM:
             want = {"stage": 3, "entry": "bottom"}.get(name)
+            if want is not None and want not in levels:   # 진화 메뉴 덮어쓰기: 가장 느슨한 수준이 빠졌으면 첫 수준(stage 4 등)
+                want = levels[0]
             if want is not None:
                 x[j:j + len(levels)] = 0.0
                 x[j + levels.index(want)] = 1.0
             j += len(levels)
         for q, (name, levels) in enumerate(DISC):
             if name in ("theta", "ceil_win"):
-                x[N_CONT + q] = float(levels.index({"theta": 0.08, "ceil_win": 120}[name]))
+                w_ = {"theta": 0.08, "ceil_win": 120}[name]
+                x[N_CONT + q] = float(levels.index(w_) if w_ in levels else 0)
     return x
 
 
