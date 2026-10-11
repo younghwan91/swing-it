@@ -287,3 +287,12 @@ def test_gen3_entry_quality_gene():
     F[0, PE.FI["h0_wick"]] = 0.7
     assert _filter(F, _gv(G_ENTQ=1.0))[0] == 0
     assert _filter(F, _gv())[0] == 1
+
+
+def test_gen3_avg_floor_survives_addon_sale():
+    """검증 MUST-FIX 4 재현: 추가분이 추가가 −5% 에서 먼저 팔려도 첫 단위는 평단에서 나간다(순손익 ≥ 0)."""
+    rows = [(100, 101, 99.5, 100.5), (101, 106, 100.8, 105.5), (110, 111, 108, 109), (108, 108.5, 104, 105), (104, 104.5, 99, 100)]
+    rows += [(100, 101, 99, 100)] * 4
+    o1 = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=1.0, X_SMAX=0.05, X_INTRA=1.0), e=100.0, sp=95.0)
+    o2 = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=2.0, X_SMAX=0.05, X_INTRA=1.0), e=100.0, sp=95.0)
+    assert o2[PF.O_ADDED] == 1 and o2[PF.O_PNL] > o1[PF.O_PNL] and o2[PF.O_PNL] >= -0.002

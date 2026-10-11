@@ -323,6 +323,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     safe = px[X_SAFE] > 0.5                           # 진화 2세대(검증 차트): 추적선은 진입 뒤 종가가 그 위에 선 뒤부터 · 불타기는 본전 확보 뒤·갭 급등 시가 금지
     be_close = px[X_BE_CLOSE] > 0.5                   # 진화 2세대: 본전 이동 발동을 종가 기준으로(장중 고가 터치 털림 방지)
     armed = False
+    avg_floor = -np.inf
     ix = px[X_INTRA] > 0.5                            # FWM M6(사용자 "알고리즘 매매라 장중에도 판다"): 반등 실패·추적·클라이맥스를
     #                                                   전날까지 정보로 정한 선에 걸어 두고 장중에 닿으면 그 선(시가가 넘으면 시가)에 판다
     fb_days = int(px[X_FB_DAYS])
@@ -397,11 +398,9 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             if be_trig >= 0 and j > be_trig and be_stop > line:
                 line = be_stop
                 why = R_BE
-            if safe2 and add_state == 2 and sa > 0:   # 3세대: 불타기 뒤 전체 손절 ≥ 평단(주식수 가중)
-                avgc = (sb * e + sa * out[O_PA]) / (sb + sa)
-                if avgc > line:
-                    line = avgc
-                    why = R_BE
+            if safe2 and avg_floor > line:            # 3세대: 불타기 뒤 전체 손절 ≥ 평단 — 추가분이 먼저 팔려도 유지(검증 MUST-FIX 4)
+                line = avg_floor
+                why = R_BE
             if safe2 and hh >= e + 3.0 * R and e + R > line:   # 3세대: +3R(전날까지 고가) 뒤 손절 ≥ 진입가 + 1R(이익 잠금)
                 line = e + R
                 why = R_TRAIL
@@ -464,6 +463,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 if op > al and not (safe and prevc == prevc and op > prevc * 1.05):
                     pa = op * (1.0 + slip)
                     sa = wa / pa
+                    if safe2:                         # 추가 체결 때 평단(주식수 가중)을 한 번 고정
+                        avg_floor = (sb * e + sa * pa) / (sb + sa)
                     cash -= wa
                     add_state = 2
                     out[O_TA] = t

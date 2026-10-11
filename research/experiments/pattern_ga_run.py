@@ -1203,9 +1203,10 @@ def write_cache(cache: str, arrs: dict, meta: dict) -> None:
 def code_hash() -> str:
     """사건 표·평가 커널 소스 해시(2단계 MINOR 11) — 캐시 meta 와 대조해 낡은 표로 돌지 않게."""
     h = hashlib.sha256()
-    for mod in (PE, PF):
-        with open(mod.__file__, "rb") as fh:
-            h.update(fh.read())
+    with open(PE.__file__, "rb") as fh:               # 가속(2026-10-11): 캐시 내용은 사건 표(PE)와 캐시 빌더만 정한다 —
+        h.update(fh.read())                           # 평가 커널(PF) 수정으로 캐시를 다시 만들지 않는다
+    import inspect  # noqa: PLC0415
+    h.update(inspect.getsource(build_cache).encode())
     return h.hexdigest()[:16]
 
 
@@ -1922,11 +1923,14 @@ def run_evolve(args) -> int:
     out = os.path.join(args.out, EVO_SUB)
     os.makedirs(out, exist_ok=True)
     head = run_provenance(args.cache).get("git_head", "")
-    off = int(os.environ.get("PATTERN_GA_SEED_OFFSET", "0"))      # 잡음 폭 측정: 같은 메뉴를 다른 시드 집합으로
-    evo_seeds = tuple(s + off for s in SEEDS)
-    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": args.evolve, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
-            "budget": BUDGET, "git_head": head}
-    record_trial(EVO_LABEL, {**base, "role": "진화 후보(결과 전)"}, logs_dir=args.out, note=f"패턴 GA 진화 후보 {args.evolve}")
+    offs_env = os.environ.get("PATTERN_GA_SEED_OFFSETS", "")       # 가속: 시드 집합 여럿을 한 프로세스에서(작업자·JIT·재시작 풀 한 번)
+    offs = [int(x) for x in offs_env.split(",") if x.strip()] if offs_env else [int(os.environ.get("PATTERN_GA_SEED_OFFSET", "0"))]
+    names = {o: (f"{args.evolve}_s{o}" if offs_env else args.evolve) for o in offs}
+    all_seeds = {o: tuple(s + o for s in SEEDS) for o in offs}
+    for o in offs:
+        record_trial(EVO_LABEL, {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": names[o], "folds": list(EVO_FOLDS),
+                                 "seeds": list(all_seeds[o]), "budget": BUDGET, "git_head": head, "role": "진화 후보(결과 전)"},
+                     logs_dir=args.out, note=f"패턴 GA 진화 후보 {names[o]}")
     ctx = mp.get_context("spawn")
     r_chunks = max(1, math.ceil(RESTART_SCREEN / SCREEN_CHUNK))
     res = {}
@@ -1940,22 +1944,33 @@ def run_evolve(args) -> int:
         # 검증 MUST-FIX 2: 끝난 순서가 아니라 덩어리 번호 순서로 쌓는다(전체 러너와 같은 결정성)
         rx = {k: (np.vstack([v[c] for c in sorted(v)]) if v else np.zeros((0, DIM))) for k, v in rx.items()}
         _log("재시작 풀: " + " · ".join(f"폴드{k + 1} {len(v)}" for k, v in rx.items()), t0)
-        futs = [ex.submit(ga_task, {"fold": k, "seed": s, "budget": BUDGET, "x_restart": rx[k]}) for k in range(len(wins)) for s in evo_seeds]
+        seed_list = sorted({s for o in offs for s in all_seeds[o]})
+        futs = [ex.submit(ga_task, {"fold": k, "seed": s, "budget": BUDGET, "x_restart": rx[k]}) for k in range(len(wins)) for s in seed_list]
         for i, f in enumerate(cf.as_completed(futs), 1):
             r = f.result()
             res[(r["fold"], r["seed"])] = r
-            if i % 10 == 0:
+            if i % 20 == 0:
                 _log(f"진화 {args.evolve} 런 {i}/{len(futs)}", t0)
-    bests = [[res[(k, s)]["best"] for s in evo_seeds] for k in range(len(wins))]
-    pr = procedure(E, wins, bests)
-    cfgs = pr["cfgs"]
     # 검증 에이전트 MUST-FIX 1: 봉인 — 마지막 설계 선택 폴드 시험 끝(2024-01-01)에서 가격 경로·포트폴리오를 자른다(열린 포지션은 직전 종가 시가평가)
+    # 절차(시드 최적 재평가)는 학습창에서만 평가하므로 봉인 자르기 전에 모두 끝낸다.
+    prs = {o: procedure(E, wins, [[res[(k, s)]["best"] for s in all_seeds[o]] for k in range(len(wins))]) for o in offs}
     f_last = FOLDS[EVO_FOLDS[-1]]
     seal = E.row(f_last.test_hi)
     E.LIM = np.minimum(np.asarray(E.LIM), seal).astype(np.int64)
     E.end_row = seal - 1
     tests = [te for _, te in wins]
     tests[-1] = Win(E, f_last.test_lo, f_last.test_hi, f_last.test_hi)
+    for o in offs:
+        _evolve_write(E, prs[o]["cfgs"], tests, seal, out, args, names[o], all_seeds[o], head, t0)
+    return 0
+
+
+def _evolve_write(E, cfgs, tests, seal, out, args, name, evo_seeds, head, t0) -> None:
+    """진화 후보 하나(시드 집합 하나)의 폴드 1~4 이어 붙인 OOS 숫자·거래 → ``<name>.json``·``<name>_trades.csv``·원장."""
+    from swing_it.diagnostics.trials import record_trial  # noqa: PLC0415
+
+    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": name, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
+            "budget": BUDGET, "git_head": head}
     st = E.stitched(cfgs, tests)
     if len(st["rec"]) and int(np.max(st["rec"][:, PF.Q_X])) >= seal:
         raise SystemExit("봉인 위반: 청산 행이 봉인 경계를 넘는다")
@@ -1971,13 +1986,12 @@ def run_evolve(args) -> int:
         met["reasons"] = t["exit_reason"].value_counts().to_dict()
         met["loss55"] = int((pmix_net(t, p) < -0.055).sum())          # 검증 MINOR 2: 거래 순손익(추가분 포함) 기준
     met["cfgs"] = cfgs                                                  # 검증 MINOR 1: 원래 값(∞ 는 JSON Infinity)
-    with open(os.path.join(out, f"{args.evolve}.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(out, f"{name}.json"), "w", encoding="utf-8") as fh:
         json.dump({**base, "metrics": met, "sec": time.time() - t0}, fh, ensure_ascii=False, indent=1, default=float)
-    t.to_csv(os.path.join(out, f"{args.evolve}_trades.csv"), index=False)
+    t.to_csv(os.path.join(out, f"{name}_trades.csv"), index=False)
     record_trial(EVO_LABEL, {**base, "role": "진화 후보 결과", "ann": met["ann"], "n": met["n"]}, logs_dir=args.out,
-                 note=f"패턴 GA 진화 후보 {args.evolve} 결과")
-    _log(f"진화 {args.evolve} 끝 — 폴드 1~4 연환산 {met['ann']:+.2%} · 체결 {met['n']}", t0)
-    return 0
+                 note=f"패턴 GA 진화 후보 {name} 결과")
+    _log(f"진화 {name} 끝 — 폴드 1~4 연환산 {met['ann']:+.2%} · 체결 {met['n']}", t0)
 
 
 def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_b, n_rs, n_ec, pool_n, debug, t0,
