@@ -182,7 +182,8 @@ if MENU_OVERRIDE:
         return math.inf if v == "inf" else v
     _no, _do, _co = MENU_OVERRIDE.get("nom", {}), MENU_OVERRIDE.get("disc", {}), MENU_OVERRIDE.get("cont", {})
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
-    EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",)}
+    EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
+                 "exit_safe": (0,), "be_basis": ("high",)}             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, v) for n, v in EVO_GENES.items() if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, tuple(_lv(x) for x in _do[n]) if n in _do else v) for n, v in DISC)
@@ -195,7 +196,8 @@ N_CONT = len(CONT) + N_LOGIT
 DISC_SIZES = tuple(len(v) for _, v in DISC)
 DIM = N_CONT + len(DISC)
 GENE_NAMES = tuple(n for n, *_ in CONT) + tuple(n for n, _ in NOM) + tuple(n for n, _ in DISC)
-STAGE_NAMES = ("MA 정렬만", "+ 종가 > MA50", "추세 템플릿 전부(d−1)", "H0 일 TT ∧ d−1 MA 정렬", "H0 일 TT ∧ d−1 종가 > MA50")
+STAGE_NAMES = ("MA 정렬만", "+ 종가 > MA50", "추세 템플릿 전부(d−1)", "H0 일 TT ∧ d−1 MA 정렬", "H0 일 TT ∧ d−1 종가 > MA50",
+               "H0 일 TT ∧ d−1 종가 > MA50 ∧ MA50 상승")
 #: 모양 유전자(M6 모양 비활성 짝·C1-2b 와 같은 묶음 — 정정 3 의 천장 종류·H0 첫 점 포함).
 SHAPE_GENES = ("sup_c", "sup_hw", "slo_c", "slo_hw", "rho_max", "touch_lo", "span_c", "span_hw", "ceil_min", "depth_max",
                "dry_max", "ceil_kind", "h0_in_pattern")
@@ -427,6 +429,8 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_INTRA] = 1.0 if FWM else 0.0            # FWM M6: 장중 청산(알고리즘 매매)
     px[PF.X_TRAIL_START] = float(g.get("trail_start") or 0.0)   # 진화 1세대
     px[PF.X_TRAIL_CLOSE] = 1.0 if g.get("trail_basis") == "close" else 0.0
+    px[PF.X_SAFE] = float(g.get("exit_safe") or 0)                 # 진화 2세대
+    px[PF.X_BE_CLOSE] = 1.0 if g.get("be_basis") == "close" else 0.0
     return px
 
 
@@ -1146,6 +1150,10 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
     F[:, PE.FI["mkt_br200"]] = mg["breadth_ma200"].to_numpy(float)   # 리뷰 FWM M6: 지수 대용(KOSDAQ 편향) 대신 MA200 위 비율
     F[:, PE.FI["mkt_nhnl"]] = mg["nh_nl_ratio"].to_numpy(float)
     F[:, PE.FI["mkt_bos"]] = mg["breakout_success20"].to_numpy(float)
+    m50 = np.asarray(ctx.ma50, float)                              # 진화 2세대: d−1 MA50 > 20 거래일 전(날짜×종목)
+    s20 = np.maximum(s - 20, 0)
+    with np.errstate(invalid="ignore"):
+        F[:, PE.FI["ma50_up"]] = np.where(np.isfinite(m50[s, ci]) & np.isfinite(m50[s20, ci]), (m50[s, ci] > m50[s20, ci]).astype(float), np.nan)
     end_row = int(days.searchsorted(pd.Timestamp(END_DAY), side="right") - 1)
     LIM = np.minimum(A.CUT, end_row + 1).astype(np.int64)
     strat_cs = T(strat).astype(np.int64)
@@ -1896,7 +1904,9 @@ def run_evolve(args) -> int:
     out = os.path.join(args.out, EVO_SUB)
     os.makedirs(out, exist_ok=True)
     head = run_provenance(args.cache).get("git_head", "")
-    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": args.evolve, "folds": list(EVO_FOLDS), "seeds": len(SEEDS),
+    off = int(os.environ.get("PATTERN_GA_SEED_OFFSET", "0"))      # 잡음 폭 측정: 같은 메뉴를 다른 시드 집합으로
+    evo_seeds = tuple(s + off for s in SEEDS)
+    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": args.evolve, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
             "budget": BUDGET, "git_head": head}
     record_trial(EVO_LABEL, {**base, "role": "진화 후보(결과 전)"}, logs_dir=args.out, note=f"패턴 GA 진화 후보 {args.evolve}")
     ctx = mp.get_context("spawn")
@@ -1905,19 +1915,20 @@ def run_evolve(args) -> int:
     with cf.ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx, initializer=worker_init,
                                 initargs=(args.cache, folds_spec)) as ex:
         sf = [ex.submit(screen_task, {"fold": k, "chunk": c, "n": SCREEN_CHUNK}) for k in range(len(wins)) for c in range(r_chunks)]
-        rx = {k: [] for k in range(len(wins))}
+        rx = {k: {} for k in range(len(wins))}
         for f in cf.as_completed(sf):
             r = f.result()
-            rx[r["fold"]].append(r["X"])
-        rx = {k: (np.vstack(v) if v else np.zeros((0, DIM))) for k, v in rx.items()}
+            rx[r["fold"]][r["chunk"]] = r["X"]
+        # 검증 MUST-FIX 2: 끝난 순서가 아니라 덩어리 번호 순서로 쌓는다(전체 러너와 같은 결정성)
+        rx = {k: (np.vstack([v[c] for c in sorted(v)]) if v else np.zeros((0, DIM))) for k, v in rx.items()}
         _log("재시작 풀: " + " · ".join(f"폴드{k + 1} {len(v)}" for k, v in rx.items()), t0)
-        futs = [ex.submit(ga_task, {"fold": k, "seed": s, "budget": BUDGET, "x_restart": rx[k]}) for k in range(len(wins)) for s in SEEDS]
+        futs = [ex.submit(ga_task, {"fold": k, "seed": s, "budget": BUDGET, "x_restart": rx[k]}) for k in range(len(wins)) for s in evo_seeds]
         for i, f in enumerate(cf.as_completed(futs), 1):
             r = f.result()
             res[(r["fold"], r["seed"])] = r
             if i % 10 == 0:
                 _log(f"진화 {args.evolve} 런 {i}/{len(futs)}", t0)
-    bests = [[res[(k, s)]["best"] for s in SEEDS] for k in range(len(wins))]
+    bests = [[res[(k, s)]["best"] for s in evo_seeds] for k in range(len(wins))]
     pr = procedure(E, wins, bests)
     cfgs = pr["cfgs"]
     # 검증 에이전트 MUST-FIX 1: 봉인 — 마지막 설계 선택 폴드 시험 끝(2024-01-01)에서 가격 경로·포트폴리오를 자른다(열린 포지션은 직전 종가 시가평가)

@@ -84,8 +84,8 @@ MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신�
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
- X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE) = range(36)
-N_X = 36                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+ X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE) = range(38)
+N_X = 38                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -104,7 +104,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -117,6 +117,7 @@ F_RS, F_BR, F_ABOVE50, F_TTS, F_TTH0, F_EYOY, F_EPREV = (FI["rs"], FI["breadth"]
 F_NRES, F_H0IN, F_ATR = FI["n_res"], FI["h0in"], FI["atr_s"]
 F_EQ, F_EQP = FI["e_q"], FI["e_q_prev"]
 F_MBR200, F_MNH, F_MBOS = FI["mkt_br200"], FI["mkt_nhnl"], FI["mkt_bos"]
+F_MA50UP = FI["ma50_up"]
 BASE_BOTTOM = 3
 
 
@@ -155,6 +156,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         if stage == 3 and not F[k, F_TTH0] > 0.5:
             continue
         if stage == 4 and not (F[k, F_TTH0] > 0.5 and F[k, F_ABOVE50] > 0.5):   # FWM M4: H0 일 TT ∧ d−1 종가 > MA50
+            continue
+        if stage == 5 and not (F[k, F_TTH0] > 0.5 and F[k, F_ABOVE50] > 0.5 and F[k, F_MA50UP] > 0.5):   # 2세대: + MA50 상승
             continue
         if eq and not (F[k, F_EQ] > 0.0 and F[k, F_EQ] > F[k, F_EQP]):           # FWM M1: 흑자 ∧ 전년 같은 분기보다 증가
             continue
@@ -309,6 +312,9 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
     t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
     t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
+    safe = px[X_SAFE] > 0.5                           # 진화 2세대(검증 차트): 추적선은 진입 뒤 종가가 그 위에 선 뒤부터 · 불타기는 본전 확보 뒤·갭 급등 시가 금지
+    be_close = px[X_BE_CLOSE] > 0.5                   # 진화 2세대: 본전 이동 발동을 종가 기준으로(장중 고가 터치 털림 방지)
+    armed = False
     ix = px[X_INTRA] > 0.5                            # FWM M6(사용자 "알고리즘 매매라 장중에도 판다"): 반등 실패·추적·클라이맥스를
     #                                                   전날까지 정보로 정한 선에 걸어 두고 장중에 닿으면 그 선(시가가 넘으면 시가)에 판다
     fb_days = int(px[X_FB_DAYS])
@@ -413,7 +419,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     if ref == ref and ref > lx:
                         lx = ref
                         why_x = R_FAILX
-                if ((j >= 1) if from_entry else partial) and hh >= t_start and not t_close:
+                if ((j >= 1) if from_entry else partial) and hh >= t_start and not t_close and (armed or not safe):
                     tl = np.nan
                     if trail == TRAIL_CHAND:
                         a = ATR[ci, t - 1]
@@ -439,7 +445,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     return
             al = max(e, line)                         # 추가분 손절선 = max(본전, 그날 손절선)
             if add_state == 1:                        # 6. 시가 추가 — 시가 정보만(C1)
-                if op > al:
+                if op > al and not (safe and prevc == prevc and op > prevc * 1.05):
                     pa = op * (1.0 + slip)
                     sa = wa / pa
                     cash -= wa
@@ -517,9 +523,9 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 out[O_PNL] = cash
                 out[O_MFE] = mfe
                 return
-        if be_trig < 0 and (H[ci, t] >= be_level or op >= be_level):
+        if be_trig < 0 and ((C[ci, t] >= be_level) if be_close else (H[ci, t] >= be_level or op >= be_level)):
             be_trig = j
-        if add_state == 0 and pyr > 0 and j >= 1:
+        if add_state == 0 and pyr > 0 and j >= 1 and (be_trig >= 0 or not safe):
             if (pyr == PYR_1R and H[ci, t] >= pyr_level) or (pyr == PYR_NEWHIGH and H[ci, t] > h0) or \
                     (pyr == PYR_UPPER and C[ci, t] > u_d * math.exp(su * (t - d))):
                 add_state = 1
@@ -562,7 +568,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             up5 = ct / c5 - 1.0 if c5 == c5 and c5 > 0 else np.nan
             if (up1 == up1 and up1 >= c_day) or (up5 == up5 and up5 >= c_5d):
                 pending = R_CLIMAX
-        act = ((j >= 1) if from_entry else partial) and hh >= t_start and (t_close or not ix)   # 8. 추적(장중 모드는 위에서)
+        act = ((j >= 1) if from_entry else partial) and hh >= t_start and (t_close or not ix) and (armed or not safe)   # 8. 추적
         if act and pending < 0:
             if trail == TRAIL_CHAND:
                 a = ATR[ci, t - 1] if t >= 1 else np.nan
@@ -573,6 +579,13 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 m = MA20[ci, t] if trail == TRAIL_MA20 else MA50[ci, t]
                 if m == m and ct < m:
                     pending = R_TRAIL
+        if safe and not armed:                        # 2세대: 오늘 종가가 오늘 추적선 위면 다음날부터 추적 유효
+            if trail == TRAIL_CHAND:
+                a2 = ATR[ci, t - 1] if t >= 1 else np.nan
+                armed = a2 == a2 and ct > hh - kk * a2
+            else:
+                m2 = MA20[ci, t] if trail == TRAIL_MA20 else MA50[ci, t]
+                armed = m2 == m2 and ct > m2
         prevc = ct
         prevl = L[ci, t]
     reason = R_DATA_END if d + last >= lim - 1 else R_DELISTED   # 끝까지 거래 = 데이터 끝, 앞서 끊김 = 상장폐지(MINOR 13)

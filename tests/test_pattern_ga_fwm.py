@@ -230,3 +230,29 @@ def test_trail_start_waits_for_profit():
 def test_stop_policy_skip():
     assert _filter(_event(stop_raw=88.0), _gv(G_SMAX=0.05, G_SPOL=1.0))[0] == 0     # 구조 손절 12% > 5% → 안 산다
     assert _filter(_event(stop_raw=97.0), _gv(G_SMAX=0.05, G_SPOL=1.0))[0] == 1     # 3% → 산다
+
+
+def test_safe_trail_waits_for_close_above_line():
+    """2세대: 진입이 MA20 아래면 종가가 MA20 위에 한 번 선 뒤에야 추적(검증 차트: 한미반도체 2021-05 다음날 매도)."""
+    rows = [(100, 101, 99.5, 100.5), (100.4, 101, 99.8, 100.6), (100.6, 104, 100.5, 103.5), (103.5, 104, 101, 101.5)] + [(101.5, 102, 101, 101.5)] * 4
+    ma = [102.0, 102.0, 102.0, 102.0, 102.0, 102.0, 102.0, 102.0]
+    o = _run(_book(rows, ma), _px(X_TRAIL=PF.TRAIL_MA50, X_INTRA=1.0))
+    assert int(o[PF.O_REASON]) == PF.R_TRAIL and int(o[PF.O_X]) == 1                 # 무장 없음: 다음날 바로
+    o = _run(_book(rows, ma), _px(X_TRAIL=PF.TRAIL_MA50, X_INTRA=1.0, X_SAFE=1.0))
+    assert int(o[PF.O_REASON]) == PF.R_TRAIL and int(o[PF.O_X]) == 3                 # 행 2 종가 103.5 > 102 → 행 3 장중 이탈에서
+
+
+def test_safe_pyramid_needs_breakeven():
+    rows = [(100, 101, 99.5, 100.5), (101, 106, 100.8, 105.5), (106, 107, 105, 106)] + [(106, 107, 105, 106)] * 5
+    o = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=2.0, X_SAFE=1.0), e=100.0, sp=95.0)
+    assert o[PF.O_ADDED] == 0                                                         # +1R 닿았지만 본전(2R) 미확보 → 추가 없음
+    o = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=1.0), e=100.0, sp=95.0)
+    assert o[PF.O_ADDED] == 1
+
+
+def test_be_close_basis():
+    rows = [(100, 101, 99.5, 100.5), (101, 106, 100.8, 102), (102, 102.5, 99, 100)] + [(100, 101, 99, 100)] * 5
+    o = _run(_book(rows), _px(X_BE_R=1.0), e=100.0, sp=95.0)
+    assert int(o[PF.O_REASON]) == PF.R_BE                                             # 고가 106 ≥ 105 → 본전 → 행 2 저가 99 에서
+    o = _run(_book(rows), _px(X_BE_R=1.0, X_BE_CLOSE=1.0), e=100.0, sp=95.0)
+    assert int(o[PF.O_REASON]) != PF.R_BE                                             # 종가 102 < 105 → 본전 안 옮김
