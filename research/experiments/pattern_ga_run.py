@@ -181,12 +181,15 @@ if MENU_OVERRIDE:
     def _lv(v):
         return math.inf if v == "inf" else v
     _no, _do, _co = MENU_OVERRIDE.get("nom", {}), MENU_OVERRIDE.get("disc", {}), MENU_OVERRIDE.get("cont", {})
+    def _dl(xs):                                       # 검증 MUST-FIX 3: CMAwM 이산 축은 선택지 ≥ 2 — 한 수준이면 복제(stop_basis 와 같은 방식)
+        t_ = tuple(_lv(x) for x in xs)
+        return t_ * 2 if len(t_) == 1 else t_
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
                  "exit_safe": (0,), "be_basis": ("high",)}             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
-    DISC = (*DISC, *((n, v) for n, v in EVO_GENES.items() if n in _do))
+    DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
-    DISC = tuple((n, tuple(_lv(x) for x in _do[n]) if n in _do else v) for n, v in DISC)
+    DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
     CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), c[3]) if c[0] in _co else c for c in CONT)
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
