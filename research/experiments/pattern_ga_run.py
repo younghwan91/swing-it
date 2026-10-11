@@ -190,7 +190,8 @@ if MENU_OVERRIDE:
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
                  "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
-                 "stop_max": (0.05,), "climax_basis": ("intraday",)}         # 7세대: 손절 상한 · 8세대: 급등 매도 판단             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "stop_max": (0.05,), "climax_basis": ("intraday",),         # 7세대: 손절 상한 · 8세대: 급등 매도 판단
+                 "flow_win": (20,), "indiv_sell": (0,)}                     # 9세대: 수급 창 · 개인 순매도 요구             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -198,8 +199,8 @@ if MENU_OVERRIDE:
         return _co[n][2] if len(_co[n]) >= 3 else c3
     CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), _off(c[0], c[3])) if c[0] in _co else c for c in CONT)
     #: 진화 3세대 후보 연속 유전자(이름이 있을 때만 붙는다): d−1 ATR20/종가 상한, 위쪽 끝 = 끔
-    EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi")}
-    CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, "hi")) for n in EVO_CONT if n in _co))
+    EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi"), "flow_min": ("flow_min", -0.1, 0.3, "lo")}   # 9세대: 수급 하한(아래 끝 = 끔)
+    CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, EVO_CONT[n][3])) for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
         raise SystemExit(f"PATTERN_GA_MENU 모르는 유전자: {sorted(_unk)}")
@@ -406,6 +407,9 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_SPOL] = 1.0 if g.get("stop_policy") == "skip" else 0.0                 # 진화 1세대
     gv[PF.G_ATRMAX] = np.nan if g.get("atr_max") is None else float(g["atr_max"])   # 진화 3세대 후보
     gv[PF.G_ENTQ] = float(g.get("entry_q") or 0)                                      # 3세대
+    gv[PF.G_FLMIN] = np.nan if g.get("flow_min") is None else float(g["flow_min"])     # 9세대 수급
+    gv[PF.G_FLWIN] = 1.0 if int(g.get("flow_win") or 20) == 20 else 0.0
+    gv[PF.G_INDSELL] = float(g.get("indiv_sell") or 0)
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
@@ -1239,6 +1243,7 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
     m50 = np.asarray(ctx.ma50, float)                              # 진화 2세대: d−1 MA50 > 20 거래일 전(날짜×종목)
     s20 = np.maximum(s - 20, 0)
     with np.errstate(invalid="ignore"):
+        _fill_flows(F, ctx, days, codes, ci, s)                      # 9세대 수급 열
         m20v = m20.to_numpy(float)                                   # 3세대: d−1 MA20 > 5 거래일 전
         s5 = np.maximum(s - 5, 0)
         F[:, PE.FI["ma20_up"]] = np.where(np.isfinite(m20v[s, ci]) & np.isfinite(m20v[s5, ci]), (m20v[s, ci] > m20v[s5, ci]).astype(float), np.nan)
@@ -1264,6 +1269,27 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
                     p_counts=pinfo.get("counts", {}), p_window=pinfo.get("window"))
     write_cache(cache, arrs, meta)
     return meta
+
+
+def _fill_flows(F, ctx, days, codes, ci, s) -> None:
+    """9세대: supply_demand → d−1(행 s)까지 N일(5·20) (기관+외국인)·개인 순매수 수량 합 / 거래량 합. 그날 수급은 장 마감 뒤 확정 → d 주문에 쓴다.
+    N일 중 80% 이상 자료가 있을 때만 값(아니면 NaN — 거르기는 '모르면 통과')."""
+    q = pd.read_sql("SELECT code, date, individual, foreign_, institution, acc_trde_qty FROM supply_demand", ctx.con,
+                    parse_dates=["date"])
+    q["code"] = q["code"].astype(str)
+    q = q[q["code"].isin(set(map(str, codes)))]
+    def wide(col):
+        return q.pivot_table(index="date", columns="code", values=col, aggfunc="last").reindex(index=days, columns=codes)
+    smart = wide("foreign_").add(wide("institution"), fill_value=np.nan)
+    indiv, vol = wide("individual"), wide("acc_trde_qty")
+    for n_, cs, ci_ in ((5, "fl_smart5", "fl_indiv5"), (20, "fl_smart20", "fl_indiv20")):
+        mp_ = int(0.8 * n_)
+        v = vol.rolling(n_, min_periods=mp_).sum()
+        v = v.where(v > 0)
+        rs_ = (smart.rolling(n_, min_periods=mp_).sum() / v).to_numpy(float)
+        ri_ = (indiv.rolling(n_, min_periods=mp_).sum() / v).to_numpy(float)
+        F[:, PE.FI[cs]] = rs_[s, ci]
+        F[:, PE.FI[ci_]] = ri_[s, ci]
 
 
 def write_cache(cache: str, arrs: dict, meta: dict) -> None:

@@ -341,3 +341,15 @@ def test_gen8_climax_close_and_no_entry_day_be():
     o3 = _run(_book(rows2), _px(X_BE_R=1.0, X_SAFE=3.0), e=100.0, sp=95.0)
     o4 = _run(_book(rows2), _px(X_BE_R=1.0, X_SAFE=4.0), e=100.0, sp=95.0)
     assert int(o3[PF.O_REASON]) == PF.R_BE and int(o4[PF.O_REASON]) != PF.R_BE
+
+
+def test_gen9_flow_genes():
+    F = _event()
+    fi = PE.FI
+    F[0, fi["fl_smart20"]], F[0, fi["fl_indiv20"]], F[0, fi["fl_smart5"]], F[0, fi["fl_indiv5"]] = 0.05, -0.04, -0.02, 0.03
+    assert _filter(F, _gv(G_FLMIN=0.0, G_FLWIN=1.0))[0] == 1                       # 20일 기관+외국인 순매수 5%
+    assert _filter(F, _gv(G_FLMIN=0.0, G_FLWIN=0.0))[0] == 0                       # 5일은 순매도
+    assert _filter(F, _gv(G_FLWIN=1.0, G_INDSELL=1.0))[0] == 1                     # 20일 개인 순매도
+    assert _filter(F, _gv(G_FLWIN=0.0, G_INDSELL=1.0))[0] == 0                     # 5일 개인 순매수
+    F[0, fi["fl_smart20"]] = np.nan
+    assert _filter(F, _gv(G_FLMIN=0.1, G_FLWIN=1.0))[0] == 1                       # 모르면 통과(거부권)
