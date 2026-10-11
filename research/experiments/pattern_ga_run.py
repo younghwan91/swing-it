@@ -1246,7 +1246,7 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
     m50 = np.asarray(ctx.ma50, float)                              # 진화 2세대: d−1 MA50 > 20 거래일 전(날짜×종목)
     s20 = np.maximum(s - 20, 0)
     with np.errstate(invalid="ignore"):
-        _fill_flows(F, ctx, days, codes, ci, s)                      # 9세대 수급 열
+        flows_meta = _fill_flows(F, ctx, days, codes, ci, s)         # 9세대 수급 열
         oo1, cc1 = np.asarray(A.O)[ci, s], np.asarray(A.C)[ci, s]     # 9세대: d−1 봉 몸통 · d − 행(E)
         F[:, PE.FI["body_s"]] = np.where(oo1 > 0, cc1 / np.where(oo1 > 0, oo1, 1.0) - 1.0, np.nan)
         iE_ = I_[:, PE.II["iE"]]
@@ -1269,7 +1269,8 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
             "F": F, "I": I_, "off": tb["off"], "codes": np.asarray(codes.astype(str), dtype="<U12")}
     meta = {"version": CACHE_VERSION, "code_hash": code_hash(), "built": date.today().isoformat(), "adv_floor": ADV_FLOOR, "event": [EVENT_LO, EVENT_HI],
             "end_day": END_DAY, "n_events": int(len(F)), "n_scan_rows": tb["n_scan_rows"], "n_cut_stocks": ctx.n_cut_stocks,
-            "funnel": {f"{k[0]}|{k[1]}|{k[2]}": v for k, v in tb["funnel"].items()}, "base_rows": int(base.sum())}
+            "funnel": {f"{k[0]}|{k[1]}|{k[2]}": v for k, v in tb["funnel"].items()}, "base_rows": int(base.sum()),
+            "flows": flows_meta}
     if with_p:
         pinfo = R._estimate_p(ctx.con, A, uni, days, None, band_lo=0.90, min_age=0, params={"ref_order": True})
         meta.update(p=pinfo["p"], p_ci=list(pinfo.get("ci", (np.nan, np.nan))), p_n=pinfo["n_classified"],
@@ -1281,8 +1282,8 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
 def _fill_flows(F, ctx, days, codes, ci, s) -> None:
     """9세대: supply_demand → d−1(행 s)까지 N일(5·20) (기관+외국인)·개인 순매수 수량 합 / 거래량 합. 그날 수급은 장 마감 뒤 확정 → d 주문에 쓴다.
     N일 중 80% 이상 자료가 있을 때만 값(아니면 NaN — 거르기는 '모르면 통과')."""
-    q = pd.read_sql("SELECT code, date, individual, foreign_, institution, acc_trde_qty FROM supply_demand", ctx.con,
-                    parse_dates=["date"])
+    q = pd.read_sql("SELECT code, date, individual, foreign_, institution, acc_trde_qty, source FROM supply_demand", ctx.con,
+                    parse_dates=["date"])                       # (code, date) 는 기본키 — 중복 없음
     q["code"] = q["code"].astype(str)
     q = q[q["code"].isin(set(map(str, codes)))]
     def wide(col):
@@ -1297,6 +1298,10 @@ def _fill_flows(F, ctx, days, codes, ci, s) -> None:
         ri_ = (indiv.rolling(n_, min_periods=mp_).sum() / v).to_numpy(float)
         F[:, PE.FI[cs]] = rs_[s, ci]
         F[:, PE.FI[ci_]] = ri_[s, ci]
+    yr = q["date"].dt.year                                          # 검증 11차 MINOR: 캐시 meta 에 수급 자료 시점·피복 기록
+    return {"max_date": str(q["date"].max().date()) if len(q) else None,
+            "codes_by_year": {int(k): int(v) for k, v in q.groupby(yr)["code"].nunique().items()},
+            "rows_by_source": {str(k): int(v) for k, v in q["source"].value_counts().items()}}
 
 
 def write_cache(cache: str, arrs: dict, meta: dict) -> None:
