@@ -25,6 +25,8 @@ import warnings
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pattern_ga_view_template.html")
 NEWS_JUDGE, NEWS_FROM, NEWS_TO = "v2r3-haiku55", "2023-04-01", "2026-02-27"
 LOSS5 = -0.055
+US_CSV = "research/logs/sepa_explore/regime/us_overnight.csv"   # yfinance 일봉 종가(2017~), 미국 날짜 — 한국 주문일 d 전 마지막 미국 거래일
+US_DROP = -0.01                                                  # 기술 분해 문턱(결과 전 고정): 전날 밤 나스닥 선물 −1% 이하
 
 
 def _args():
@@ -113,6 +115,18 @@ def main() -> None:
     cur.execute("SELECT code,name,market FROM stocks WHERE code = ANY(%s)", (codes,))
     nm = {c: (n, m) for c, n, m in cur.fetchall()}
 
+    # 전날 밤 미국장(기술): 주문일 d 보다 앞선 마지막 미국 거래일의 종가 수익률(미국 장 마감 = 한국 05~06시, d 장 전에 안다)
+    t["us_nq"], t["us_spx"], t["us_sox"] = np.nan, np.nan, np.nan
+    if os.path.exists(US_CSV):
+        us = pd.read_csv(US_CSV, parse_dates=["us_date"]).set_index("us_date")
+        ur = us[["nq", "spx", "sox"]].dropna(how="all").pct_change()
+        pos = ur.index.searchsorted(t["order_day"].to_numpy(), side="left") - 1
+        ok = pos >= 1
+        for col, src in (("us_nq", "nq"), ("us_spx", "spx"), ("us_sox", "sox")):
+            vals = np.full(len(t), np.nan)
+            vals[ok] = ur[src].to_numpy()[pos[ok]]
+            t[col] = vals
+
     # 기사 오버레이(기술)
     t["news_neg"], t["news_pos"], t["news_n"] = np.nan, np.nan, np.nan
     if not a.no_news:
@@ -166,6 +180,8 @@ def main() -> None:
         news = {"n": int(len(nn)), "with_news": int((nn["news_n"] > 0).sum()),
                 "neg": stats(nn.loc[nn["news_neg"] > 0, "mix"]), "no_neg": stats(nn.loc[~(nn["news_neg"] > 0), "mix"])}
     l5 = t[t["loss5"]]
+    usd = t["us_nq"] <= US_DROP
+    us_split = {"down": stats(t.loc[usd, "mix"]), "rest": stats(t.loc[~usd & t["us_nq"].notna(), "mix"])}
     summ = dict(n=len(t), win=s_all["win"], avgwin=float(t["mix"][t["mix"] > 0.005].mean()), avgloss=float(t["mix"][t["mix"] < -0.005].mean()),
                 mean=s_all["mean"], Rmean=float(t["R"].mean()), ann=st["ann"], expo=float(np.mean(st["expo"])), fold_ann=st["fold_ann"],
                 fold_n=st["fold_n"], folds=[[str(tr.lo), str(tr.hi), str(te.lo), str(te.hi)] for tr, te in wins],
@@ -173,7 +189,7 @@ def main() -> None:
                 cfgs=[{k: (None if v is None else (str(v) if not isinstance(v, (int, float)) else v)) for k, v in c.items()} for c in cfgs],
                 reasons=t["exit_reason"].value_counts().to_dict(), shape_counts=t["shape"].value_counts().to_dict(),
                 add_rate=float(t["added"].mean()), cost2=s2, ex_viewed=s_ex, n_viewed=int(t["viewed"].sum()), news=news,
-                loss5={"n": int(len(l5)), "causes": l5["loss5_cause"].value_counts().to_dict()},
+                us=us_split, loss5={"n": int(len(l5)), "causes": l5["loss5_cause"].value_counts().to_dict()},
                 below50=float(np.mean([float(np.asarray(E.C)[int(r["ci"]), int(r["d_row"]) - 1] < np.asarray(E.MA50)[int(r["ci"]), int(r["d_row"]) - 1])
                                        for _, r in t.iterrows()])) if len(t) else float("nan"))
     t.drop(columns=[c for c in ("table",) if c in t.columns]).to_csv(os.path.join(a.out, "oos_trades.csv"), index=False)
@@ -183,7 +199,7 @@ def main() -> None:
     h = open(TEMPLATE, encoding="utf-8").read()
     h = h.replace("/*__DATA__*/null", data).replace("__TITLE__", a.title).replace("__H1__", a.h1).replace("__LEDE__", a.lede).replace("__N__", str(len(t)))
     open(os.path.join(a.out, "page.html"), "w", encoding="utf-8").write(h)
-    print(json.dumps({k: summ[k] for k in ("n", "win", "mean", "ann", "cost2", "ex_viewed", "n_viewed", "loss5", "news", "below50")},
+    print(json.dumps({k: summ[k] for k in ("n", "win", "mean", "ann", "cost2", "ex_viewed", "n_viewed", "loss5", "news", "us", "below50")},
                      ensure_ascii=False, default=float), file=sys.stderr)
 
 
@@ -208,6 +224,10 @@ def notes(s: dict) -> list:
            f"손익비 {s['ex_viewed']['gl']:.2f}, 거래당 {_sp(s['ex_viewed']['mean'])}."]
     r = s["reasons"]
     out.append("청산: " + " · ".join(f"{k} {v}건" for k, v in r.items()) + f". 불타기 발동 {_p(s['add_rate'])}.")
+    u = s.get("us") or {}
+    if u.get("down", {}).get("n") is not None:
+        out.append(f"전날 밤 나스닥 선물 −1% 이하인 날 주문 {u['down']['n']}건: 승률 {_p(u['down']['win'])}, 거래당 {_sp(u['down']['mean'])} · "
+                   f"나머지 {u['rest']['n']}건: 승률 {_p(u['rest']['win'])}, 거래당 {_sp(u['rest']['mean'])} (기술).")
     nw = s.get("news") or {}
     if nw.get("n"):
         out.append(f"기사(2023-04 ~ 2026-02 주문 {nw['n']}건, 주문 전 7일 기사 있음 {nw['with_news']}건): 부정 기사 있음 {nw['neg']['n']}건 거래당 "
