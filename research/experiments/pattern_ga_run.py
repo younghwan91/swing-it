@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
 from research.signals import ga_fast as gf  # noqa: E402
 from research.signals import pattern_events as PE  # noqa: E402
+from research.signals import pattern_eval as PEV  # noqa: E402
 from research.signals import pattern_fast as PF  # noqa: E402
 from research.signals.sepa import LIMIT_UP_RATIO  # noqa: E402
 
@@ -103,6 +104,7 @@ REGION_RUNUP, REGION_REST = 0.30, 20.0  # 정정 2 착상 영역 좌표
 #: "fwm" = PATTERN_GA_FWM.md: FWL 위 미너비니 정합(사용자 차트 지적) — EPS 직전 분기 대비 상승 필수, 손절폭 ≤ 5%(손절선을 끌어올림),
 #: 짧고 날카로운 쐐기 허용(위생 간격 ≥ 1·길이 ≥ 5), stage 3/4(d−1 종가 > MA50). 탐색 전용.
 VARIANT = os.environ.get("PATTERN_GA_VARIANT", "")
+FAST_EVAL = os.environ.get("PATTERN_GA_FAST", "1") != "0"   # 0 이면 evaluate 가 원래 파이썬 경로(evaluate_ref)
 FW = VARIANT in ("fw", "fwl", "fwm")
 FWL = VARIANT in ("fwl", "fwm")
 FWM = VARIANT == "fwm"
@@ -697,6 +699,8 @@ class Engine:
         self.days = pd.DatetimeIndex(np.asarray(self.days_ns).astype("datetime64[ns]"))
         self.end_row = int(self.days.searchsorted(pd.Timestamp(END_DAY), side="right") - 1)
         self.F_orig = self.F
+        self._Fa = self._Foa = np.asarray(self.F)        # njit 은 memmap 대신 같은 버퍼의 ndarray 뷰를 받는다
+        self._Ia = np.asarray(self.I)
         self.rep = None
         self.fw_off = False                              # 리뷰 FW M6: "F1 끔" 짝(같은 config, 하락 쐐기 거르기만 끔)
         self.pmix = float(self.meta.get("p", 0.5))
@@ -719,6 +723,7 @@ class Engine:
             return
         self.F = self.F_orig if rep is None else PE.shuffle_shape(np.asarray(self.F_orig), np.asarray(self.off), rep,
                                                                   seed=NULLB_SEED)
+        self._Fa = np.asarray(self.F)
         self.rep = rep
 
     # --- 후보 ---
@@ -819,6 +824,48 @@ class Engine:
 
     def evaluate(self, g: dict, w: Win, *, seed: int = FIT_SEED, counts_only: bool = False, allow=None,
                  want_monthly: bool = False) -> dict:
+        """학습창 적합도 — :meth:`evaluate_fast` (njit 한 번 호출, :meth:`evaluate_ref` 와 비트 동일)가 받는 경우는
+        그쪽, 아니면(``allow``·``want_monthly``·``PATTERN_GA_FAST=0``) 원래 경로."""
+        if allow is None and not want_monthly and FAST_EVAL:
+            return self.evaluate_fast(g, w, seed=seed, counts_only=counts_only)
+        return self.evaluate_ref(g, w, seed=seed, counts_only=counts_only, allow=allow, want_monthly=want_monthly)
+
+    def _pen_arrays(self, w: Win) -> "tuple[float, np.ndarray, np.ndarray]":
+        """:meth:`penalty` 의 창별 상수(하한 합·연도 번호·연도 비율 — dict 순서 그대로). 창마다 한 번."""
+        if getattr(w, "_pen", None) is None:
+            frac = self.year_frac(w)
+            if len(frac) >= 128:                          # pattern_eval.year_mean_np 는 < 128 만 numpy 와 같다
+                raise ValueError(f"창의 연도 수 {len(frac)} ≥ 128")
+            y0 = int(self.days[0].year)
+            w._pen = (FLOOR_PER_YEAR * sum(frac.values()), np.array([y - y0 for y in frac], np.int64),
+                      np.array(list(frac.values()), float))
+        return w._pen
+
+    def evaluate_fast(self, g: dict, w: Win, *, seed: int = FIT_SEED, counts_only: bool = False) -> dict:
+        """:meth:`evaluate_ref` 와 같은 값을 :func:`research.signals.pattern_eval.evaluate_kernel` 한 번으로."""
+        tid = table_of(g)
+        a, b = PE.table_slice(self.off, tid)
+        dcol = self.I[a:b, PE.II["d"]]
+        aa = a + int(np.searchsorted(dcol, w.d_lo))
+        bb = a + int(np.searchsorted(dcol, w.d_hi))
+        ffloor, yidx, yfrac = self._pen_arrays(w)
+        B = self._buf
+        out = np.empty(6)
+        PEV.evaluate_kernel(self._Fa, self._Foa, self._Ia, aa, bb, gene_vec(g), float(LIMIT_UP_RATIO), B["idx"], B["e"],
+                            B["sp"], B["fb"], B["amb"], B["skip0"], B["s0"], B["buf"], bool(FW and not self.fw_off),
+                            float(g["fw_lo"]) if FW else 0.0, exit_vec(g), self.O, self.H, self.L, self.C, self.MA20,
+                            self.MA50, self.ATR, self.TR, self.LIM, self.bs, self.bn, self.strat_cs, self.cost_tab,
+                            float(COST_MULT), float(self.pmix), int(w.t_lo), int(w.t_end), PF.SLOTS, PF.SLOT_W,
+                            self.year_of, self.n_years, int(self.reform), self.month_of, float(ffloor), yidx, yfrac,
+                            float(FLOOR_YEAR), float(LAMBDA), bool(counts_only), 3, FIT_BOOT, int(seed), 2.5, out)
+        r = {"n": int(out[0]), "n_pass": int(out[1]), "pen": float(out[2]), "feasible": bool(out[3])}
+        if counts_only:
+            return r
+        r.update(fit=float(out[4]), lower=float(out[5]))
+        return r
+
+    def evaluate_ref(self, g: dict, w: Win, *, seed: int = FIT_SEED, counts_only: bool = False, allow=None,
+                     want_monthly: bool = False) -> dict:
         """학습창 적합도(모듈 설명). ``counts_only`` = 진입 수·벌점만(수익 숫자를 만들지 않는다 — 실현 가능 비율용)."""
         c = self.candidates(g, w, allow=allow)
         if counts_only and c["n_pass"] == 0:              # 선별 지름길 — 진입 0건(벌점만)
