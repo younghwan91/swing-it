@@ -296,3 +296,12 @@ def test_gen3_avg_floor_survives_addon_sale():
     o1 = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=1.0, X_SMAX=0.05, X_INTRA=1.0), e=100.0, sp=95.0)
     o2 = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_BE_R=1.0, X_SAFE=2.0, X_SMAX=0.05, X_INTRA=1.0), e=100.0, sp=95.0)
     assert o2[PF.O_ADDED] == 1 and o2[PF.O_PNL] > o1[PF.O_PNL] and o2[PF.O_PNL] >= -0.002
+
+
+def test_gen4_lock_on_close_not_wick():
+    """검증 MUST-FIX 6: 장중 윗꼬리로만 +3R 이면 4세대(exit_safe 3)는 잠그지 않는다."""
+    rows = [(100, 101, 99.5, 100.5), (101, 116, 100.8, 106), (106, 107, 104, 105)] + [(105, 106, 104, 105)] * 5
+    o2 = _run(_book(rows), _px(X_BE_R=1.0, X_SAFE=2.0), e=100.0, sp=95.0)
+    o3 = _run(_book(rows), _px(X_BE_R=1.0, X_SAFE=3.0), e=100.0, sp=95.0)
+    assert int(o2[PF.O_X]) == 2                                                       # 3세대: 윗꼬리로 잠금 → 행 2 저가 104 ≤ 105
+    assert int(o3[PF.O_X]) != 2                                                       # 4세대: 종가 106 < 115 → 잠금 없음

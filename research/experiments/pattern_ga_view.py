@@ -108,6 +108,10 @@ def main() -> None:
     t = G.trade_frame(E, st, cfgs)
     G.CHART_N = len(t)
     pts = G.chart_points(E, t, cfgs)
+    if evo is not None:                               # 검증 MUST-FIX 5: 봉인 너머 봉이 페이지에 들어가면 중단
+        last_bar = max((b["date"] for c in pts for b in c["bars"]), default="")
+        if last_bar >= str(FOLDS[G.EVO_FOLDS[-1]].test_hi)[:10]:
+            raise SystemExit(f"봉인 누출: 차트 봉 {last_bar}")
     p = E.pmix
     t["mix"] = G.pmix_net(t, p)
     t["R"] = t["mix"] / (t["wb"] * t["d"])

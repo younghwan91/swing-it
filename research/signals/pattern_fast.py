@@ -319,6 +319,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
     t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
     t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
+    safe3 = px[X_SAFE] > 2.5                          # 4세대(검증 MUST-FIX 6): 이익 잠금을 종가 ≥ e + 3R 로 발동(장중 윗꼬리 하루로 잠그지 않는다)
+    lock_on = False
     safe2 = px[X_SAFE] > 1.5                          # 3세대(검증 4차): 불타기 뒤 평단 손절 · 급등일(+10%)·+3R 위 추가 금지 · +3R 이익 잠금
     safe = px[X_SAFE] > 0.5                           # 진화 2세대(검증 차트): 추적선은 진입 뒤 종가가 그 위에 선 뒤부터 · 불타기는 본전 확보 뒤·갭 급등 시가 금지
     be_close = px[X_BE_CLOSE] > 0.5                   # 진화 2세대: 본전 이동 발동을 종가 기준으로(장중 고가 터치 털림 방지)
@@ -401,7 +403,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             if safe2 and avg_floor > line:            # 3세대: 불타기 뒤 전체 손절 ≥ 평단 — 추가분이 먼저 팔려도 유지(검증 MUST-FIX 4)
                 line = avg_floor
                 why = R_BE
-            if safe2 and hh >= e + 3.0 * R and e + R > line:   # 3세대: +3R(전날까지 고가) 뒤 손절 ≥ 진입가 + 1R(이익 잠금)
+            if safe2 and (lock_on if safe3 else hh >= e + 3.0 * R) and e + R > line:   # 3세대: +3R 뒤 손절 ≥ e + 1R(4세대: 종가 발동)
                 line = e + R
                 why = R_TRAIL
         intra = hard if sclose else (max(line, hard) if dyn else line)     # 장중 손절선
@@ -600,6 +602,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 m = MA20[ci, t] if trail == TRAIL_MA20 else MA50[ci, t]
                 if m == m and ct < m:
                     pending = R_TRAIL
+        if safe3 and not lock_on and ct >= e + 3.0 * R:   # 4세대: 오늘 종가가 +3R 이상이면 다음날부터 잠금
+            lock_on = True
         if safe and not armed:                        # 2세대: 오늘 종가가 오늘 추적선 위면 다음날부터 추적 유효
             if trail == TRAIL_CHAND:
                 a2 = ATR[ci, t - 1] if t >= 1 else np.nan

@@ -190,10 +190,12 @@ if MENU_OVERRIDE:
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
-    CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), c[3]) if c[0] in _co else c for c in CONT)
+    def _off(n, c3):                                   # [하한, 상한] 은 기존 끔 끝 유지, [하한, 상한, null] 은 끔 없음(필수 조건)
+        return _co[n][2] if len(_co[n]) >= 3 else c3
+    CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), _off(c[0], c[3])) if c[0] in _co else c for c in CONT)
     #: 진화 3세대 후보 연속 유전자(이름이 있을 때만 붙는다): d−1 ATR20/종가 상한, 위쪽 끝 = 끔
     EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi")}
-    CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), "hi") for n in EVO_CONT if n in _co))
+    CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, "hi")) for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
         raise SystemExit(f"PATTERN_GA_MENU 모르는 유전자: {sorted(_unk)}")
@@ -336,6 +338,11 @@ def x0_feasible() -> np.ndarray:
     for q, (name, levels) in enumerate(DISC):
         x[N_CONT + q] = {"e_min": 0.0, "touch_lo": 0.0, "ceil_kind": 0.0, "climax": 0.0, "stop_basis": 0.0, "fail_exit": 0.0,
                          "reentry": 0.0, "stop_anchor": 0.0, "reentry_win": 0.0}.get(name, (len(levels) - 1) / 2.0)
+    if MENU_OVERRIDE:                                 # 진화: 끔 없는 필수 연속 조건은 가장 느슨한 끝에서 시작(실현 가능성)
+        loose = {"runup_min": 0.0, "dry_max": 1.0, "atr_max": 1.0, "depth_max": 1.0, "rs_min": 0.0}
+        for i, (name, lo, hi, off) in enumerate(CONT):
+            if off is None and name in loose and name in MENU_OVERRIDE.get("cont", {}):
+                x[i] = loose[name]
     if FWL:                                           # FWL L6: 주도주 고정 안에서 가장 느슨한 실현 가능점(건수만 탐색 — 6폴드 모두 실현 가능)
         names = [n for n, *_ in CONT]
         x[names.index("rs_min")], x[names.index("fw_lo")] = 0.0, 1.0          # RS 70 · 하단선 < +0.15
@@ -1207,6 +1214,7 @@ def code_hash() -> str:
         h.update(fh.read())                           # 평가 커널(PF) 수정으로 캐시를 다시 만들지 않는다
     import inspect  # noqa: PLC0415
     h.update(inspect.getsource(build_cache).encode())
+    h.update(inspect.getsource(PF.basket_tables).encode())          # 검증 MINOR: 캐시 빌더가 부르는 PF 함수
     return h.hexdigest()[:16]
 
 
@@ -2442,7 +2450,7 @@ def chart_points(E: Engine, t: pd.DataFrame, cfgs: "list[dict]") -> list:
         ci, d = int(r["ci"]), int(r["d_row"])
         pt = PE.pattern_points(np.asarray(E.H), np.asarray(E.L), np.asarray(E.C), ci, d - 1, th, cw)
         lo = max(0, (pt.get("i0", d) if pt.get("i0", -1) >= 0 else d) - 20)
-        hi = min(len(E.days) - 1, int(r["x_row"]) + 10)
+        hi = min(len(E.days) - 1, int(E.end_row), int(r["x_row"]) + 10)   # 검증 MUST-FIX 5: 봉인(잘린 end_row) 너머 봉을 그리지 않는다
 
         def dd(row):
             return str(E.days[min(int(row), len(E.days) - 1)].date())
