@@ -69,3 +69,12 @@ M6 모양 비활성 짝(`shape_off`)은 F1 을 유지한 채 하위 구간만 �
   만든 방법: 2026-10-11 00:4x 사용자 요청 열람 때 원장 `pattern_ga_runs/TRIALS.jsonl`(git_head 894e346) 런별 best → `procedure`(폴드별 재평가 1등) → `stitched` → `trade_frame` 의 (code, order_day[:10]). 스크립트는 scratchpad `pga_sample/rebuild.py` 였다(이 절이 그 기록).
   비디버그 FW 실행은 파일이 없거나 해시가 다르면 시작하지 않는다(`FW_PARENT_SHA256`).
 - MINOR(2단계): 바 표 6행의 손익비 표시를 판정과 같은 값(본전 제외)으로 고쳤다.
+
+## 운영 기록 — 재시작 (2026-10-11 10:14, 결과 열람 없음)
+
+- 01:18 에 시작한 첫 본 실행은 작업자마다 numba 스레드 16개가 실제로 돌았다. `worker_init` 의 `set_num_threads(1)` 이 효과가 없었다. 16코어에서 실행 가능 스레드가 약 70~190개로 과구독됐다.
+  그래서 GA 1런이 단독 9.7초 → 174초였고, 9시간 뒤 2b 는 10/50 이었다(남은 시간 약 21시간).
+- 같은 커밋(924e05b)·같은 설정으로, 환경변수 `NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` 를 주고 재시작했다(작업자당 스레드 1개를 확인했다).
+  모든 난수는 시드로 고정이라 결과는 첫 실행과 같아야 한다. 첫 실행의 로그와 런 원장(`pattern_ga_fw_runs`)은 열지 않고 scratchpad `pgafw_run1_aborted/` 로 옮겼다. 설계 원장 줄은 커밋 상태로 되돌렸다.
+- **공개(2026-10-11 10:3x, 사용자 요청 중간 열람):** 무작위 대조군이 끝나기 전에, 첫 실행 런 원장(git_head 924e05b, 60런)의 best 로 절차를 재구성해 실제 표본 밖 기록을 열었다(부모 때와 같은 방법, scratchpad `pgafw_sample/`).
+  재시작한 실행의 실제 GA 는 같은 시드라 같은 기록이어야 한다. 이 열람 뒤 설계·바·코드는 바꾸지 않는다. 바꾸면 새 사전등록이다.
