@@ -187,7 +187,7 @@ if MENU_OVERRIDE:
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
                  "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
-                 "stop_max": (0.05,), "risk_size": (0,)}                    # 6세대: 손절 상한 · 위험 기준 비중(사용자 "비중으로 손실 제한")             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "stop_max": (0.05,)}                                       # 7세대: 손절 상한(위험 기준 비중은 FWM 에서 늘 켬)             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -450,7 +450,7 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_TRAIL_CLOSE] = 1.0 if g.get("trail_basis") == "close" else 0.0
     px[PF.X_SAFE] = float(g.get("exit_safe") or 0)                 # 진화 2세대
     px[PF.X_BE_CLOSE] = 1.0 if g.get("be_basis") == "close" else 0.0
-    px[PF.X_RISK] = STOP_MAX if (FWM and g.get("risk_size")) else np.nan   # 6세대: 손실 = 슬롯의 5% 상당으로 비중 조절
+    px[PF.X_RISK] = STOP_MAX if FWM else np.nan     # 7세대(검증 MUST-FIX 9): FWM 은 늘 위험 기준 비중 — 손절 한 번의 슬롯 손실 ≤ 5%(갭 예외)
     return px
 
 
@@ -1995,6 +1995,9 @@ def _evolve_write(E, cfgs, tests, seal, out, args, name, evo_seeds, head, t0) ->
                         "gl": float(x[w_].mean() / -x[l_].mean()) if w_.any() and l_.any() else float("nan")}
         xs = pmix_net(t, p, "net2") * (t["alloc"] / PF.SLOT_W).clip(upper=1.0)   # 6세대: 위험 기준 비중이면 슬롯 대비 손익(계좌 영향)
         met["c2_slot_mean"] = float(xs.mean())
+        risk_slot = (t["alloc"] / PF.SLOT_W) * t["d"]                    # 검증 MUST-FIX 9: 손절 위험(슬롯 대비) ≤ 5% 단언
+        if FWM and float(risk_slot.max()) > STOP_MAX + 1e-6:
+            raise SystemExit(f"위험 기준 비중 위반: 슬롯 대비 손절 위험 최대 {float(risk_slot.max()):.4f}")
         met["c2_slot_min"] = float(xs.min())
         met["reasons"] = t["exit_reason"].value_counts().to_dict()
         met["loss55"] = int((pmix_net(t, p) < -0.055).sum())          # 검증 MINOR 2: 거래 순손익(추가분 포함) 기준
