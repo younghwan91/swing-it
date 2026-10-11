@@ -1920,8 +1920,16 @@ def run_evolve(args) -> int:
     bests = [[res[(k, s)]["best"] for s in SEEDS] for k in range(len(wins))]
     pr = procedure(E, wins, bests)
     cfgs = pr["cfgs"]
+    # 검증 에이전트 MUST-FIX 1: 봉인 — 마지막 설계 선택 폴드 시험 끝(2024-01-01)에서 가격 경로·포트폴리오를 자른다(열린 포지션은 직전 종가 시가평가)
+    f_last = FOLDS[EVO_FOLDS[-1]]
+    seal = E.row(f_last.test_hi)
+    E.LIM = np.minimum(np.asarray(E.LIM), seal).astype(np.int64)
+    E.end_row = seal - 1
     tests = [te for _, te in wins]
+    tests[-1] = Win(E, f_last.test_lo, f_last.test_hi, f_last.test_hi)
     st = E.stitched(cfgs, tests)
+    if len(st["rec"]) and int(np.max(st["rec"][:, PF.Q_X])) >= seal:
+        raise SystemExit("봉인 위반: 청산 행이 봉인 경계를 넘는다")
     t = trade_frame(E, st, cfgs)
     p = E.pmix
     met = {"ann": st["ann"], "fold_ann": st["fold_ann"], "fold_n": st["fold_n"], "n": int(len(t)), "expo": st["expo_mean"]}
@@ -1932,8 +1940,8 @@ def run_evolve(args) -> int:
             met[tag] = {"win": float(w_.sum() / max(1, w_.sum() + l_.sum())), "mean": float(x.mean()),
                         "gl": float(x[w_].mean() / -x[l_].mean()) if w_.any() and l_.any() else float("nan")}
         met["reasons"] = t["exit_reason"].value_counts().to_dict()
-        met["loss55"] = int((t["exit_px"] / t["entry_px"] - 1 < -0.055).sum())
-    met["cfgs"] = [{k: (None if v is None else str(v)) for k, v in c.items()} for c in cfgs]
+        met["loss55"] = int((pmix_net(t, p) < -0.055).sum())          # 검증 MINOR 2: 거래 순손익(추가분 포함) 기준
+    met["cfgs"] = cfgs                                                  # 검증 MINOR 1: 원래 값(∞ 는 JSON Infinity)
     with open(os.path.join(out, f"{args.evolve}.json"), "w", encoding="utf-8") as fh:
         json.dump({**base, "metrics": met, "sec": time.time() - t0}, fh, ensure_ascii=False, indent=1, default=float)
     t.to_csv(os.path.join(out, f"{args.evolve}_trades.csv"), index=False)
