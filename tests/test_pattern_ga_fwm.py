@@ -215,3 +215,18 @@ def test_addon_line_hit_before_lower_lines_same_day():
     pa = 110 * (1 + PF.LIVE_X[PF.X_SLIP])
     assert int(out[PF.O_TA]) == 2 and int(out[PF.O_TS]) == 3 and out[PF.O_PXS] == pytest.approx(pa * 0.95 * ks)
     assert int(out[PF.O_X]) == 3                                  # 첫 단위는 같은 날 본전·손절선에서
+
+
+def test_trail_start_waits_for_profit():
+    """진화 1세대: trail_start = 1R 이면 고가가 진입가 + 1R 에 닿기 전엔 장중 추적선(전날 MA50)을 쓰지 않는다."""
+    rows = [(100, 101, 99.5, 100.5), (100.5, 102, 99.6, 101), (101, 102, 99.7, 100)] + [(100, 101, 99.5, 100)] * 5
+    ma50 = [100.2] * 8
+    out = _run(_book(rows, ma50), _px(X_TRAIL=PF.TRAIL_MA50, X_INTRA=1.0, X_TRAIL_START=1.0))
+    assert int(out[PF.O_REASON]) != PF.R_TRAIL
+    out = _run(_book(rows, ma50), _px(X_TRAIL=PF.TRAIL_MA50, X_INTRA=1.0, X_TRAIL_START=0.0))
+    assert int(out[PF.O_REASON]) == PF.R_TRAIL and int(out[PF.O_X]) == 1
+
+
+def test_stop_policy_skip():
+    assert _filter(_event(stop_raw=88.0), _gv(G_SMAX=0.05, G_SPOL=1.0))[0] == 0     # 구조 손절 12% > 5% → 안 산다
+    assert _filter(_event(stop_raw=97.0), _gv(G_SMAX=0.05, G_SPOL=1.0))[0] == 1     # 3% → 산다

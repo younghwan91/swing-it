@@ -77,15 +77,15 @@ from research.signals.vcp import (
 # --- 유전자 → 거르기 벡터(``gv``) 번호 ---
 (G_STAGE, G_RS, G_BR, G_SUP_LO, G_SUP_HI, G_SLO_LO, G_SLO_HI, G_RHO, G_TOUCH, G_SPAN_LO, G_SPAN_HI, G_CEIL, G_DEPTH,
  G_DRY, G_RUNUP_COL, G_RUNUP, G_REST, G_EMIN, G_EACC, G_GAP, G_ANCHOR, G_CAP, G_FB_TOL, G_SLIP, G_DFLOOR, G_BASE,
- G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT) = range(34)
-N_G = 34                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
+ G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL) = range(35)
+N_G = 35                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
 MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신저가 · 돌파 성공률 ≥ 60%(전 구간 중앙 ≈ 0.60, 결과 전 고정)
 # --- 청산 인자 벡터(``px``) 번호 ---
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
- X_SMAX, X_INTRA) = range(34)
-N_X = 34                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+ X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE) = range(36)
+N_X = 36                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -104,7 +104,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -142,6 +142,7 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
     sbuf, sclose, shard = gv[G_STOP_BUF], gv[G_STOP_CLOSE] > 0.5, gv[G_STOP_HARD]
     eq, smax = gv[G_EQ] > 0.5, gv[G_SMAX]
     mkt = int(gv[G_MKT]) if gv[G_MKT] == gv[G_MKT] else 0
+    spol = gv[G_SPOL] > 0.5                            # 진화 1세대: 손절폭 상한 정책 — 1 = 구조 손절이 상한보다 멀면 안 산다(미너비니), 0 = 끌어올림
     for k in range(a, b):
         if h0in == h0in and F[k, F_H0IN] != h0in:
             continue
@@ -223,6 +224,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         e = f * (1.0 + slip)
         sp = sr
         if smax == smax and (e - sp) / e > smax:      # FWM M2: 손절폭 상한 — 손절선을 진입가 × (1 − smax) 로 끌어올린다(거래는 산다)
+            if spol:
+                continue
             sp = e * (1.0 - smax)
         if (e - sp) / e < dfloor:
             sp = e * (1.0 - dfloor)
@@ -304,6 +307,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     tighten = px[X_TIGHTEN] > 0.5
     tight_level = e + px[X_TIGHT_R] * R
     smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
+    t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
+    t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
     ix = px[X_INTRA] > 0.5                            # FWM M6(사용자 "알고리즘 매매라 장중에도 판다"): 반등 실패·추적·클라이맥스를
     #                                                   전날까지 정보로 정한 선에 걸어 두고 장중에 닿으면 그 선(시가가 넘으면 시가)에 판다
     fb_days = int(px[X_FB_DAYS])
@@ -408,7 +413,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     if ref == ref and ref > lx:
                         lx = ref
                         why_x = R_FAILX
-                if (j >= 1) if from_entry else partial:
+                if ((j >= 1) if from_entry else partial) and hh >= t_start and not t_close:
                     tl = np.nan
                     if trail == TRAIL_CHAND:
                         a = ATR[ci, t - 1]
@@ -557,7 +562,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             up5 = ct / c5 - 1.0 if c5 == c5 and c5 > 0 else np.nan
             if (up1 == up1 and up1 >= c_day) or (up5 == up5 and up5 >= c_5d):
                 pending = R_CLIMAX
-        act = ((j >= 1) if from_entry else partial) and not ix   # 8. 추적(장중 모드는 위에서)
+        act = ((j >= 1) if from_entry else partial) and hh >= t_start and (t_close or not ix)   # 8. 추적(장중 모드는 위에서)
         if act and pending < 0:
             if trail == TRAIL_CHAND:
                 a = ATR[ci, t - 1] if t >= 1 else np.nan

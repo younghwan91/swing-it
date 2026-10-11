@@ -174,6 +174,22 @@ DISC = (("ceil_win", PE.CEIL_WINS), ("theta", PE.THETAS), ("runup_win", PE.RUNUP
         ("stop_basis", ("intraday", "intraday") if FWM else ("intraday", "close")),   # FWM M2: 종가 손절은 −5% 를 넘긴다
         ("fail_exit", ("off", "prev_low", "entry_low")),
         ("reentry", ("off", "F", "line")), ("reentry_win", (1, 2, 3, 4, 5)))
+#: 진화 모드 메뉴 덮어쓰기(``PATTERN_GA_MENU`` JSON — META_EVOLUTION.md): {"nom": {이름: [수준…]}, "disc": {이름: [수준…]},
+#: "cont": {이름: [하한, 상한]}}. "inf" → ∞, null → 끔. 변형 메뉴 뒤에 적용한다(spawn 작업자도 같은 환경변수를 읽는다).
+MENU_OVERRIDE = json.loads(os.environ.get("PATTERN_GA_MENU", "") or "{}")
+if MENU_OVERRIDE:
+    def _lv(v):
+        return math.inf if v == "inf" else v
+    _no, _do, _co = MENU_OVERRIDE.get("nom", {}), MENU_OVERRIDE.get("disc", {}), MENU_OVERRIDE.get("cont", {})
+    #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
+    EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",)}
+    DISC = (*DISC, *((n, v) for n, v in EVO_GENES.items() if n in _do))
+    NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
+    DISC = tuple((n, tuple(_lv(x) for x in _do[n]) if n in _do else v) for n, v in DISC)
+    CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), c[3]) if c[0] in _co else c for c in CONT)
+    _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
+    if _unk:
+        raise SystemExit(f"PATTERN_GA_MENU 모르는 유전자: {sorted(_unk)}")
 N_LOGIT = sum(len(v) for _, v in NOM)
 N_CONT = len(CONT) + N_LOGIT
 DISC_SIZES = tuple(len(v) for _, v in DISC)
@@ -365,6 +381,7 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_EQ] = 1.0 if FWM else 0.0                # FWM M1: EPS 전년 같은 분기 대비 상승(흑자) 필수(정정 FWM-1 M9)
     gv[PF.G_SMAX] = STOP_MAX if FWM else np.nan       # FWM M2
     gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200").index(g.get("mkt") or "off")   # FWM M7
+    gv[PF.G_SPOL] = 1.0 if g.get("stop_policy") == "skip" else 0.0                 # 진화 1세대
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
@@ -408,6 +425,8 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_DFLOOR] = 0.02
     px[PF.X_SMAX] = STOP_MAX if FWM else np.nan     # FWM M2: 재진입 손절에도 같은 상한
     px[PF.X_INTRA] = 1.0 if FWM else 0.0            # FWM M6: 장중 청산(알고리즘 매매)
+    px[PF.X_TRAIL_START] = float(g.get("trail_start") or 0.0)   # 진화 1세대
+    px[PF.X_TRAIL_CLOSE] = 1.0 if g.get("trail_basis") == "close" else 0.0
     return px
 
 
@@ -1809,7 +1828,10 @@ def main(argv: "list[str] | None" = None) -> int:  # noqa: C901 — 단계가 �
     ap.add_argument("--debug", action="store_true", help="축소 실행(폴드 2 · 시드 2 · 예산 300 · 널 축소) — --out 을 탐색 디렉터리 밖으로")
     ap.add_argument("--n-feas", type=int, default=N_FEAS)
     ap.add_argument("--no-db", action="store_true", help="실현 가능 모드에서 분봉 커버리지 조회 생략(캐시만)")
+    ap.add_argument("--evolve", default="", help="진화 모드 후보 이름(META_EVOLUTION.md): 폴드 1~4 실제 GA 만, 널·봉인 폴드 없음")
     args = ap.parse_args(argv)
+    if args.evolve:
+        return run_evolve(args)
     out_dir = args.out
     debug = os.path.normpath(out_dir) != os.path.normpath(OUT_DIR)
     if args.debug and not debug:
@@ -1854,6 +1876,71 @@ def main(argv: "list[str] | None" = None) -> int:  # noqa: C901 — 단계가 �
 
     return run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_b, n_rs, n_ec, pool_n, debug, t0,
                     screen_n=screen[0], restart_screen=screen[1], feas_min=screen[2])
+
+
+EVO_FOLDS = (0, 1, 2, 3)                # META_EVOLUTION.md: 설계 선택용 = 폴드 1~4 시험(2020~2023). 폴드 5·6(2024-01~) 봉인
+EVO_LABEL, EVO_SUB = "pattern_ga_evo", "pattern_ga_evo"
+
+
+def run_evolve(args) -> int:
+    """진화 모드 — 후보 메뉴(``PATTERN_GA_MENU``)로 폴드 1~4 실제 GA(시드·예산 그대로) → 절차 출력 → 폴드 1~4 시험 이어 붙인 OOS 숫자만.
+    널·민감도·봉인 폴드(5·6)는 계산하지 않는다. 원장 = ``pattern_ga_evo``(DSR 시행 수에 센다)."""
+    from swing_it.diagnostics.trials import record_trial  # noqa: PLC0415
+    from swing_it.validation.walkforward import FOLDS  # noqa: PLC0415
+
+    t0 = time.time()
+    folds_spec = [tuple(FOLDS[k]) for k in EVO_FOLDS]
+    ensure_cache(args.cache, t0, with_p=True)
+    E = Engine(args.cache)
+    wins = fold_windows(E, [FOLDS[k] for k in EVO_FOLDS])
+    out = os.path.join(args.out, EVO_SUB)
+    os.makedirs(out, exist_ok=True)
+    head = run_provenance(args.cache).get("git_head", "")
+    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": args.evolve, "folds": list(EVO_FOLDS), "seeds": len(SEEDS),
+            "budget": BUDGET, "git_head": head}
+    record_trial(EVO_LABEL, {**base, "role": "진화 후보(결과 전)"}, logs_dir=args.out, note=f"패턴 GA 진화 후보 {args.evolve}")
+    ctx = mp.get_context("spawn")
+    r_chunks = max(1, math.ceil(RESTART_SCREEN / SCREEN_CHUNK))
+    res = {}
+    with cf.ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx, initializer=worker_init,
+                                initargs=(args.cache, folds_spec)) as ex:
+        sf = [ex.submit(screen_task, {"fold": k, "chunk": c, "n": SCREEN_CHUNK}) for k in range(len(wins)) for c in range(r_chunks)]
+        rx = {k: [] for k in range(len(wins))}
+        for f in cf.as_completed(sf):
+            r = f.result()
+            rx[r["fold"]].append(r["X"])
+        rx = {k: (np.vstack(v) if v else np.zeros((0, DIM))) for k, v in rx.items()}
+        _log("재시작 풀: " + " · ".join(f"폴드{k + 1} {len(v)}" for k, v in rx.items()), t0)
+        futs = [ex.submit(ga_task, {"fold": k, "seed": s, "budget": BUDGET, "x_restart": rx[k]}) for k in range(len(wins)) for s in SEEDS]
+        for i, f in enumerate(cf.as_completed(futs), 1):
+            r = f.result()
+            res[(r["fold"], r["seed"])] = r
+            if i % 10 == 0:
+                _log(f"진화 {args.evolve} 런 {i}/{len(futs)}", t0)
+    bests = [[res[(k, s)]["best"] for s in SEEDS] for k in range(len(wins))]
+    pr = procedure(E, wins, bests)
+    cfgs = pr["cfgs"]
+    tests = [te for _, te in wins]
+    st = E.stitched(cfgs, tests)
+    t = trade_frame(E, st, cfgs)
+    p = E.pmix
+    met = {"ann": st["ann"], "fold_ann": st["fold_ann"], "fold_n": st["fold_n"], "n": int(len(t)), "expo": st["expo_mean"]}
+    if len(t):
+        for tag, col in (("c1", "net"), ("c2", "net2")):
+            x = pmix_net(t, p, col)
+            w_, l_ = x > 0.005, x < -0.005
+            met[tag] = {"win": float(w_.sum() / max(1, w_.sum() + l_.sum())), "mean": float(x.mean()),
+                        "gl": float(x[w_].mean() / -x[l_].mean()) if w_.any() and l_.any() else float("nan")}
+        met["reasons"] = t["exit_reason"].value_counts().to_dict()
+        met["loss55"] = int((t["exit_px"] / t["entry_px"] - 1 < -0.055).sum())
+    met["cfgs"] = [{k: (None if v is None else str(v)) for k, v in c.items()} for c in cfgs]
+    with open(os.path.join(out, f"{args.evolve}.json"), "w", encoding="utf-8") as fh:
+        json.dump({**base, "metrics": met, "sec": time.time() - t0}, fh, ensure_ascii=False, indent=1, default=float)
+    t.to_csv(os.path.join(out, f"{args.evolve}_trades.csv"), index=False)
+    record_trial(EVO_LABEL, {**base, "role": "진화 후보 결과", "ann": met["ann"], "n": met["n"]}, logs_dir=args.out,
+                 note=f"패턴 GA 진화 후보 {args.evolve} 결과")
+    _log(f"진화 {args.evolve} 끝 — 폴드 1~4 연환산 {met['ann']:+.2%} · 체결 {met['n']}", t0)
+    return 0
 
 
 def run_full(E, wins, folds_spec, args, out_dir, sub_dir, seeds, budget, n_a, n_b, n_rs, n_ec, pool_n, debug, t0,
