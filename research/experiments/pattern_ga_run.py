@@ -893,7 +893,7 @@ class Engine:
         out = {"n": r["n"], "n_pass": c["n_pass"], "pen": pen, "feasible": pinfo["feasible"]}
         if counts_only:
             return out
-        if FIT_MODE == "trade":                      # 11세대 후보: 거래당 슬롯 대비 순(2배 비용)의 부트스트랩 2.5% 하한
+        if FIT_MODE == "trade":                      # 11세대 후보: 거래당 슬롯 대비 순(2배 비용)의 주문일 군집 부트스트랩 10% 분위
             rec = r["rec"]
             if len(rec) >= 3:
                 wb_ = rec[:, PF.Q_WB]
@@ -2077,7 +2077,7 @@ def run_evolve(args) -> int:
     names = {o: (f"{args.evolve}_s{o}" if offs_env else args.evolve) for o in offs}
     all_seeds = {o: tuple(s + o for s in SEEDS) for o in offs}
     for o in offs:
-        record_trial(EVO_LABEL, {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": names[o], "folds": list(EVO_FOLDS),
+        record_trial(EVO_LABEL, {"variant": VARIANT, "menu": MENU_OVERRIDE, "fit_mode": FIT_MODE, "floor": [FLOOR_PER_YEAR, FLOOR_YEAR], "candidate": names[o], "folds": list(EVO_FOLDS),
                                  "seeds": list(all_seeds[o]), "budget": BUDGET, "git_head": head, "role": "진화 후보(결과 전)"},
                      logs_dir=args.out, note=f"패턴 GA 진화 후보 {names[o]}")
     ctx = mp.get_context("spawn")
