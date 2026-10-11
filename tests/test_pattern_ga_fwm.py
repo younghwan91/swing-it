@@ -256,3 +256,11 @@ def test_be_close_basis():
     assert int(o[PF.O_REASON]) == PF.R_BE                                             # 고가 106 ≥ 105 → 본전 → 행 2 저가 99 에서
     o = _run(_book(rows), _px(X_BE_R=1.0, X_BE_CLOSE=1.0), e=100.0, sp=95.0)
     assert int(o[PF.O_REASON]) != PF.R_BE                                             # 종가 102 < 105 → 본전 안 옮김
+
+
+def test_atr_contraction_gene():
+    F = _event()
+    F[0, PE.FI["atr_s"]] = 98.0 * 0.03                                               # ATR20 3% of d−1 close 98
+    assert _filter(F, _gv(G_ATRMAX=0.04))[0] == 1
+    assert _filter(F, _gv(G_ATRMAX=0.025))[0] == 0
+    assert _filter(F, _gv())[0] == 1                                                  # 끔

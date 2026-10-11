@@ -77,8 +77,8 @@ from research.signals.vcp import (
 # --- 유전자 → 거르기 벡터(``gv``) 번호 ---
 (G_STAGE, G_RS, G_BR, G_SUP_LO, G_SUP_HI, G_SLO_LO, G_SLO_HI, G_RHO, G_TOUCH, G_SPAN_LO, G_SPAN_HI, G_CEIL, G_DEPTH,
  G_DRY, G_RUNUP_COL, G_RUNUP, G_REST, G_EMIN, G_EACC, G_GAP, G_ANCHOR, G_CAP, G_FB_TOL, G_SLIP, G_DFLOOR, G_BASE,
- G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL) = range(35)
-N_G = 35                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
+ G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL, G_ATRMAX) = range(36)
+N_G = 36                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
 MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신저가 · 돌파 성공률 ≥ 60%(전 구간 중앙 ≈ 0.60, 결과 전 고정)
 # --- 청산 인자 벡터(``px``) 번호 ---
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
@@ -143,6 +143,7 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
     sbuf, sclose, shard = gv[G_STOP_BUF], gv[G_STOP_CLOSE] > 0.5, gv[G_STOP_HARD]
     eq, smax = gv[G_EQ] > 0.5, gv[G_SMAX]
     mkt = int(gv[G_MKT]) if gv[G_MKT] == gv[G_MKT] else 0
+    amax = gv[G_ATRMAX]                               # 진화 3세대 후보: d−1 ATR20 / 종가 ≤ amax(매수 전 수축 — −5% 손절이 노이즈 밖), NaN = 끔
     spol = gv[G_SPOL] > 0.5                            # 진화 1세대: 손절폭 상한 정책 — 1 = 구조 손절이 상한보다 멀면 안 산다(미너비니), 0 = 끌어올림
     for k in range(a, b):
         if h0in == h0in and F[k, F_H0IN] != h0in:
@@ -160,6 +161,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         if stage == 5 and not (F[k, F_TTH0] > 0.5 and F[k, F_ABOVE50] > 0.5 and F[k, F_MA50UP] > 0.5):   # 2세대: + MA50 상승
             continue
         if eq and not (F[k, F_EQ] > 0.0 and F[k, F_EQ] > F[k, F_EQP]):           # FWM M1: 흑자 ∧ 전년 같은 분기보다 증가
+            continue
+        if amax == amax and not (F[k, F_CLOSE_S] > 0 and F[k, F_ATR] / F[k, F_CLOSE_S] <= amax):
             continue
         if mkt == 1 and not F[k, F_MNH] > MKT_NHNL_MIN:                          # FWM M7 시장: 신고가 > 신저가
             continue

@@ -191,6 +191,9 @@ if MENU_OVERRIDE:
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
     CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), c[3]) if c[0] in _co else c for c in CONT)
+    #: 진화 3세대 후보 연속 유전자(이름이 있을 때만 붙는다): d−1 ATR20/종가 상한, 위쪽 끝 = 끔
+    EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi")}
+    CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), "hi") for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
         raise SystemExit(f"PATTERN_GA_MENU 모르는 유전자: {sorted(_unk)}")
@@ -390,6 +393,7 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_SMAX] = STOP_MAX if FWM else np.nan       # FWM M2
     gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200").index(g.get("mkt") or "off")   # FWM M7
     gv[PF.G_SPOL] = 1.0 if g.get("stop_policy") == "skip" else 0.0                 # 진화 1세대
+    gv[PF.G_ATRMAX] = np.nan if g.get("atr_max") is None else float(g["atr_max"])   # 진화 3세대 후보
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
