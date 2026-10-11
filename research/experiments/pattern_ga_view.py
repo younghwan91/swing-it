@@ -33,7 +33,8 @@ def _args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", default="")
     ap.add_argument("--cache", required=True)
-    ap.add_argument("--ledger", required=True, help="런 원장 TRIALS.jsonl(시드 최적 'best' 줄)")
+    ap.add_argument("--ledger", default="", help="런 원장 TRIALS.jsonl(시드 최적 'best' 줄)")
+    ap.add_argument("--evo-json", default="", help="진화 후보 결과 JSON(pattern_ga_evo/<이름>.json) — 그 설정으로 폴드 1~4·봉인 그대로")
     ap.add_argument("--git-prefix", default="", help="이 git 앞자리 줄만(재시작 전 원장 섞임 방지)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--title", default="패턴 GA 결과")
@@ -45,6 +46,11 @@ def _args():
 
 def main() -> None:
     a = _args()
+    evo = None
+    if a.evo_json:                                    # 진화 후보: 메뉴 덮어쓰기를 import 전에 같게 둔다
+        evo = json.load(open(a.evo_json, encoding="utf-8"))
+        a.variant = evo["variant"]
+        os.environ["PATTERN_GA_MENU"] = json.dumps(evo["menu"])
     os.environ["PATTERN_GA_VARIANT"] = a.variant
     os.environ.setdefault("NUMBA_NUM_THREADS", "2")
     sys.path[:0] = [".", "src"]
@@ -72,22 +78,33 @@ def main() -> None:
                 g[k] = m[0] if m else None
         return g
 
-    runs = {}
-    for line in open(a.ledger, encoding="utf-8"):
-        d = json.loads(line)["config"]
-        if "run" in d and d.get("git_head", "").startswith(a.git_prefix):
-            runs[d["run"]] = parse(d["best"])
     E = G.Engine(a.cache)
-    wins = G.fold_windows(E, FOLDS)
-    need = [f"fold{k}/seed{s}" for k in range(len(wins)) for s in G.SEEDS]
-    miss = [r for r in need if r not in runs]
-    if miss:
-        raise SystemExit(f"원장에 런 {len(miss)}개 없음(예: {miss[:3]}) — 실제 GA 가 끝나지 않았다")
-    bests = [[runs[f"fold{k}/seed{s}"] for s in G.SEEDS] for k in range(len(wins))]
-    pr = G.procedure(E, wins, bests)
-    cfgs = pr["cfgs"]
-    tests = [te for _, te in wins]
+    if evo is not None:                               # 폴드 1~4 · 봉인(run_evolve 와 같은 자르기)
+        wins = G.fold_windows(E, [FOLDS[k] for k in G.EVO_FOLDS])
+        cfgs = evo["metrics"]["cfgs"]
+        f_last = FOLDS[G.EVO_FOLDS[-1]]
+        seal = E.row(f_last.test_hi)
+        E.LIM = np.minimum(np.asarray(E.LIM), seal).astype(np.int64)
+        E.end_row = seal - 1
+        tests = [te for _, te in wins]
+        tests[-1] = G.Win(E, f_last.test_lo, f_last.test_hi, f_last.test_hi)
+    else:
+        runs = {}
+        for line in open(a.ledger, encoding="utf-8"):
+            d = json.loads(line)["config"]
+            if "run" in d and d.get("git_head", "").startswith(a.git_prefix):
+                runs[d["run"]] = parse(d["best"])
+        wins = G.fold_windows(E, FOLDS)
+        need = [f"fold{k}/seed{s}" for k in range(len(wins)) for s in G.SEEDS]
+        miss = [r for r in need if r not in runs]
+        if miss:
+            raise SystemExit(f"원장에 런 {len(miss)}개 없음(예: {miss[:3]}) — 실제 GA 가 끝나지 않았다")
+        bests = [[runs[f"fold{k}/seed{s}"] for s in G.SEEDS] for k in range(len(wins))]
+        cfgs = G.procedure(E, wins, bests)["cfgs"]
+        tests = [te for _, te in wins]
     st = E.stitched(cfgs, tests)
+    if evo is not None and abs(st["ann"] - evo["metrics"]["ann"]) > 1e-9:
+        raise SystemExit(f"진화 결과 재현 실패: {st['ann']} vs {evo['metrics']['ann']}")
     t = G.trade_frame(E, st, cfgs)
     G.CHART_N = len(t)
     pts = G.chart_points(E, t, cfgs)
