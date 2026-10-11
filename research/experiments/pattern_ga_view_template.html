@@ -1,0 +1,141 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>
+
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --fg:#1b1f27; --muted:#5d6676; --line:#dfe3ea;
+  --up:#d6343f; --down:#2f6fd1; --accent:#0f7b6c; --warn:#b4690e; --bad:#c2333d; --good:#16804a;
+  --pivot:#7a4fd6; --stop:#c2333d; --target:#16804a; --zz:#b4690e;
+  --f-body:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#12151b; --panel:#1a1e26; --fg:#e7eaf0; --muted:#98a1b2; --line:#2c323e;
+  --up:#ef5a63; --down:#5b93ec; --accent:#3cc3ad; --warn:#e3a14a; --bad:#ef6b73; --good:#4cc286;
+  --pivot:#a888f0; --stop:#ef6b73; --target:#4cc286; --zz:#e3a14a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12151b; --panel:#1a1e26; --fg:#e7eaf0; --muted:#98a1b2; --line:#2c323e;
+  --up:#ef5a63; --down:#5b93ec; --accent:#3cc3ad; --warn:#e3a14a; --bad:#ef6b73; --good:#4cc286;
+  --pivot:#a888f0; --stop:#ef6b73; --target:#4cc286; --zz:#e3a14a; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:14px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:16px;padding-block:20px 48px;display:grid;gap:18px}
+h1{font-size:22px;margin:0;text-wrap:balance}
+.lede{color:var(--muted);max-width:75ch;margin:4px 0 0}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button,select{font:inherit;padding:6px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);cursor:pointer}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.stats{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--muted);font-family:var(--f-num);font-size:12.5px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted)}
+.sw{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:5px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;display:grid;gap:10px}
+.card-h{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.card-h h2{font-size:16px;margin:0}
+.pill{font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);font-family:var(--f-num)}
+.pill.win{color:var(--good);border-color:var(--good)} .pill.loss{color:var(--bad);border-color:var(--bad)} .pill.flat{color:var(--warn);border-color:var(--warn)}
+.body{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px}
+@media (max-width:860px){.body{grid-template-columns:minmax(0,1fr)}}
+.chart{height:460px;min-width:0}
+.why{font-size:13px;display:grid;gap:8px;align-content:start;min-width:0}
+.why h3{font-size:12px;letter-spacing:.06em;color:var(--muted);margin:0;text-transform:uppercase}
+.why ul{margin:0;padding-left:0;list-style:none;display:grid;gap:3px}
+.why li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:4px}
+.ok{color:var(--good)} .no{color:var(--bad)} .ref{color:var(--muted)}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.outcome{border-top:1px solid var(--line);padding-top:8px}
+.tbl{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+th:nth-child(-n+3),td:nth-child(-n+3){text-align:left}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--bg)}
+.note{color:var(--muted);font-size:12.5px;max-width:90ch}
+.warnbox{border:1px solid var(--warn);border-radius:8px;padding:10px 14px;background:var(--panel)}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.kpi b{display:block;font-family:var(--f-num);font-size:20px;font-variant-numeric:tabular-nums}
+.kpi span{color:var(--muted);font-size:12px}
+h2.sec{font-size:16px;margin:8px 0 0}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;600&display=swap">
+</head><body>
+<div class="wrap">
+<header><h1>__H1__</h1>
+<p class="lede">__LEDE__</p></header>
+<div class="warnbox" id="warn"></div>
+<div class="kpi" id="kpi"></div>
+<h2 class="sec">폴드별로 고른 설정과 결과</h2>
+<div class="tbl"><table><thead><tr><th>폴드</th><th>학습 → 시험</th><th>설정 중심 모양</th><th>진입</th><th>손절</th><th>익절·추적</th><th>기타 청산</th><th>시험 체결</th><th>시험 연환산</th></tr></thead><tbody id="cfg"></tbody></table></div>
+<h2 class="sec">표본 밖 __N__건 전부 (주문일 순)</h2>
+<div class="bar"><label for="flt">보기</label><select id="flt"><option value="loss">손실</option><option value="big">첫 단위 −5% 넘는 손실</option><option value="win">이익</option><option value="all">__N__건 전부</option><option value="viewed">열람 제외판에서 빠지는 거래</option></select></div>
+<div class="legend">
+<span><i class="sw" style="background:var(--zz)"></i>반전점 H0·A·B·C·D·E</span>
+<span><i class="sw" style="background:var(--pivot)"></i>상단 추세선</span>
+<span><i class="sw" style="background:var(--accent)"></i>하단 추세선</span>
+<span><i class="sw" style="background:var(--stop)"></i>손절가</span>
+<span><i class="sw" style="background:var(--muted)"></i>MA50</span></div>
+<div id="cards" style="display:grid;gap:16px"></div>
+<h2 class="sec">표본 밖 전체 __N__건</h2>
+<div class="bar"><label for="sort">정렬</label><select id="sort"><option value="order">주문일</option><option value="net">순손익</option><option value="mfe">최대 유리 R</option></select></div>
+<div class="tbl"><table><thead><tr><th>종목</th><th>주문일</th><th>청산</th><th>모양</th><th>폴드</th><th>손절폭</th><th>순</th><th>R</th><th>최대 유리 R</th><th>보유</th></tr></thead><tbody id="rows"></tbody></table></div>
+<p class="note">R = 순손익 ÷ 손절폭(1R = 손절까지 잃는 돈). "최대 유리 R" = 보유 중 가장 많이 올랐을 때 몇 R이었는지입니다. 설정 중심 모양은 GA가 고른 기울기 구간의 가운데이고, 구간이 넓어서 실제 매매 모양은 섞여 나옵니다.</p>
+</div>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const D=/*__DATA__*/null;
+const REASON={stop:'손절',stop_entry:'진입일 손절',breakeven:'본전 손절',trail:'추적 청산',time:'시간 상한',data_end:'관측 끝',failed_breakout:'돌파 실패',fail_exit:'반등 실패 조기 청산',climax:'급등 매도',delisted:'상장폐지'};
+const ENTRY={bottom:'바닥 반전(E 저점 위 반등 매수)',horiz:'수평 저항 돌파',h0:'H0 천장 돌파',upper:'상단 추세선 돌파'};
+const pct=(x,d=1)=>x==null||isNaN(x)?'—':(x*100).toFixed(d)+'%';
+const spct=(x,d=2)=>x==null||isNaN(x)?'—':(x>0?'+':'')+(x*100).toFixed(d)+'%';
+const won=x=>x==null?'—':Math.round(x).toLocaleString('ko-KR');
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const S=D.summary;let charts=[];const key=t=>t.code+'-'+t.order_day;
+function li(ok,h){return `<li><span class="${ok===true?'ok':ok===false?'no':'ref'}">${ok===true?'✓':ok===false?'✗':'·'}</span><span>${h}</span></li>`}
+function cfgTxt(c){const ex=[];if(c.climax)ex.push('급등 매도');if(c.fail_exit&&c.fail_exit!=='off')ex.push('반등 실패 조기 청산');if(c.reentry&&c.reentry!=='off')ex.push(c.reentry==='F'?'손절 뒤 바닥 재진입':'선 복귀 재진입');if(c.pyramid&&c.pyramid!=='off')ex.push('불타기('+c.pyramid+')');
+ const stop=`${c.stop_basis==='close'?'종가':'장중'} 기준 · 상한 ${pct(c.stop_cap,1)}${c.stop_anchor?' · 기준 '+c.stop_anchor:''}`;
+ const tp=`${c.take_r==='inf'||c.take_r==null||c.take_r===Infinity?'부분 익절 없음':c.take_r+'R에서 '+(c.take_frac>0.4?'절반':'1/3')} · ${c.be_r==='inf'||c.be_r==null||c.be_r===Infinity?'본전 이동 없음':c.be_r+'R 뒤 본전'} · ${c.trail==='chand'?'샹들리에 ATR×'+(+c.trail_k).toFixed(1):c.trail.toUpperCase()+' 이탈'}`;
+ return {stop,tp,ex:ex.join(' · ')||'—'}}
+function kpi(){const k=[['체결',S.n+'건'],['승률(본전 제외)',pct(S.win,0)],['평균 이익',spct(S.avgwin,1)],['평균 손실',spct(S.avgloss,1)],['손익비',(S.avgwin/-S.avgloss).toFixed(2)+' : 1'],['거래당 순',spct(S.mean)],['평균 R',(S.Rmean>0?'+':'')+S.Rmean.toFixed(2)+'R'],['계좌 연환산(초과, 비용 2배)',spct(S.ann)]];
+ document.getElementById('kpi').innerHTML=k.map(([a,b])=>`<div><span>${a}</span><b>${b}</b></div>`).join('');
+ document.getElementById('warn').innerHTML='<b>먼저 보실 점</b><ul style="margin:6px 0 0;padding-left:18px">'+S.notes.map(x=>'<li>'+x+'</li>').join('')+'</ul>'}
+function cfgTable(){document.getElementById('cfg').innerHTML=S.cfgs.map((c,k)=>{const x=cfgTxt(c);const f=S.folds[k];return `<tr><td>${k+1}</td><td>${f[0].slice(0,4)}~${(+f[1].slice(0,4)-1)} → ${f[2].slice(0,4)}</td><td>${S.shapes[k]}</td><td>${ENTRY[c.entry]||c.entry} · θ ${pct(c.theta,0)} · RS ≥ ${(+c.rs_min).toFixed(0)} · 추세 ${c.stage} · EPS YoY ${c.e_min==null?'상승만':'≥ '+pct(+c.e_min,0)}${c.e_accel==1?'·가속':''}${c.mkt?' · 시장 '+({off:'끔',nhnl:'신고가>신저가',bos:'돌파 성공 ≥60%',br200:'MA200 위 >50%'}[c.mkt]||c.mkt):''}</td><td>${x.stop}</td><td>${x.tp}</td><td>${x.ex}</td><td>${S.fold_n[k]}</td><td class="${S.fold_ann[k]>0?'ok':'no'}">${spct(S.fold_ann[k],1)}</td></tr>`}).join('')}
+function card(t){const cls=t.net>0.005?'win':t.net<-0.005?'loss':'flat';const c=S.cfgs[t.fold];const x=cfgTxt(c);const P={};t.points.forEach(p=>{if('H0ABCDE'.includes(p.kind)&&p.kind.length<=2)P[p.kind]=p});
+ const pts=['H0','A','B','C','D','E'].filter(k=>P[k]).map(k=>`${k} ${won(P[k].price)} (${P[k].date.slice(5)})`).join(' → ');
+ return `<article class="card"><div class="card-h"><h2>${t.name} <span class="num ref">${t.code}</span></h2><span class="ref">${t.market} · 폴드 ${t.fold+1}</span>
+ <span class="pill ${cls}">${spct(t.net)} · ${t.R>0?'+':''}${t.R.toFixed(2)}R</span><span class="ref">${REASON[t.reason]||t.reason}</span></div>
+ <div class="body"><div class="chart" id="ch-${key(t)}"></div><div class="why">
+ <h3>진입 사유 (신호일 ${t.signal_day} 종가)</h3><ul>
+ ${li(t.shape==='하락 쐐기',`모양: <b>${t.shape}</b>`)}
+ ${li(null,`반전점 ${pts}`)}
+ ${li(null,`진입 방식: ${ENTRY[t.table.entry]||t.table.entry} · 반전 문턱 θ ${pct(t.table.theta,0)} · 천장 창 ${t.table.ceil_win}일`)}
+ ${li(t.order_above_upper?false:null,`주문가 ${won(t.order_px)} = 상단선 대비 ${spct(t.order_vs_upper,1)}${t.order_above_upper?' (이미 쐐기 밖)':''}`)}
+ </ul><h3>청산 규칙 (폴드 ${t.fold+1} 설정)</h3><ul>
+ ${li(null,`손절 ${won(t.stop_px)} · 손절폭 ${pct(t.d)} · ${x.stop}`)}
+ ${li(null,x.tp)}${li(null,'기타: '+x.ex)}
+ </ul><div class="outcome"><b>결과</b> · ${t.entry} 매수 ${won(t.entry_px)} → ${t.exit.date} ${REASON[t.reason]||t.reason} @ <span class="num">${won(t.exit.price)}</span>${t.partial_px?` · 부분 익절 ${won(t.partial_px)}`:''}${t.add_px?` · 불타기 ${won(t.add_px)}`:''} · 보유 <span class="num">${t.hold}</span>일 · 최대 유리 <span class="num">${t.mfe_R.toFixed(1)}R</span> · 순 <span class="num">${spct(t.net)}</span></div>
+ </div></div></article>`}
+function draw(t){const el=document.getElementById(`ch-${key(t)}`);
+ const ch=LightweightCharts.createChart(el,{autoSize:true,layout:{background:{type:'solid',color:css('--panel')},textColor:css('--muted'),fontFamily:'IBM Plex Mono, monospace',fontSize:11},grid:{vertLines:{color:css('--line')},horzLines:{color:css('--line')}},rightPriceScale:{borderColor:css('--line')},timeScale:{borderColor:css('--line')},crosshair:{mode:0}});
+ const up=css('--up'),dn=css('--down');
+ const cs=ch.addCandlestickSeries({upColor:up,downColor:dn,borderUpColor:up,borderDownColor:dn,wickUpColor:up,wickDownColor:dn,priceLineVisible:false,lastValueVisible:false});
+ cs.setData(t.bars.map(b=>({time:b[0],open:b[1],high:b[2],low:b[3],close:b[4]})));
+ const ln=(c,w,st)=>ch.addLineSeries({color:c,lineWidth:w,lineStyle:st||0,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+ ln(css('--muted'),1).setData(t.bars.filter(b=>b[5]!=null).map(b=>({time:b[0],value:b[5]})));
+ const zz=t.points.filter(p=>p.kind!=='l'&&p.kind!=='h');ln(css('--zz'),1,2).setData(zz.map(p=>({time:p.date,value:p.price})));
+ if(t.upper.from)ln(css('--pivot'),2).setData([{time:t.upper.from.date,value:t.upper.from.price},{time:t.upper.to.date,value:t.upper.to.price}]);
+ if(t.lower.from)ln(css('--accent'),2).setData([{time:t.lower.from.date,value:t.lower.from.price},{time:t.lower.to.date,value:t.lower.to.price}]);
+ cs.priceScale().applyOptions({scaleMargins:{top:0.04,bottom:0.26}});const vs=ch.addHistogramSeries({priceScaleId:'vol',priceFormat:{type:'volume'},priceLineVisible:false,lastValueVisible:false});ch.priceScale('vol').applyOptions({scaleMargins:{top:0.78,bottom:0}});vs.setData(t.bars.filter(b=>b[6]!=null).map(b=>({time:b[0],value:b[6],color:b[4]>=b[1]?css('--up')+'99':css('--down')+'99'})));
+ cs.createPriceLine({price:t.stop_px,color:css('--stop'),lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'손절'});
+ const mk=zz.map(p=>({time:p.date,position:(p.kind==='H0'||p.kind==='B'||p.kind==='D')?'aboveBar':'belowBar',color:css('--zz'),shape:'circle',text:p.kind}));
+ mk.push({time:t.entry,position:'belowBar',color:css('--accent'),shape:'arrowUp',text:'매수 '+won(t.entry_px)});
+ mk.push({time:t.exit.date,position:'aboveBar',color:t.net>0?css('--good'):css('--bad'),shape:'arrowDown',text:'매도 '+spct(t.net,1)});
+ const seen=new Map();mk.forEach(m=>{const k=m.time+m.position;if(seen.has(k)){const o=seen.get(k);o.text=[o.text,m.text].filter(Boolean).join(' / ')}else seen.set(k,{...m})});
+ cs.setMarkers([...seen.values()].sort((a,b)=>a.time<b.time?-1:a.time>b.time?1:0));ch.timeScale().fitContent();charts.push(ch)}
+function pool(){const f=document.getElementById('flt').value;return D.cards.filter(t=>f==='all'||(f==='win'&&t.net>0)||(f==='loss'&&t.net<=0)||(f==='big'&&t.loss5)||(f==='viewed'&&t.viewed))}
+function render(){charts.forEach(c=>c.remove());charts=[];const s=pool();document.getElementById('cards').innerHTML=s.map(card).join('');s.forEach(draw)}
+function table(){const k=document.getElementById('sort').value;const r=[...D.rows].sort((a,b)=>k==='order'?(a.order<b.order?-1:1):b[k]-a[k]);
+ document.getElementById('rows').innerHTML=r.map(t=>`<tr><td>${t.name} <span class="ref">${t.code}</span></td><td>${t.order}</td><td>${REASON[t.reason]||t.reason}</td><td>${t.shape}</td><td>${t.fold+1}</td><td>${pct(t.d)}</td><td class="${t.net>0?'ok':'no'}">${spct(t.net)}</td><td>${t.R.toFixed(2)}</td><td>${t.mfe.toFixed(1)}</td><td>${t.hold}</td></tr>`).join('')}
+document.getElementById('flt').onchange=render;document.getElementById('sort').onchange=table;
+try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',render)}catch(e){}
+new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+kpi();cfgTable();table();render();
+</script></body></html>
