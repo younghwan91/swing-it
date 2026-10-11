@@ -325,3 +325,19 @@ def test_gen7_entry_quality_levels():
     F[0, fi["runup20"]] = 0.1
     assert _filter(F, _gv(G_ENTQ=2.0))[0] == 0
     assert _filter(F, _gv(G_ENTQ=3.0))[0] == 0
+
+
+def test_gen8_climax_close_and_no_entry_day_be():
+    # 행 1: 장중 고가 112(급등 선 위) 윗꼬리, 종가 104 → 종가 판단이면 안 판다
+    rows = [(100, 101, 99.5, 100.5), (101, 112, 100.8, 104), (104, 106, 103, 105)] + [(105, 106, 104, 105)] * 5
+    px_i = _px(X_CLIMAX=1.0, X_CLIMAX_DAY=0.10, X_CLIMAX_5D=0.5, X_CLIMAX_R=1.0, X_INTRA=1.0)
+    o = _run(_book(rows), px_i, e=100.0, sp=95.0)
+    assert int(o[PF.O_REASON]) == PF.R_CLIMAX and int(o[PF.O_X]) == 1
+    px_c = _px(X_CLIMAX=1.0, X_CLIMAX_DAY=0.10, X_CLIMAX_5D=0.5, X_CLIMAX_R=1.0, X_INTRA=1.0, X_CLIMAX_CLOSE=1.0)
+    o = _run(_book(rows), px_c, e=100.0, sp=95.0)
+    assert int(o[PF.O_REASON]) != PF.R_CLIMAX or int(o[PF.O_X]) != 1
+    # 진입일 고가 106 ≥ 1R(105) → safe 4 면 본전 미발동
+    rows2 = [(100, 106, 99.5, 101), (101, 102, 99.8, 100.5), (100.5, 101, 99, 100)] + [(100, 101, 99.2, 100)] * 5
+    o3 = _run(_book(rows2), _px(X_BE_R=1.0, X_SAFE=3.0), e=100.0, sp=95.0)
+    o4 = _run(_book(rows2), _px(X_BE_R=1.0, X_SAFE=4.0), e=100.0, sp=95.0)
+    assert int(o3[PF.O_REASON]) == PF.R_BE and int(o4[PF.O_REASON]) != PF.R_BE

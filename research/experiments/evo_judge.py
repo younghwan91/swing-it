@@ -30,11 +30,12 @@ def load(c: str):
         trades.append(t)
     t = pd.concat(trades) if trades else pd.DataFrame()
     if len(t):
-        t = t.drop_duplicates(["code", "order_day"]).copy()
         amb = t["amb"].astype(bool)
-        p = 0.275                                     # 엔진 pmix(캐시 meta) — 모호 거래만 영향(대부분 0건)
+        p = 0.275                                     # 엔진 pmix(캐시 meta 0.27523) — 모호 거래만 영향(대부분 0건)
         t["n2"] = t["net2"].where(~amb, p * t["net2_stop0"] + (1 - p) * t["net2"])
         t["n2s"] = t["n2"] * (t["alloc"] / SLOT_W).clip(upper=1.0)
+        # 검증 10차 MINOR 1(정정 G8-1): 같은 (종목, 주문일)은 시드마다 청산 설정이 달라 손익이 다르다 → 시드 평균 한 행
+        t = t.groupby(["code", "order_day"], as_index=False).agg(n2=("n2", "mean"), n2s=("n2s", "mean"))
     return anns, t
 
 

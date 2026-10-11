@@ -84,8 +84,8 @@ MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신�
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
- X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK) = range(39)
-N_X = 39                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+ X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE) = range(40)
+N_X = 40                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -104,7 +104,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -326,6 +326,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
     t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
     t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
+    safe4 = px[X_SAFE] > 3.5                          # 8세대(검증 10차): 진입일 장중 고가로 본전 이동을 켜지 않는다(TCC스틸 2020-12)
+    c_close = px[X_CLIMAX_CLOSE] > 0.5                # 8세대: 급등 매도를 종가 판단으로(첫 돌파일 윗꼬리에 팔지 않는다 — 새로닉스 s0)
     safe3 = px[X_SAFE] > 2.5                          # 4세대(검증 MUST-FIX 6): 이익 잠금을 종가 ≥ e + 3R 로 발동(장중 윗꼬리 하루로 잠그지 않는다)
     lock_on = False
     safe2 = px[X_SAFE] > 1.5                          # 3세대(검증 4차): 불타기 뒤 평단 손절 · 급등일(+10%)·+3R 위 추가 금지 · +3R 이익 잠금
@@ -539,7 +541,16 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
             lv1 = prevc * (1.0 + c_day) if prevc == prevc and prevc > 0 else np.inf
             lv5 = c5_ * (1.0 + c_5d) if c5_ == c5_ and c5_ > 0 else np.inf
             pst = max(c_lvl, min(lv1, lv5))
-            if pst < 1e300 and H[ci, t] >= pst:       # 하방 선은 위에서 먼저 처리(같은 날 순서 모름 → 보수)
+            if c_close and pst < 1e300 and C[ci, t] >= pst:   # 8세대 종가 판단: 종가가 급등 선 위면 종가(동시호가)에 판다
+                p_ = C[ci, t] * kx
+                cash += (sb + sa) * p_
+                out[O_REASON] = R_CLIMAX
+                out[O_X] = t
+                out[O_FIN] = p_
+                out[O_PNL] = cash
+                out[O_MFE] = mfe
+                return
+            if (not c_close) and pst < 1e300 and H[ci, t] >= pst:   # 하방 선은 위에서 먼저 처리(같은 날 순서 모름 → 보수)
                 p_ = (op if op >= pst else pst) * kx
                 cash += (sb + sa) * p_
                 out[O_REASON] = R_CLIMAX
@@ -549,7 +560,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                 out[O_PNL] = cash
                 out[O_MFE] = mfe
                 return
-        if be_trig < 0 and ((C[ci, t] >= be_level) if be_close else (H[ci, t] >= be_level or op >= be_level)):
+        if be_trig < 0 and not (safe4 and j == 0) and ((C[ci, t] >= be_level) if be_close else (H[ci, t] >= be_level or op >= be_level)):
             be_trig = j
         if add_state == 0 and pyr > 0 and j >= 1 and (be_trig >= 0 or not safe):
             if (pyr == PYR_1R and H[ci, t] >= pyr_level) or (pyr == PYR_NEWHIGH and H[ci, t] > h0) or \

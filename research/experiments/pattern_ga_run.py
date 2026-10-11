@@ -190,7 +190,7 @@ if MENU_OVERRIDE:
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
                  "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
-                 "stop_max": (0.05,)}                                       # 7세대: 손절 상한(위험 기준 비중은 FWM 에서 늘 켬)             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "stop_max": (0.05,), "climax_basis": ("intraday",)}         # 7세대: 손절 상한 · 8세대: 급등 매도 판단             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -453,6 +453,7 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_TRAIL_CLOSE] = 1.0 if g.get("trail_basis") == "close" else 0.0
     px[PF.X_SAFE] = float(g.get("exit_safe") or 0)                 # 진화 2세대
     px[PF.X_BE_CLOSE] = 1.0 if g.get("be_basis") == "close" else 0.0
+    px[PF.X_CLIMAX_CLOSE] = 1.0 if g.get("climax_basis") == "close" else 0.0   # 8세대
     px[PF.X_RISK] = STOP_MAX if FWM else np.nan     # 7세대(검증 MUST-FIX 9): FWM 은 늘 위험 기준 비중 — 손절 한 번의 슬롯 손실 ≤ 5%(갭 예외)
     return px
 
