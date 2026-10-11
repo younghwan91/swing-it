@@ -87,7 +87,8 @@ F_COLS = ("level", "order", "h0", "A", "B", "Cl", "D", "E", "su", "sl", "s_up", 
           "ma50_up",                            # 진화 2세대: d−1 MA50 > 20 거래일 전 MA50(러너가 채운다)
           "ma20_up", "h0_wick",                 # 3세대: d−1 MA20 > 5 거래일 전 · H0 봉 윗꼬리 비율(러너가 채운다)
           "fl_smart5", "fl_smart20", "fl_indiv5", "fl_indiv20",   # 9세대: d−1 까지 N일 (기관+외국인)·개인 순매수 수량 / 거래량(러너가 채운다)
-          "body_s", "e_age")                    # 9세대: d−1 봉 몸통 (C−O)/O · d − 행(E)(러너가 채운다)
+          "body_s", "e_age",                    # 9세대: d−1 봉 몸통 (C−O)/O · d − 행(E)(러너가 채운다)
+          "h0_volx")                            # 10세대: H0 봉 거래량 / 직전 20 거래일 평균(러너가 채운다)
 FI = {k: i for i, k in enumerate(F_COLS)}
 #: 사건 표 정수 열(``I``) — iA = 패턴 첫 저점(정정 2 의 A), iS = 패턴 시작(``h0in`` 0: A, 1: H0).
 I_COLS = ("d", "ci", "i0", "iA", "iB", "iC", "iD", "iE", "iS", "table")

@@ -361,3 +361,17 @@ def test_gen9_body_and_e_age():
     F[0, fi["body_s"]], F[0, fi["e_age"]] = -0.01, 1.0
     assert _filter(F, _gv(G_BODYMIN=-0.004))[0] == 0 and _filter(F, _gv(G_BODYMIN=-0.012))[0] == 1
     assert _filter(F, _gv(G_EAGEMIN=2.0))[0] == 0 and _filter(F, _gv(G_EAGEMIN=1.0))[0] == 1
+
+
+def test_gen10_pilot_add_on_close_and_blowoff():
+    rows = [(100, 101, 99.5, 100.5), (101, 106, 100.8, 104), (104, 107, 103.5, 106), (106.5, 108, 106, 107)] + [(107, 108, 106, 107)] * 4
+    o = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_PYR_CLOSE=1.0, X_WB=0.5), e=100.0, sp=95.0)
+    assert int(o[PF.O_TA]) == 3 and o[PF.O_WB] == 0.5                                 # 행 1 종가 104 < 105, 행 2 종가 106 ≥ 105 → 행 3 시가 추가
+    o = _run(_book(rows), _px(X_PYR=PF.PYR_1R, X_WB=0.5), e=100.0, sp=95.0)
+    assert int(o[PF.O_TA]) == 2                                                       # 장중 고가 기준이면 행 1 발동 → 행 2 추가
+    F = _event()
+    fi = PE.FI
+    F[0, fi["h0_volx"]], F[0, fi["runup20"]] = 12.0, 0.1
+    assert _filter(F, _gv(G_BLOWX=10.0))[0] == 0 and _filter(F, _gv(G_BLOWX=15.0))[0] == 1
+    F[0, fi["runup20"]] = 0.3
+    assert _filter(F, _gv(G_BLOWX=10.0))[0] == 1                                      # 급등 뒤의 큰 거래량은 정석

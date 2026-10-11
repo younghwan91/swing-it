@@ -78,15 +78,15 @@ from research.signals.vcp import (
 (G_STAGE, G_RS, G_BR, G_SUP_LO, G_SUP_HI, G_SLO_LO, G_SLO_HI, G_RHO, G_TOUCH, G_SPAN_LO, G_SPAN_HI, G_CEIL, G_DEPTH,
  G_DRY, G_RUNUP_COL, G_RUNUP, G_REST, G_EMIN, G_EACC, G_GAP, G_ANCHOR, G_CAP, G_FB_TOL, G_SLIP, G_DFLOOR, G_BASE,
  G_H0IN, G_CEILKIND, G_STOP_BUF, G_STOP_CLOSE, G_STOP_HARD, G_EQ, G_SMAX, G_MKT, G_SPOL, G_ATRMAX, G_ENTQ, G_FLMIN, G_FLWIN,
- G_INDSELL, G_BODYMIN, G_EAGEMIN) = range(42)
-N_G = 42                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
+ G_INDSELL, G_BODYMIN, G_EAGEMIN, G_BLOWX) = range(43)
+N_G = 43                                              # FWM: G_EQ(EPS 전년 같은 분기 대비 상승 필수) · G_SMAX(손절폭 상한) · G_MKT(시장 국면)
 MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신저가 · 돌파 성공률 ≥ 60%(전 구간 중앙 ≈ 0.60, 결과 전 고정)
 # --- 청산 인자 벡터(``px``) 번호 ---
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
- X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE) = range(40)
-N_X = 40                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+ X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE, X_PYR_CLOSE) = range(41)
+N_X = 41                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -105,7 +105,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -122,6 +122,7 @@ F_MA50UP = FI["ma50_up"]
 F_MA20UP, F_H0WICK = FI["ma20_up"], FI["h0_wick"]
 F_FS5, F_FS20, F_FI5, F_FI20 = FI["fl_smart5"], FI["fl_smart20"], FI["fl_indiv5"], FI["fl_indiv20"]
 F_BODY, F_EAGE = FI["body_s"], FI["e_age"]
+F_H0VOLX = FI["h0_volx"]
 BASE_BOTTOM = 3
 
 
@@ -151,6 +152,7 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
     entq = entq_lv == 1                           # 3세대: d−1 MA20 상승 ∧ H0 봉 윗꼬리 < 50%(블로오프 천장 제외)
     flmin = gv[G_FLMIN]                               # 9세대(사용자 "기관에 타올라 개미 돈을 먹는다"): (기관+외국인) 순매수/거래량 ≥ flmin
     flw20 = gv[G_FLWIN] > 0.5                         # 0 = 5일 · 1 = 20일
+    blowx = gv[G_BLOWX]                               # 10세대(검증 12차): H0 거래량 ≥ blowx × 직전 20일 평균 ∧ 급등20 < 20% → 단발 테마 블로오프 제외
     bodymin, eagemin = gv[G_BODYMIN], gv[G_EAGEMIN]  # 9세대(빠른 실패 분석): d−1 몸통 하한 · 반전봉 뒤 확인 일수
     indsell = gv[G_INDSELL] > 0.5                     # 1 = 같은 창의 개인 순매도 요구(매집)
     amax = gv[G_ATRMAX]                               # 진화 3세대 후보: d−1 ATR20 / 종가 ≤ amax(매수 전 수축 — −5% 손절이 노이즈 밖), NaN = 끔
@@ -185,6 +187,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         if indsell and fi_ == fi_ and not fi_ < 0.0:
             continue
         if bodymin == bodymin and not F[k, F_BODY] >= bodymin:
+            continue
+        if blowx == blowx and F[k, F_H0VOLX] >= blowx and F[k, F_RUN20] < 0.2:
             continue
         if eagemin == eagemin and not F[k, F_EAGE] >= eagemin:
             continue
@@ -344,6 +348,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
     t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
     safe4 = px[X_SAFE] > 3.5                          # 8세대(검증 10차): 진입일 장중 고가로 본전 이동을 켜지 않는다(TCC스틸 2020-12)
+    pyr_close = px[X_PYR_CLOSE] > 0.5                 # 10세대(검증 12차 — 미너비니 시험 매수): +1R 추가를 종가 확인으로
     c_close = px[X_CLIMAX_CLOSE] > 0.5                # 8세대: 급등 매도를 종가 판단으로(첫 돌파일 윗꼬리에 팔지 않는다 — 새로닉스 s0)
     safe3 = px[X_SAFE] > 2.5                          # 4세대(검증 MUST-FIX 6): 이익 잠금을 종가 ≥ e + 3R 로 발동(장중 윗꼬리 하루로 잠그지 않는다)
     lock_on = False
@@ -580,7 +585,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
         if be_trig < 0 and not (safe4 and j == 0) and ((C[ci, t] >= be_level) if be_close else (H[ci, t] >= be_level or op >= be_level)):
             be_trig = j
         if add_state == 0 and pyr > 0 and j >= 1 and (be_trig >= 0 or not safe):
-            if (pyr == PYR_1R and H[ci, t] >= pyr_level) or (pyr == PYR_NEWHIGH and H[ci, t] > h0) or \
+            if (pyr == PYR_1R and ((C[ci, t] >= pyr_level) if pyr_close else (H[ci, t] >= pyr_level))) or \
+                    (pyr == PYR_NEWHIGH and H[ci, t] > h0) or \
                     (pyr == PYR_UPPER and C[ci, t] > u_d * math.exp(su * (t - d))):
                 # 3세대: 발동일이 급등(+10%)이거나 이미 +3R 위면 추가를 영구 취소(추격 금지)
                 if safe2 and ((prevc == prevc and prevc > 0 and C[ci, t] / prevc - 1.0 >= 0.10) or C[ci, t] > e + 3.0 * R):

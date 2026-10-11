@@ -191,7 +191,8 @@ if MENU_OVERRIDE:
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
                  "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
                  "stop_max": (0.05,), "climax_basis": ("intraday",),         # 7세대: 손절 상한 · 8세대: 급등 매도 판단
-                 "flow_win": (20,), "indiv_sell": (0,), "e_age_min": (1,)}  # 9세대: 수급 창 · 개인 순매도 요구 · 반전봉 뒤 확인 일수             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "flow_win": (20,), "indiv_sell": (0,), "e_age_min": (1,),  # 9세대: 수급 창 · 개인 순매도 요구 · 반전봉 뒤 확인 일수
+                 "first_frac": (0.6667,), "pyr_close": (0,)}                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -200,7 +201,8 @@ if MENU_OVERRIDE:
     CONT = tuple((c[0], float(_co[c[0]][0]), float(_co[c[0]][1]), _off(c[0], c[3])) if c[0] in _co else c for c in CONT)
     #: 진화 3세대 후보 연속 유전자(이름이 있을 때만 붙는다): d−1 ATR20/종가 상한, 위쪽 끝 = 끔
     EVO_CONT = {"atr_max": ("atr_max", 0.015, 0.06, "hi"), "flow_min": ("flow_min", -0.1, 0.3, "lo"),   # 9세대: 수급 하한(아래 끝 = 끔)
-                "body_min": ("body_min", -0.02, 0.01, "lo")}           # 9세대: d−1 몸통 하한(아래 끝 = 끔)
+                "body_min": ("body_min", -0.02, 0.01, "lo"),           # 9세대: d−1 몸통 하한(아래 끝 = 끔)
+                "blowoff_x": ("blowoff_x", 5.0, 20.0, "hi")}           # 10세대: 블로오프 H0 거래량 배수 문턱(위쪽 끝 = 끔)
     CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, EVO_CONT[n][3])) for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
@@ -413,6 +415,7 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_INDSELL] = float(g.get("indiv_sell") or 0)
     gv[PF.G_BODYMIN] = np.nan if g.get("body_min") is None else float(g["body_min"])
     gv[PF.G_EAGEMIN] = float(g["e_age_min"]) if g.get("e_age_min") is not None else np.nan
+    gv[PF.G_BLOWX] = np.nan if g.get("blowoff_x") is None else float(g["blowoff_x"])
     gv[PF.G_STOP_BUF] = g.get("stop_buf") or 0.0
     gv[PF.G_STOP_CLOSE] = 1.0 if g.get("stop_basis") == "close" else 0.0
     gv[PF.G_STOP_HARD] = g["stop_hard"] if g.get("stop_hard") is not None else np.nan
@@ -437,7 +440,8 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_BE_MULT] = 1.0
     px[PF.X_TIGHT_R] = 3.0
     px[PF.X_PYR_R] = 1.0
-    px[PF.X_WB] = PF.WB_PYR
+    px[PF.X_WB] = float(g.get("first_frac") or PF.WB_PYR)   # 10세대: 첫 진입 비중(시험 매수 1/2 · 기존 2/3 · 1)
+    px[PF.X_PYR_CLOSE] = float(g.get("pyr_close") or 0)
     px[PF.X_SELL_TICK] = 1.0                     # 손절·본전 체결 −1호가(쐐기 D 와 같다)
     px[PF.X_SELL_EXTRA] = sell_extra
     px[PF.X_CLIMAX] = float(g.get("climax") or 0)
@@ -1249,6 +1253,12 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
         flows_meta = _fill_flows(F, ctx, days, codes, ci, s)         # 9세대 수급 열
         oo1, cc1 = np.asarray(A.O)[ci, s], np.asarray(A.C)[ci, s]     # 9세대: d−1 봉 몸통 · d − 행(E)
         F[:, PE.FI["body_s"]] = np.where(oo1 > 0, cc1 / np.where(oo1 > 0, oo1, 1.0) - 1.0, np.nan)
+        vol_ = np.nan_to_num(np.asarray(ctx.VOL, float))            # 10세대: H0 거래량 배수(종목×날짜)
+        cs_ = np.concatenate([np.zeros((vol_.shape[0], 1)), np.cumsum(vol_, axis=1)], axis=1)
+        i0v = I_[:, PE.II["i0"]]
+        lo_ = np.maximum(i0v - 20, 0)
+        m20_ = (cs_[ci, i0v] - cs_[ci, lo_]) / np.maximum(i0v - lo_, 1)
+        F[:, PE.FI["h0_volx"]] = np.where((i0v >= 20) & (m20_ > 0), vol_[ci, i0v] / np.where(m20_ > 0, m20_, 1.0), np.nan)
         iE_ = I_[:, PE.II["iE"]]
         F[:, PE.FI["e_age"]] = np.where(iE_ >= 0, (s + 1 - iE_).astype(float), np.nan)
         m20v = m20.to_numpy(float)                                   # 3세대: d−1 MA20 > 5 거래일 전
