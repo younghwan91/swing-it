@@ -314,3 +314,14 @@ def test_gen5_market_both():
     assert _filter(F, _gv(G_MKT=1))[0] == 1 and _filter(F, _gv(G_MKT=4))[0] == 0
     F[0, fi["mkt_br200"]] = 0.55
     assert _filter(F, _gv(G_MKT=4))[0] == 1
+
+
+def test_gen7_entry_quality_levels():
+    F = _event()
+    fi = PE.FI
+    F[0, fi["ma20_up"]], F[0, fi["h0_wick"]], F[0, fi["runup20"]] = 0.0, 0.7, 0.35   # 정석 급등 뒤 긴 윗꼬리·MA20 평평
+    assert _filter(F, _gv(G_ENTQ=1.0))[0] == 0
+    assert _filter(F, _gv(G_ENTQ=2.0))[0] == 1                                      # 급등이 커서 단발 블로오프 아님
+    F[0, fi["runup20"]] = 0.1
+    assert _filter(F, _gv(G_ENTQ=2.0))[0] == 0
+    assert _filter(F, _gv(G_ENTQ=3.0))[0] == 0

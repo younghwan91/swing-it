@@ -84,8 +84,8 @@ MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신�
 (X_TAKE_R, X_TAKE_FRAC, X_TRAIL, X_TRAIL_K, X_TIGHTEN, X_PYR, X_BE_R, X_FB_DAYS, X_MAX_HOLD, X_FROM_ENTRY, X_SLIP,
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
- X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE) = range(38)
-N_X = 38                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+ X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK) = range(39)
+N_X = 39                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_FAILX = 9                                           # 정정 6 반등 실패 조기 청산
@@ -104,7 +104,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -144,7 +144,8 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
     sbuf, sclose, shard = gv[G_STOP_BUF], gv[G_STOP_CLOSE] > 0.5, gv[G_STOP_HARD]
     eq, smax = gv[G_EQ] > 0.5, gv[G_SMAX]
     mkt = int(gv[G_MKT]) if gv[G_MKT] == gv[G_MKT] else 0
-    entq = gv[G_ENTQ] > 0.5                           # 3세대: d−1 MA20 상승 ∧ H0 봉 윗꼬리 < 50%(블로오프 천장 제외)
+    entq_lv = int(gv[G_ENTQ]) if gv[G_ENTQ] == gv[G_ENTQ] else 0   # 7세대: 0 끔 · 1 MA20 상승 ∧ 윗꼬리 < 0.5 · 2 단발 블로오프만 제외 · 3 MA20 상승만
+    entq = entq_lv == 1                           # 3세대: d−1 MA20 상승 ∧ H0 봉 윗꼬리 < 50%(블로오프 천장 제외)
     amax = gv[G_ATRMAX]                               # 진화 3세대 후보: d−1 ATR20 / 종가 ≤ amax(매수 전 수축 — −5% 손절이 노이즈 밖), NaN = 끔
     spol = gv[G_SPOL] > 0.5                            # 진화 1세대: 손절폭 상한 정책 — 1 = 구조 손절이 상한보다 멀면 안 산다(미너비니), 0 = 끌어올림
     for k in range(a, b):
@@ -167,6 +168,10 @@ def _filter_py(F, a, b, gv, lu_ratio, oidx, oe, osp, ofb, oamb, oskip0, os0, obu
         if amax == amax and not (F[k, F_CLOSE_S] > 0 and F[k, F_ATR] / F[k, F_CLOSE_S] <= amax):
             continue
         if entq and not (F[k, F_MA20UP] > 0.5 and F[k, F_H0WICK] < 0.5):
+            continue
+        if entq_lv == 2 and F[k, F_RUN20] < 0.2 and F[k, F_H0WICK] > 0.5:       # 검증 7차: 급등 작고 윗꼬리 큰 단발 천장만 제외
+            continue
+        if entq_lv == 3 and not F[k, F_MA20UP] > 0.5:
             continue
         if mkt == 1 and not F[k, F_MNH] > MKT_NHNL_MIN:                          # FWM M7 시장: 신고가 > 신저가
             continue
@@ -853,6 +858,8 @@ def _portfolio_py(cd, cci, ce, csp, cfb, ch0, cu, csu, cE, ciE, csl, cbuf, camb,
                 while P_ON[q]:
                     q += 1
                 alloc = min(slot_w * eq_prev, cash)
+                if PX[par + npar, X_RISK] == PX[par + npar, X_RISK] and (e - sp) / e > PX[par + npar, X_RISK]:
+                    alloc = min(slot_w * eq_prev * PX[par + npar, X_RISK] / ((e - sp) / e), cash)
                 b_, emp = open_slot(q, t, c, e, sp, -np.inf, W_F[c, F_H0], W_F[c, F_U], W_F[c, F_SU], W_F[c, F_E],
                                     W_I[c, I_IE], W_F[c, F_SL], 0.0, False, False, s0, W_I[c, I_K], m, par, par + npar,
                                     W_I[c, I_EV], W_I[c, I_PID], 1, alloc, eq_prev, pmix, cost_mult, cost_on_sell, reform, PX, Op,
@@ -929,6 +936,8 @@ def _portfolio_py(cd, cci, ce, csp, cfb, ch0, cu, csu, cE, ciE, csl, cbuf, camb,
             while P_ON[q]:
                 q += 1
             alloc = min(slot_w * eq_prev, cash)
+            if PX[par + npar, X_RISK] == PX[par + npar, X_RISK] and (e - sp) / e > PX[par + npar, X_RISK]:
+                alloc = min(slot_w * eq_prev * PX[par + npar, X_RISK] / ((e - sp) / e), cash)
             b_, emp = open_slot(q, t, c, e, sp, -np.inf, W_F[c, F_H0], W_F[c, F_U], W_F[c, F_SU], W_F[c, F_E], W_I[c, I_IE],
                                 W_F[c, F_SL], bamt, amb, open_ok, s0, W_I[c, I_K], m, par, par + npar, W_I[c, I_EV], W_I[c, I_PID],
                                 1, alloc,
@@ -956,6 +965,10 @@ def _portfolio_py(cd, cci, ce, csp, cfb, ch0, cu, csu, cE, ciE, csl, cbuf, camb,
             while P_ON[q]:
                 q += 1
             alloc = min(slot_w * eq_prev, cash)
+            rk = PX[cpar[i], X_RISK]                  # 6세대(사용자 "비중으로 손실 제한"): 손절폭 d > 위험 예산이면 슬롯 × 위험/d 만 산다
+            dd_ = (ce[i] - csp[i]) / ce[i]
+            if rk == rk and dd_ > rk:
+                alloc = min(slot_w * eq_prev * rk / dd_, cash)
             b_, emp = open_slot(q, t, ci, ce[i], csp[i], cfb[i], ch0[i], cu[i], csu[i], cE[i], ciE[i], csl[i], cbuf[i], camb[i],
                                 cskip0[i], cs0[i], cstrat[i], cmkt[i], cpar[i], cpar[i], cev[i], cpid[i], 0, alloc, eq_prev, pmix,
                                 cost_mult,

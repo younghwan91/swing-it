@@ -186,7 +186,8 @@ if MENU_OVERRIDE:
         return t_ * 2 if len(t_) == 1 else t_
     #: 진화 1세대 새 유전자(덮어쓰기에 이름이 있을 때만 메뉴에 붙는다 — 기존 변형의 차원·재현 불변)
     EVO_GENES = {"trail_start": (0.0,), "trail_basis": ("intraday",), "stop_policy": ("clamp",),
-                 "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,)}             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "exit_safe": (0,), "be_basis": ("high",), "entry_q": (0,),
+                 "stop_max": (0.05,), "risk_size": (0,)}                    # 6세대: 손절 상한 · 위험 기준 비중(사용자 "비중으로 손실 제한")             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -397,7 +398,7 @@ def gene_vec(g: dict, extra_slip: float = 0.0) -> np.ndarray:
     gv[PF.G_H0IN] = float(g["h0_in_pattern"])
     gv[PF.G_CEILKIND] = 1.0 if g["ceil_kind"] == "resist" else 0.0
     gv[PF.G_EQ] = 1.0 if FWM else 0.0                # FWM M1: EPS 전년 같은 분기 대비 상승(흑자) 필수(정정 FWM-1 M9)
-    gv[PF.G_SMAX] = STOP_MAX if FWM else np.nan       # FWM M2
+    gv[PF.G_SMAX] = float(g.get("stop_max") or STOP_MAX) if FWM else np.nan       # FWM M2 · 6세대 유전자
     gv[PF.G_MKT] = ("off", "nhnl", "bos", "br200", "nhnl_br200").index(g.get("mkt") or "off")   # FWM M7 · 5세대 nhnl_br200
     gv[PF.G_SPOL] = 1.0 if g.get("stop_policy") == "skip" else 0.0                 # 진화 1세대
     gv[PF.G_ATRMAX] = np.nan if g.get("atr_max") is None else float(g["atr_max"])   # 진화 3세대 후보
@@ -443,12 +444,13 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_CAP] = g["stop_cap"]
     px[PF.X_BUF] = g.get("stop_buf") or 0.0
     px[PF.X_DFLOOR] = 0.02
-    px[PF.X_SMAX] = STOP_MAX if FWM else np.nan     # FWM M2: 재진입 손절에도 같은 상한
+    px[PF.X_SMAX] = float(g.get("stop_max") or STOP_MAX) if FWM else np.nan     # FWM M2: 재진입 손절에도 같은 상한
     px[PF.X_INTRA] = 1.0 if FWM else 0.0            # FWM M6: 장중 청산(알고리즘 매매)
     px[PF.X_TRAIL_START] = float(g.get("trail_start") or 0.0)   # 진화 1세대
     px[PF.X_TRAIL_CLOSE] = 1.0 if g.get("trail_basis") == "close" else 0.0
     px[PF.X_SAFE] = float(g.get("exit_safe") or 0)                 # 진화 2세대
     px[PF.X_BE_CLOSE] = 1.0 if g.get("be_basis") == "close" else 0.0
+    px[PF.X_RISK] = STOP_MAX if (FWM and g.get("risk_size")) else np.nan   # 6세대: 손실 = 슬롯의 5% 상당으로 비중 조절
     return px
 
 
@@ -1991,6 +1993,9 @@ def _evolve_write(E, cfgs, tests, seal, out, args, name, evo_seeds, head, t0) ->
             w_, l_ = x > 0.005, x < -0.005
             met[tag] = {"win": float(w_.sum() / max(1, w_.sum() + l_.sum())), "mean": float(x.mean()),
                         "gl": float(x[w_].mean() / -x[l_].mean()) if w_.any() and l_.any() else float("nan")}
+        xs = pmix_net(t, p, "net2") * (t["alloc"] / PF.SLOT_W).clip(upper=1.0)   # 6세대: 위험 기준 비중이면 슬롯 대비 손익(계좌 영향)
+        met["c2_slot_mean"] = float(xs.mean())
+        met["c2_slot_min"] = float(xs.min())
         met["reasons"] = t["exit_reason"].value_counts().to_dict()
         met["loss55"] = int((pmix_net(t, p) < -0.055).sum())          # 검증 MINOR 2: 거래 순손익(추가분 포함) 기준
     met["cfgs"] = cfgs                                                  # 검증 MINOR 1: 원래 값(∞ 는 JSON Infinity)
