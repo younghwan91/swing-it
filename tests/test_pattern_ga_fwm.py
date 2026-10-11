@@ -375,3 +375,11 @@ def test_gen10_pilot_add_on_close_and_blowoff():
     assert _filter(F, _gv(G_BLOWX=10.0))[0] == 0 and _filter(F, _gv(G_BLOWX=15.0))[0] == 1
     F[0, fi["runup20"]] = 0.3
     assert _filter(F, _gv(G_BLOWX=10.0))[0] == 1                                      # 급등 뒤의 큰 거래량은 정석
+
+
+def test_floor_env_override():
+    code = ("import sys; sys.path[:0]=['.','src']; import research.experiments.pattern_ga_run as G; "
+            "print(G.FLOOR_PER_YEAR, G.FLOOR_YEAR)")
+    env = dict(os.environ, PATTERN_GA_VARIANT="fwm", PATTERN_GA_FLOOR="10,3")
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout
+    assert out.split()[-2:] == ["10.0", "3.0"]

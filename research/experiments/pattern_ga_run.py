@@ -134,6 +134,8 @@ FW_PARENT_SHA256 = "6e989c1948d8a10ce020a20cb7461f32fb4f6e6cd98949111ceaa170c49d
 if FWL:                                # L5(사용자 "수천번 매매할 필요 없다"): 연 12 → 6, 연도별 4 → 2 · 리뷰 FWL M6: 9/3 은 2a 를 막아 6/2 유지,
     FLOOR_PER_YEAR, FLOOR_YEAR = 6.0, 2.0   # 바 6 건수만 미달은 '하한 결합 — 판단 불가'(정정 FWL-2)
     FEAS_MIN = 300                     # 리뷰 FWL M1: 폴드 6 실현 가능 비율 ≈ 1.8e-6 — 상한 3억에서 기대 ≈ 540, 2a 하한 500 → 300
+if os.environ.get("PATTERN_GA_FLOOR"):  # 12세대: 거래당 적합도가 거래를 줄이는 것 견제 — "연,연도별"(예 "10,3")
+    FLOOR_PER_YEAR, FLOOR_YEAR = (float(v) for v in os.environ["PATTERN_GA_FLOOR"].split(","))
 if FWL:                                # L4: 부모 186 + FW 중간 열람 155 의 합집합(종목, 주문일)
     FW_PARENT_VIEWED = "research/logs/sepa_explore/pattern_ga_fwl/parent_viewed_trades.csv"
     FW_PARENT_SHA256 = "fbb985092c458e0c358bba97770264b85677b2f75468692040612f94dcc8d1d7"
@@ -2116,7 +2118,7 @@ def _evolve_write(E, cfgs, tests, seal, out, args, name, evo_seeds, head, t0) ->
     """진화 후보 하나(시드 집합 하나)의 폴드 1~4 이어 붙인 OOS 숫자·거래 → ``<name>.json``·``<name>_trades.csv``·원장."""
     from swing_it.diagnostics.trials import record_trial  # noqa: PLC0415
 
-    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "fit_mode": FIT_MODE, "candidate": name, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
+    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "fit_mode": FIT_MODE, "floor": [FLOOR_PER_YEAR, FLOOR_YEAR], "candidate": name, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
             "budget": BUDGET, "git_head": head}
     st = E.stitched(cfgs, tests)
     if len(st["rec"]) and int(np.max(st["rec"][:, PF.Q_X])) >= seal:
