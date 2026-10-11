@@ -105,6 +105,7 @@ REGION_RUNUP, REGION_REST = 0.30, 20.0  # 정정 2 착상 영역 좌표
 #: 짧고 날카로운 쐐기 허용(위생 간격 ≥ 1·길이 ≥ 5), stage 3/4(d−1 종가 > MA50). 탐색 전용.
 VARIANT = os.environ.get("PATTERN_GA_VARIANT", "")
 FAST_EVAL = os.environ.get("PATTERN_GA_FAST", "1") != "0"   # 0 이면 evaluate 가 원래 파이썬 경로(evaluate_ref)
+FIT_MODE = os.environ.get("PATTERN_GA_FIT", "ann")   # 11세대 후보: "trade" = 거래당 슬롯 대비 순(2배) 부트스트랩 하한 − 벌점(사용자 목표 거래당 +5%)
 CORE_BIPOP = os.environ.get("PATTERN_GA_CORE_BIPOP", "1") != "0"   # 0 이면 ga_run_one 이 cma_bipop_x0(cmaes 순정)
 FW = VARIANT in ("fw", "fwl", "fwm")
 FWL = VARIANT in ("fwl", "fwm")
@@ -839,7 +840,7 @@ class Engine:
                  want_monthly: bool = False) -> dict:
         """학습창 적합도 — :meth:`evaluate_fast` (njit 한 번 호출, :meth:`evaluate_ref` 와 비트 동일)가 받는 경우는
         그쪽, 아니면(``allow``·``want_monthly``·``PATTERN_GA_FAST=0``) 원래 경로."""
-        if allow is None and not want_monthly and FAST_EVAL:
+        if allow is None and not want_monthly and FAST_EVAL and (FIT_MODE != "trade" or counts_only):
             return self.evaluate_fast(g, w, seed=seed, counts_only=counts_only)
         return self.evaluate_ref(g, w, seed=seed, counts_only=counts_only, allow=allow, want_monthly=want_monthly)
 
@@ -889,6 +890,28 @@ class Engine:
         pen, pinfo = self.penalty(r, w)
         out = {"n": r["n"], "n_pass": c["n_pass"], "pen": pen, "feasible": pinfo["feasible"]}
         if counts_only:
+            return out
+        if FIT_MODE == "trade":                      # 11세대 후보: 거래당 슬롯 대비 순(2배 비용)의 부트스트랩 2.5% 하한
+            rec = r["rec"]
+            if len(rec) >= 3:
+                wb_ = rec[:, PF.Q_WB]
+                wa_ = np.where(rec[:, PF.Q_ADDED] > 0.5, 1.0 - wb_, 0.0)
+                net2 = rec[:, PF.Q_PNL] - 2.0 * (rec[:, PF.Q_CX] * wb_ + rec[:, PF.Q_CADD] * wa_)
+                xs = net2 * np.minimum(1.0, rec[:, PF.Q_ALLOC] / PF.SLOT_W)
+                # 검증 13차: 주문일 군집 부트스트랩(같은 날 진입 묶음), 10% 분위 하한
+                _, gi = np.unique(rec[:, PF.Q_D].astype(np.int64), return_inverse=True)
+                ng = int(gi.max()) + 1
+                gs = np.bincount(gi, weights=xs, minlength=ng)
+                gc = np.bincount(gi, minlength=ng).astype(float)
+                rng = np.random.default_rng(seed)
+                pick = rng.integers(0, ng, size=(FIT_BOOT, ng))
+                bm = gs[pick].sum(axis=1) / gc[pick].sum(axis=1)
+                lower = float(np.percentile(bm, 10.0))
+            else:
+                lower = -1.0
+            out.update(fit=lower - pen, lower=lower)
+            if want_monthly:
+                out["monthly"] = self.monthly(r["exc"], w.t_lo)[0]
             return out
         mo, _ = self.monthly(r["exc"], w.t_lo)
         lower = float(np.percentile(gf.block_boot(np.ascontiguousarray(mo), 3, FIT_BOOT, seed), 2.5)) if len(mo) >= 6 else -1.0
@@ -2093,7 +2116,7 @@ def _evolve_write(E, cfgs, tests, seal, out, args, name, evo_seeds, head, t0) ->
     """진화 후보 하나(시드 집합 하나)의 폴드 1~4 이어 붙인 OOS 숫자·거래 → ``<name>.json``·``<name>_trades.csv``·원장."""
     from swing_it.diagnostics.trials import record_trial  # noqa: PLC0415
 
-    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "candidate": name, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
+    base = {"variant": VARIANT, "menu": MENU_OVERRIDE, "fit_mode": FIT_MODE, "candidate": name, "folds": list(EVO_FOLDS), "seeds": list(evo_seeds),
             "budget": BUDGET, "git_head": head}
     st = E.stitched(cfgs, tests)
     if len(st["rec"]) and int(np.max(st["rec"][:, PF.Q_X])) >= seal:
