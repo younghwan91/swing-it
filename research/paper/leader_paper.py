@@ -38,13 +38,18 @@ ARMS = {                                              # 사전등록(META_EVOLUT
 # 쌍 팔(META_EVOLUTION.md '전진 팔 *_rs 사전등록', 2026-10-13): cfg 는 짝 팔과 같은 사전, 정문 애프터마켓 보정 인자만 다르다
 RS_PAIR = {"leader_A_rs": "leader_A", "leader_C_rs": "leader_C", "leader_C20_rs": "leader_C20"}
 ARMS.update({k: dict(ARMS[v]) for k, v in RS_PAIR.items()})
+# 전진 팔(META_EVOLUTION.md '전진 팔 leader_M 사전등록', 2026-10-13): 미너비니식 종목군 — 20일 거래대금 ≥ 10억만(시총 거르기 없음) · θ 70 ·
+# 슬롯 20 · C20 비중 규칙 · 보정 정문 가격. 짝(판정) = leader_C_rs
+ARMS["leader_M"] = {"theta": 70, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "all", "regime": 1, "entry": "close",
+                    "max_pos": 20, "pos_cap": 0.05, "risk": 0.0025}
+PAIR = {**RS_PAIR, "leader_M": "leader_C_rs"}
 ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl",
-              **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}}
+              **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}, "leader_M": "research/paper/leader_m_ledger.jsonl"}
 PRICE_RAW = {"session": "raw", "aftermarket_fix": False, "unpatched": "nan"}   # 기존 팔 고정값(바꾸지 않는다; session="raw" 라 unpatched 는 동작 없음)
 # 쌍 팔: unpatched="raw" = 정문이 종가는 분봉 > 항등식으로 고치고, 고칠 원천 없는 고가·저가·거래량·거래대금은 원값 유지(krx_src 표시)
 # — META_EVOLUTION.md '*_rs 보충 — 정문 보정 범위 확대(첫 기록 전)'.
-ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in RS_PAIR}
-ARM_START = {k: "2026-10-13" for k in RS_PAIR}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
+ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M")}
+ARM_START = {k: "2026-10-13" for k in (*RS_PAIR, "leader_M")}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
 
 
 def load_db(con, session: str = "raw", info: "dict | None" = None, unpatched: str = "nan") -> tuple:
@@ -120,7 +125,7 @@ def main() -> None:
                                 "add": [(c, names.get(c, "")) for c in st["add"]]},
            "bench_ret_today": bench}
     if a.arm in ARM_PRICE:                          # 쌍 팔만 — 기존 팔 행은 열이 하나도 바뀌지 않는다
-        row.update({"pair": RS_PAIR[a.arm], **price, "price_session": px_info, "raw_src": D.get("raw_src_diag", {})})
+        row.update({"pair": PAIR[a.arm], **price, "price_session": px_info, "raw_src": D.get("raw_src_diag", {})})
     done = set()
     if os.path.exists(a.ledger):
         with open(a.ledger, encoding="utf-8") as fh:
