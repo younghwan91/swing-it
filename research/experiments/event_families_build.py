@@ -54,6 +54,37 @@ def flows(ctx, days, codes) -> dict:
     return out
 
 
+def f_rows(ctx, E, ci: np.ndarray, s: np.ndarray, fl: dict, O_, H_, L_, C_) -> np.ndarray:
+    """사건 (종목 ci, 신호 행 s) → ``F`` 행(쐐기 표 열 의미에 맞춰) — P·C(13세대)·S(16세대) 공통."""
+    from research.signals import vcp as V  # noqa: PLC0415
+    days, codes = ctx.days, ctx.codes
+    nd, n = len(days), len(ci)
+    FI = PE.FI
+    Ff = np.full((n, len(PE.F_COLS)), np.nan)
+    d1 = np.minimum(s + 1, nd - 1)
+    hs, ls = H_[ci, s], L_[ci, s]
+    mk = ctx.mkt[ci].astype(np.int64)
+    tick = PE.tick_dated_vec(hs, d1, mk, E.reform)
+    for k_, v in (("level", hs), ("order", hs + tick), ("h0", hs), ("u_d", hs), ("su", np.zeros(n)), ("E", ls), ("sl", np.zeros(n)),
+                  ("hE", hs), ("stopE_raw", ls - PE.tick_dated_vec(ls, d1, mk, E.reform)), ("open_d", O_[ci, d1]),
+                  ("high_d", H_[ci, d1]), ("low_d", L_[ci, d1]), ("close_d", C_[ci, d1]), ("close_s", C_[ci, s]),
+                  ("adv20", ctx.adv[s, ci]), ("rs", ctx.rs[s, ci]), ("breadth", ctx.br[s, ci]),
+                  ("tt_s", ctx.tt[s, ci].astype(float)), ("market", mk.astype(float)),
+                  ("strat", np.asarray(E.strat_cs)[ci, s].astype(float)), ("month", np.asarray(E.month_of)[s].astype(float)),
+                  ("atr_s", np.asarray(E.ATR)[ci, s]), ("fl_smart5", fl[5][s, ci]), ("fl_smart20", fl[20][s, ci])):
+        Ff[:, FI[k_]] = v
+    Ee = V.e_accel_asof(ctx.est, codes[ci], days[s])
+    Ff[:, FI["e_q"]], Ff[:, FI["e_q_prev"]] = Ee["e_netinc"].to_numpy(float), Ee["e_netinc_prior"].to_numpy(float)
+    Ff[:, FI["e_yoy"]], Ff[:, FI["e_yoy_prev"]] = Ee["e_yoy"].to_numpy(float), Ee["e_yoy_prev"].to_numpy(float)
+    rg = pd.read_csv(G.REGIME_CSV, usecols=["date", "market", "breadth_ma200", "nh_nl_ratio", "breakout_success20"])
+    rg = rg[rg["market"].isin(["KOSPI", "KOSDAQ"])].assign(date=lambda x: pd.to_datetime(x["date"]))
+    key = pd.DataFrame({"date": days[s], "market": np.where(mk == 1, "KOSDAQ", "KOSPI")})
+    mg = key.merge(rg, on=["date", "market"], how="left")
+    Ff[:, FI["mkt_br200"]], Ff[:, FI["mkt_nhnl"]] = mg["breadth_ma200"].to_numpy(float), mg["nh_nl_ratio"].to_numpy(float)
+    Ff[:, FI["mkt_bos"]] = mg["breakout_success20"].to_numpy(float)
+    return Ff
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -64,8 +95,6 @@ def main() -> None:
 
     from swing_it.features.catalysts import read_dart  # noqa: PLC0415
     from swing_it.features.technical import moving_average  # noqa: PLC0415
-
-    from research.signals import vcp as V  # noqa: PLC0415
 
     E = G.Engine(a.base)
     ctx = R.Ctx(t0)
@@ -133,29 +162,8 @@ def main() -> None:
     XF[:, EF.XI["c_contract"]], XF[:, EF.XI["c_prelim"]], XF[:, EF.XI["c_n"]] = con_, pre_, cn_
     G._log("서술자", t0)
     # --- F·I 행(쐐기 표 열 의미에 맞춰) ---
-    FI, II = PE.FI, PE.II
-    Ff = np.full((n, len(PE.F_COLS)), np.nan)
-    d1 = np.minimum(s + 1, nd - 1)
-    hs, ls = H_[ci, s], L_[ci, s]
-    mk = ctx.mkt[ci].astype(np.int64)
-    tick = PE.tick_dated_vec(hs, d1, mk, E.reform)
-    for k_, v in (("level", hs), ("order", hs + tick), ("h0", hs), ("u_d", hs), ("su", np.zeros(n)), ("E", ls), ("sl", np.zeros(n)),
-                  ("hE", hs), ("stopE_raw", ls - PE.tick_dated_vec(ls, d1, mk, E.reform)), ("open_d", O_[ci, d1]),
-                  ("high_d", H_[ci, d1]), ("low_d", L_[ci, d1]), ("close_d", C_[ci, d1]), ("close_s", C_[ci, s]),
-                  ("adv20", ctx.adv[s, ci]), ("rs", ctx.rs[s, ci]), ("breadth", ctx.br[s, ci]),
-                  ("tt_s", ctx.tt[s, ci].astype(float)), ("market", mk.astype(float)),
-                  ("strat", np.asarray(E.strat_cs)[ci, s].astype(float)), ("month", np.asarray(E.month_of)[s].astype(float)),
-                  ("atr_s", np.asarray(E.ATR)[ci, s]), ("fl_smart5", fl[5][s, ci]), ("fl_smart20", fl[20][s, ci])):
-        Ff[:, FI[k_]] = v
-    Ee = V.e_accel_asof(ctx.est, codes[ci], days[s])
-    Ff[:, FI["e_q"]], Ff[:, FI["e_q_prev"]] = Ee["e_netinc"].to_numpy(float), Ee["e_netinc_prior"].to_numpy(float)
-    Ff[:, FI["e_yoy"]], Ff[:, FI["e_yoy_prev"]] = Ee["e_yoy"].to_numpy(float), Ee["e_yoy_prev"].to_numpy(float)
-    rg = pd.read_csv(G.REGIME_CSV, usecols=["date", "market", "breadth_ma200", "nh_nl_ratio", "breakout_success20"])
-    rg = rg[rg["market"].isin(["KOSPI", "KOSDAQ"])].assign(date=lambda x: pd.to_datetime(x["date"]))
-    key = pd.DataFrame({"date": days[s], "market": np.where(mk == 1, "KOSDAQ", "KOSPI")})
-    mg = key.merge(rg, on=["date", "market"], how="left")
-    Ff[:, FI["mkt_br200"]], Ff[:, FI["mkt_nhnl"]] = mg["breadth_ma200"].to_numpy(float), mg["nh_nl_ratio"].to_numpy(float)
-    Ff[:, FI["mkt_bos"]] = mg["breakout_success20"].to_numpy(float)
+    Ff = f_rows(ctx, E, ci, s, fl, O_, H_, L_, C_)
+    II = PE.II
     If = np.zeros((n, len(PE.I_COLS)), np.int64)
     If[:, II["d"]] = s + 1
     If[:, II["ci"]] = ci

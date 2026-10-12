@@ -32,7 +32,8 @@ N_FAM_TABLES = 2
 FAM_ORDER = {"W": 0, "C": 1, "P": 2}
 
 X_COLS = ("fam", "tvx", "ret", "clv", "hi60", "hi250", "lu_close", "fl5_s", "fl20_s", "fl5_p", "fl20_p",
-          "c_contract", "c_prelim", "ret_m1", "clv_m1", "hi60_m1", "hi250_m1", "c_n")
+          "c_contract", "c_prelim", "ret_m1", "clv_m1", "hi60_m1", "hi250_m1", "c_n",
+          "s_kind", "s_lvl", "s_stp")                      # 16세대 원천 S(event_sources.py) — v11 XF 는 앞 18 열만
 XI = {k: i for i, k in enumerate(X_COLS)}
 P_MIN = {"tvx": 2.0, "ret": 0.02, "clv": 0.5}
 PRELIM_PAT = "(잠정)실적"
@@ -99,7 +100,10 @@ def gene_mask(XF: np.ndarray, Ff: np.ndarray, g: dict, fam: str, FI: dict) -> np
         if am is not None:
             cs_ = f("close_s")
             m &= ~(f("atr_s") / cs_ > am)
-        if fam == "P":
+        if fam == "S":
+            from research.signals.event_sources import gene_mask_s  # noqa: PLC0415
+            m &= gene_mask_s(x, g)
+        elif fam == "P":
             close_in = g.get("p_entry") == "close"
             tvx = x("tvx") * (0.85 if close_in else 1.0)
             m &= x("fam") == 0
@@ -127,15 +131,18 @@ def gene_mask(XF: np.ndarray, Ff: np.ndarray, g: dict, fam: str, FI: dict) -> np
 
 
 def fills(rows: np.ndarray, I_: np.ndarray, II: dict, Op, H, L, C, TR, entry: str, g: dict, slip: float, lu_ratio: float,
-          mkt: np.ndarray, reform: int) -> dict:
-    """통과 행 → 체결(주문 행 d·e·sp·amb·skip0·s0). 버린 행은 빠진다. ``mkt`` = 그 행의 시장(0/1)."""
+          mkt: np.ndarray, reform: int, lvl: "np.ndarray | None" = None, stp: "np.ndarray | None" = None) -> dict:
+    """통과 행 → 체결(주문 행 d·e·sp·amb·skip0·s0). 버린 행은 빠진다. ``mkt`` = 그 행의 시장(0/1).
+    ``lvl``·``stp`` = 매수정지 기준가·손절 기준가(16세대 S — 없으면 H(s)·L(s))."""
     ci = I_[rows, II["ci"]].astype(np.int64)
     s = I_[rows, II["i0"]].astype(np.int64)
+    Hs = H[ci, s] if lvl is None else np.asarray(lvl, float)
+    Ls = L[ci, s] if stp is None else np.asarray(stp, float)
     nd = Op.shape[1]
     smax = g.get("stop_max") or 0.05
     gap = g.get("gap_max")
     gap = np.inf if gap is None else gap
-    tk_lo = PE.tick_dated_vec(L[ci, s], s, mkt, reform)
+    tk_lo = PE.tick_dated_vec(Ls, s, mkt, reform)
     if entry == "close":
         d = s.copy()
         ok = TR[ci, s].astype(bool) & (s + 1 < nd)
@@ -155,7 +162,7 @@ def fills(rows: np.ndarray, I_: np.ndarray, II: dict, Op, H, L, C, TR, entry: st
             amb = np.zeros(len(rows), bool)
             skip0 = np.zeros(len(rows), bool)
         else:
-            hs = H[ci, s]
+            hs = Hs
             order = hs + PE.tick_dated_vec(hs, d_, mkt, reform)
             ok &= (hi >= order) & ~(op > order * (1.0 + gap))
             f = np.maximum(op, order)
@@ -163,14 +170,14 @@ def fills(rows: np.ndarray, I_: np.ndarray, II: dict, Op, H, L, C, TR, entry: st
             amb = np.zeros(len(rows), bool)       # 아래에서 손절 뒤 채운다
             skip0 = np.zeros(len(rows), bool)
     with np.errstate(invalid="ignore"):
-        sp = np.maximum(L[ci, s] - tk_lo, e * (1.0 - smax))
+        sp = np.maximum(Ls - tk_lo, e * (1.0 - smax))
         sp = np.minimum(sp, e * (1.0 - 0.02))
         ok &= np.isfinite(sp) & (sp > 0) & (sp < e)
         if entry != "close":
             d_ = np.minimum(d, nd - 1)
             ok &= Op[ci, d_] > sp                                                # 시가가 이미 손절 아래면 안 산다
             if entry == "stop":
-                hs = H[ci, s]
+                hs = Hs
                 order = hs + PE.tick_dated_vec(hs, d_, mkt, reform)
                 skip0 = (Op[ci, d_] < order) & (C[ci, d_] > sp)                      # 쐐기 규약: 장중 체결 ∧ 종가 > 손절 = 낙관 경로
                 amb = skip0 & (L[ci, d_] <= sp)

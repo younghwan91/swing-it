@@ -47,6 +47,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
 from research.signals import event_families as EF  # noqa: E402
+from research.signals import event_sources as ES  # noqa: E402
 from research.signals import ga_fast as gf  # noqa: E402
 from research.signals import pattern_events as PE  # noqa: E402
 from research.signals import pattern_eval as PEV  # noqa: E402
@@ -199,7 +200,8 @@ if MENU_OVERRIDE:
                  "first_frac": (0.6667,), "pyr_close": (0,),
                  # 13세대(EVENT_FAMILIES.md 정정 E-1): 사건 가족 켬/끔 · P 신고가 창·진입 · C 종류·진입
                  "fam_w": (1,), "fam_p": (0,), "fam_c": (0,), "p_hiw": (60,), "p_entry": ("open",), "c_kind": ("both",),
-                 "c_entry": ("open",), "lock_to": (None,)}                   # 13a: +1R 본전 발동 뒤 잠금 수준(R)                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
+                 "c_entry": ("open",), "lock_to": (None,),
+                 "fam_s": (0,), "s_kind": (0,), "s_entry": ("open",)}           # 16세대 원천 S(event_sources.py)                   # 13a: +1R 본전 발동 뒤 잠금 수준(R)                # 10세대: 첫 진입 비중 · +1R 추가 종가 확인             # 2세대: 추적 무장·불타기 안전 · 본전 발동 기준
     DISC = (*DISC, *((n, _dl(_do[n])) for n in EVO_GENES if n in _do))
     NOM = tuple((n, tuple(_lv(x) for x in _no[n]) if n in _no else v) for n, v in NOM)
     DISC = tuple((n, _dl(_do[n]) if n in _do else v) for n, v in DISC)
@@ -213,7 +215,8 @@ if MENU_OVERRIDE:
                 # 13세대 P·C 문턱(메뉴의 세 번째 원소 null = 끔 없음 — 필수 문턱)
                 "p_vmult": ("p_vmult", 2.0, 8.0, None), "p_ret": ("p_ret", 0.02, 0.15, None), "p_clv": ("p_clv", 0.5, 1.0, None),
                 "p_hold": ("p_hold", 0.0, 0.05, "hi"), "p_flow": ("p_flow", -0.1, 0.3, "lo"),
-                "c_ret": ("c_ret", 0.0, 0.1, "lo"), "c_vmult": ("c_vmult", 1.0, 5.0, "lo"), "c_flow": ("c_flow", -0.1, 0.3, "lo")}
+                "c_ret": ("c_ret", 0.0, 0.1, "lo"), "c_vmult": ("c_vmult", 1.0, 5.0, "lo"), "c_flow": ("c_flow", -0.1, 0.3, "lo"),
+                "s_vmult": ("s_vmult", 0.5, 5.0, "lo"), "s_flow": ("s_flow", -0.1, 0.3, "lo")}     # 16세대 S 문턱
     CONT = (*CONT, *(EVO_CONT[n][:1] + (float(_co[n][0]), float(_co[n][1]), _off(n, EVO_CONT[n][3])) for n in EVO_CONT if n in _co))
     _unk = (set(_no) - {n for n, _ in NOM}) | (set(_do) - {n for n, _ in DISC}) | (set(_co) - {c[0] for c in CONT})
     if _unk:
@@ -295,9 +298,13 @@ def canonical(g: dict) -> dict:
         g["reentry_win"] = None
     if g.get("stop_basis") != "close" and g.get("stop_anchor") != "dynamic":   # 재난 손절 = 종가 기준·하단선 동적에서만(정정 5·7)
         g["stop_hard"] = None
-    if "fam_p" in g or "fam_c" in g:                 # 13세대: 가족 하나는 켠다 · 꺼진 가족의 문턱은 평평(None)
-        if not (g.get("fam_w", 1) or g.get("fam_p") or g.get("fam_c")):
+    if "fam_p" in g or "fam_c" in g or "fam_s" in g:  # 13세대: 가족 하나는 켠다 · 꺼진 가족의 문턱은 평평(None)
+        if not (g.get("fam_w", 1) or g.get("fam_p") or g.get("fam_c") or g.get("fam_s")):
             g["fam_p"] = 1
+        if not g.get("fam_s"):                       # 16세대 원천 S
+            for k in ("s_kind", "s_entry", "s_vmult", "s_flow"):
+                if k in g:
+                    g[k] = None
         if not g.get("fam_p"):
             for k in ("p_vmult", "p_ret", "p_clv", "p_hold", "p_flow", "p_hiw", "p_entry"):
                 if k in g:
@@ -760,8 +767,9 @@ class Engine:
         ydays = pd.Series(1, index=self.days).groupby(self.days.year).sum()
         self.year_len = {int(y): float(max(v, 245)) for y, v in ydays.items()}
         xf = os.path.join(cache, "XF.npy")                # 13세대 사건 가족 표(event_families_build.py)
-        self.fam_on = os.path.exists(xf) and len(self.off) > PE.N_TABLES + EF.N_FAM_TABLES
-        self.NF = 3 if self.fam_on else 1                 # 폴드당 청산 행: W · P · C
+        self.n_fam = len(self.off) - 1 - PE.N_TABLES       # 가족 표 수(13세대 P·C = 2, 16세대 + S = 3)
+        self.fam_on = os.path.exists(xf) and self.n_fam >= EF.N_FAM_TABLES
+        self.NF = 1 + self.n_fam if self.fam_on else 1     # 폴드당 청산 행: W · P · C(· S)
         if self.fam_on:
             self.XF = np.load(xf, allow_pickle=False)
             self.fam_lo = int(self.off[EF.TID_P])
@@ -810,7 +818,7 @@ class Engine:
 
     def fam_candidates(self, g: dict, w: Win, fam: str, *, par: int, extra_slip: float = 0.0) -> dict:
         """13세대 가족 P·C 후보(EVENT_FAMILIES.md 정정 E-1) — :meth:`candidates` 와 같은 열."""
-        tid = EF.TID_P if fam == "P" else EF.TID_C
+        tid = {"P": EF.TID_P, "C": EF.TID_C, "S": ES.TID_S}[fam]
         a, b = PE.table_slice(self.off, tid)
         dcol = self.I[a:b, PE.II["d"]]
         aa = a + int(np.searchsorted(dcol, w.d_lo))
@@ -820,11 +828,14 @@ class Engine:
         if len(rows):
             m = EF.gene_mask(self.XF[rows - self.fam_lo], np.asarray(F_[aa:bb]), g, fam, PE.FI)
             rows = rows[m]
-        entry = g.get("p_entry", "open") if fam == "P" else g.get("c_entry", "open")
+        entry = {"P": g.get("p_entry", "open"), "C": g.get("c_entry", "open"), "S": g.get("s_entry", "open")}[fam]
         slip = float(exit_vec(g)[PF.X_SLIP]) + extra_slip
         mk = np.asarray(F_[rows, PE.FI["market"]]).astype(np.int64) if len(rows) else np.zeros(0, np.int64)
+        lv = sp_ = None
+        if fam == "S" and len(rows):                     # 16세대: 원천별 매수정지·손절 기준가
+            lv, sp_ = self.XF[rows - self.fam_lo, EF.XI["s_lvl"]], self.XF[rows - self.fam_lo, EF.XI["s_stp"]]
         fx = EF.fills(rows, np.asarray(self.I), PE.II, self.O, self.H, self.L, self.C, self.TR, entry, g, slip,
-                      float(LIMIT_UP_RATIO), mk, int(self.reform)) if len(rows) else \
+                      float(LIMIT_UP_RATIO), mk, int(self.reform), lv, sp_) if len(rows) else \
             {k: np.zeros(0, t) for k, t in (("rows", np.int64), ("d", np.int64), ("ci", np.int64), ("e", float), ("sp", float),
                                             ("amb", bool), ("skip0", bool), ("s0", float))}
         ev = fx["rows"]
@@ -856,15 +867,19 @@ class Engine:
         """폴드 ``k`` 의 (후보 묶음, 청산 행) — 가족 캐시가 없으면 W 하나(기존과 비트 동일). 청산 행 번호 = k·NF + (W 0 · P 1 · C 2)."""
         if not self.fam_on:
             return [self.candidates(g, w, par=k, extra_slip=extra_slip, allow=allow)], [exit_vec(g, extra_slip, sell_extra)]
-        cs = []
+        cs, nf = [], self.NF
         if g.get("fam_w", 1):
-            cs.append(self.candidates(g, w, par=3 * k, extra_slip=extra_slip, allow=allow))
+            cs.append(self.candidates(g, w, par=nf * k, extra_slip=extra_slip, allow=allow))
         if g.get("fam_c", 0):
-            cs.append(self.fam_candidates(g, w, "C", par=3 * k + 2, extra_slip=extra_slip))
+            cs.append(self.fam_candidates(g, w, "C", par=nf * k + 2, extra_slip=extra_slip))
         if g.get("fam_p", 0):
-            cs.append(self.fam_candidates(g, w, "P", par=3 * k + 1, extra_slip=extra_slip))
+            cs.append(self.fam_candidates(g, w, "P", par=nf * k + 1, extra_slip=extra_slip))
+        if nf > 3 and g.get("fam_s", 0):                 # 16세대 원천 S(같은 날 W → C → P → S)
+            cs.append(self.fam_candidates(g, w, "S", par=nf * k + 3, extra_slip=extra_slip))
         pxs = [exit_vec(g, extra_slip, sell_extra), self.fam_exit(g, "P", extra_slip, sell_extra),
                self.fam_exit(g, "C", extra_slip, sell_extra)]
+        if nf > 3:
+            pxs.append(self.fam_exit(g, "S", extra_slip, sell_extra))
         return cs, pxs
 
     # --- 포트폴리오 ---
@@ -1751,8 +1766,10 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
     t["s_up"], t["s_lo"] = F[ev, PE.FI["s_up"]], F[ev, PE.FI["s_lo"]]
     t["shape"] = [shape_name(a, b) for a, b in zip(t["s_up"], t["s_lo"], strict=True)]
     t["table"] = I_[ev, PE.II["table"]]
-    t["base"] = [PE.BASES[k % len(PE.BASES)] if k < PE.N_TABLES else ("P" if k == EF.TID_P else "C") for k in t["table"]]
-    t["fam"] = np.where(t["table"] == EF.TID_P, "P", np.where(t["table"] == EF.TID_C, "C", "W"))   # 13세대 가족
+    t["base"] = [PE.BASES[k % len(PE.BASES)] if k < PE.N_TABLES else ("P" if k == EF.TID_P else "C" if k == EF.TID_C else "S")
+                 for k in t["table"]]
+    t["fam"] = np.where(t["table"] == EF.TID_P, "P", np.where(t["table"] == EF.TID_C, "C",
+                                                              np.where(t["table"] == ES.TID_S, "S", "W")))   # 13·16세대 가족
     t["entry_close"] = (t["fam"] == "P").to_numpy() & (d == I_[ev, PE.II["d"]] - 1)          # 종가 진입(주문 행 = s)
     if t["entry_close"].any():                         # 검증 16차: 종가 진입은 신호일 = 진입일(s), 보유일은 다음날부터
         ec = t["entry_close"].to_numpy()
