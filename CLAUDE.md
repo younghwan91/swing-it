@@ -58,6 +58,9 @@
   `institution` 은 세부 합과 다르니 합계 열을 그대로 쓴다. 0 은 "0 또는 미보고"다. 폐지 종목은 기관·외국인만 있고
   나머지는 NULL(0 과 다르다) — 정문 `storage.read_supply_demand`.
 - 상장주식수 `shares_outstanding_history` 는 knowledge_date 기준 as-of 로 쓴다. 시총 = 원 종가 × 그 시점 주식수(정정 G21-1).
+- **IMPORTANT — `daily_bars.close` 는 원 종가가 아니다:** 이후 액면분할·병합이 소급 반영돼 있다(005930 2017 41,200 vs 실제 206만, 종목-월 3~14% 가 1.5배 넘게 어긋남).
+  시총·유니버스는 `swing_it.krx_session.read_raw_close`(fcs; supply_demand.close 우선, 카나리아 검사)로 만든다. 28세대 VOID·21~26세대 설계 연복리 ~3.5pp 부풀림의 원인(정정 G28-2·3).
+  main 의 `storage.market_cap_asof(_bulk)` 도 같은 결함이다.
 - 공식 지수 `sector_index`(001=KOSPI, 101=KOSDAQ, 값은 ×100 정수)는 2024-01-26 부터만 있다. 그 전의 대용 지수는 공식 지수 수준과 맞춘다
   (재구축 대용이 −4%/년 어긋나 거짓 통과를 낸 적 있다).
 - 커버리지: 뉴스 표 2023-03~, 공매도 2024-05~ 라 2020~23 설계 창에 못 쓴다. `stocks` 의 업종·시장 구분은 현재 스냅샷이다.
