@@ -30,7 +30,7 @@ IDX_MKT = {"KOSPI200": "거래소", "KOSDAQ150": "코스닥"}
 def main() -> None:
     import psycopg2
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
-    from swing_it.storage import read_prices
+    from swing_it.storage import read_prices, read_shares
     ap = argparse.ArgumentParser()
     ap.add_argument("--ledger", default=LEDGER)
     ap.add_argument("--since", default="2026-11-01", help="이 날짜 이후 발표된 변경만(사전등록 시작 = 2026-12 정기변경)")
@@ -49,7 +49,7 @@ def main() -> None:
     px = patch_prices(px, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=True)
     raw = read_prices(con, session="raw", cols=("code", "date", "open", "close"), table="daily_bars", start=start, parse_dates=True)
     raw = patch_prices(raw, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=False)
-    sh = q("select code, coalesce(knowledge_date, date) d, shares_outstanding from shares_outstanding_history", parse_dates=["d"])
+    sh = read_shares(con, cols=("code", "shares_outstanding"), with_asof=True, parse_dates=True).rename(columns={"asof": "d"})
     stk = q("select code, market, name from stocks")
     C = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").sort_index()
     days = C.index

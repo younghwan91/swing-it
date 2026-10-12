@@ -95,7 +95,7 @@ def trades(con, close, adv, flow, mass: str = "cap", *,
     if mass == "cap":
         caps = pd.concat([pd.DataFrame({"code": codes, "date": dates[t]}) for t in rebal],
                          ignore_index=True)
-        caps["cap"] = market_cap_asof_bulk(con, caps).to_numpy() / 1e8        # 억원
+        caps["cap"] = market_cap_asof_bulk(con, caps, legacy=True).to_numpy() / 1e8        # 억원
         capmap = {(r.code, r.date): r.cap for r in caps.itertuples()}
 
     ent_d, rets, sigs = [], [], []

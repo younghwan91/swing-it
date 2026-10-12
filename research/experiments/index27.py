@@ -30,8 +30,8 @@ def load(con):
     px = read_prices(con, session="raw", cols=("code", "date", "open", "close"), start="2015-10-01", parse_dates=True)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
     raw = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars", start="2015-10-01", parse_dates=True)
-    sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
-                     parse_dates=["date", "knowledge_date"])
+    from swing_it.storage import read_shares
+    sh = read_shares(con, parse_dates=True)  # 정문(가드레일 (k)) — 예전 직접 SELECT 와 같은 행(0 이하 주식수 없음 확인)·순서
     stk = pd.read_sql("select code, market from stocks", con)
     return ev, px, raw, sh, stk
 

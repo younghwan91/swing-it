@@ -76,8 +76,8 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
         tt = ((C > ma[50]) & (ma[50] > ma[150]) & (ma[150] > ma[200]) & (ma[200] > ma200_prev) & (C >= 0.75 * hi252) & (C >= 1.30 * lo252))
     brk = {n: C >= _roll(Cd, n, "max") - 1e-9 for n in GRID["N"]}
     # 시가총액(원 종가 × 상장주식수 as-of) → 그날 순위 · 시총 가중 시장(KOSPI 대용) 200일선 국면
-    sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
-                     parse_dates=["date", "knowledge_date"])
+    from swing_it.storage import read_shares
+    sh = read_shares(con, parse_dates=True)  # 정문(가드레일 (k)) — 예전 직접 SELECT 와 같은 행(0 이하 주식수 없음 확인)·순서
     if raw_close:                                   # 정정 G28-4: 원 종가 × 분할 일관 주식수(krx_session.split_consistent_cap)
         from swing_it.krx_session import read_raw_close, split_consistent_cap
         rc = read_raw_close(con, start="2016-08-01")

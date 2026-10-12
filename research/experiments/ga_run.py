@@ -359,7 +359,9 @@ def eps_features(con, days: pd.DatetimeIndex, codes: pd.Index, di: np.ndarray, c
 
     ea = read_earnings(con, all_versions=True, cols=("code", "period", "avail_date", "knowledge_date", "netinc",
                                                      "netinc_prior", "revenue", "revenue_prior"))
-    sh = pd.read_sql_query("SELECT code, date, shares_outstanding FROM shares_outstanding_history", con)
+    from swing_it.storage import read_shares  # noqa: PLC0415
+
+    sh = read_shares(con, cols=("code", "date", "shares_outstanding"))     # 정문(린트 (k)) — 0 이하는 정문이 뺀다(아래 거르기와 같음)
     sh["date"] = pd.to_datetime(sh["date"]).astype("datetime64[ns]")
     sh = sh[sh["shares_outstanding"] > 0]
     # 분할 조정계수(조정 종가 / 원 종가) — 주식 수 날짜의 직전 거래일 값

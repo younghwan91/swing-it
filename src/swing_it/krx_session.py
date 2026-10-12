@@ -283,7 +283,7 @@ def read_raw_close(con: Any, *, start: str, end: "str | None" = None, aftermarke
     return out
 
 
-def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str = "date",
+def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str,
                          raw_src: "pd.DataFrame | None" = None) -> "tuple[pd.DataFrame, int]":
     """시총 = 원 종가 × **분할 일관 주식수**(정정 G28-4·5, 검증 30차 D2 방식).
 
@@ -297,6 +297,9 @@ def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFr
         raw: 원 종가 넓은 표(날짜 × 종목), :func:`read_raw_close`.
         adj: 같은 색인·열의 연속 수정 종가(daily_bars_adjusted).
         shares: 긴 표 code, date, shares_outstanding(+ ``asof`` 열).
+        asof: 주식수를 **알게 된 날** 열 이름 — 필수(기본값 없음). ``"date"`` 는 기준일이라 dart 행은 석 달 미래 정보다;
+            새 코드는 :func:`swing_it.storage.read_shares` 의 ``with_asof=True`` 가 주는 ``"asof"``(coalesce(knowledge_date, date)).
+            ``"knowledge_date"`` 는 NULL(kiwoom 행)이면 date 로 채운다.
     Returns:
         (시총 넓은 표, 점검 위반 수 = 원 가격 일 변동 30% 안쪽인데 시총이 3배 넘게 뛴 종목-일).
     """
@@ -330,7 +333,7 @@ def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFr
     return cap, bad
 
 
-def factor_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str = "date") -> "tuple[pd.DataFrame, pd.DataFrame]":
+def factor_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str) -> "tuple[pd.DataFrame, pd.DataFrame]":
     """시총 = 원 종가 × 분할 일관 주식수, 누적계수를 **원 일봉에서 재구성한 수정 가격**(daily_bars_adj_v2 = 원 × 누적 조정계수)에서 직접 읽는다.
 
     F = adj / raw(앞으로 채움). 주식수 행은 그 행 ``date`` 의 F 로 나눠 사건 기준으로 옮긴 뒤 ``asof`` 열부터 앞으로 채우고 F_t 를 곱한다 —

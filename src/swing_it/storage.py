@@ -155,8 +155,10 @@ CREATE TABLE IF NOT EXISTS sector_index (
 CREATE INDEX IF NOT EXISTS idx_si_date ON sector_index(date);
 CREATE TABLE IF NOT EXISTS shares_outstanding_history (
     code               TEXT NOT NULL,
-    date               TEXT NOT NULL,
+    date               TEXT NOT NULL,   -- 기준일(보고서 기준일). as-of 키가 아니다 — dart 행은 이보다 중앙값 82일 늦게 알려졌다
     shares_outstanding INTEGER,  -- sqlite INTEGER is dynamically 64-bit already;
+    source             TEXT,     -- kiwoom·dart·krx
+    knowledge_date     TEXT,     -- 알게 된 날(dart 행). kiwoom 행은 NULL — as-of 키 = coalesce(knowledge_date, date), read_shares
     PRIMARY KEY (code, date)     -- Postgres side (init_timescale.sql) must use BIGINT, not INTEGER(32bit) — 삼성전자(58억주) overflows it
 );
 CREATE INDEX IF NOT EXISTS idx_sh_date ON shares_outstanding_history(date);
@@ -252,6 +254,7 @@ _SQLITE_ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "earnings": [("knowledge_date", "TEXT")],
     "daily_bars": [("source", "TEXT NOT NULL DEFAULT 'kiwoom'")],
     "daily_bars_adjusted": [("source", "TEXT NOT NULL DEFAULT 'kiwoom'")],
+    "shares_outstanding_history": [("source", "TEXT"), ("knowledge_date", "TEXT")],
 }
 
 
@@ -1010,8 +1013,130 @@ def shares_backfill_pending(con: Any) -> int:
     return int(cur.fetchone()[0])
 
 
-def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
-    """Market cap for ``code`` on exactly ``date``: close * shares outstanding.
+# ── 상장주식수 정문 ───────────────────────────────────────────────────────────────────────────────────────────
+# 표 ``shares_outstanding_history`` 의 함정(2026-10-12 측정): dart 행은 knowledge_date(알게 된 날)가 date(기준일)보다 중앙값 82일 늦다 —
+# date 로 as-of 하면 석 달 미래 정보다. kiwoom 행은 knowledge_date 가 NULL(수집일 = 기준일). 그래서 as-of 키는
+# ``coalesce(knowledge_date, date)`` 다. 0 이하 주식수는 결측이다(상장 종목이 0주일 수 없다 — market_cap_asof 주석 참조).
+_SHARES_COLS = ("code", "date", "shares_outstanding", "knowledge_date")
+_SHARES_DATE_COLS = ("date", "knowledge_date", "orig_rcept_dt", "asof")
+
+
+def read_shares(con: Any, *, cols: "tuple[str, ...]" = _SHARES_COLS, codes: "list[str] | None" = None,
+                with_asof: bool = False, parse_dates: bool = False, include_nonpositive: bool = False):
+    """상장주식수 정문 — 긴 표. 직접 SELECT 는 린트 (k) 위반.
+
+    Args:
+        cols: 반환 열(표의 열 이름). 기본 code, date, shares_outstanding, knowledge_date.
+        codes: 주면 그 종목만(SQL 에서 자른다).
+        with_asof: ``asof = coalesce(knowledge_date, date)`` 열을 덧붙인다 — **as-of 조인은 이 열로** 한다(date 는 기준일이라
+            dart 행은 석 달 미래 정보다).
+        parse_dates: 날짜 열(date·knowledge_date·asof 등)을 datetime64 로(``pd.read_sql(parse_dates=...)`` 와 같은 경로).
+        include_nonpositive: 0 이하 주식수 행도 준다(기본은 뺀다 — 결측이다).
+    """
+    import re as _re  # noqa: PLC0415
+
+    import pandas as pd  # noqa: PLC0415
+
+    use = tuple(cols)
+    if not all(_re.fullmatch(r"[a-z_][a-z0-9_]*", c) for c in use):
+        raise ValueError(f"열 이름이 아니다: {use}")
+    sel = ", ".join(use) + (", coalesce(knowledge_date, date) AS asof" if with_asof else "")
+    ph = _ph(con)
+    where, params = [], []
+    if not include_nonpositive:
+        where.append("shares_outstanding > 0")
+    if codes is not None:
+        codes = [str(c) for c in codes]
+        if _is_pg(con):
+            where.append(f"code = ANY({ph})")
+            params.append(codes)
+        else:
+            where.append(f"code IN ({', '.join([ph] * len(codes)) or 'NULL'})")
+            params.extend(codes)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    out_cols = use + (("asof",) if with_asof else ())
+    pdates = [c for c in out_cols if c in _SHARES_DATE_COLS] if parse_dates else None
+    return pd.read_sql_query(f"SELECT {sel} FROM shares_outstanding_history{clause}",  # noqa: S608 — 열 이름은 위에서 검사
+                             con, params=tuple(params) or None, parse_dates=pdates or None)
+
+
+def market_cap_asof(con: Any, code: str, date: str, *, legacy: bool = False) -> int | float | None:
+    """``code`` 의 ``date`` 시총 = **원 종가** × 그날까지 **알려진** 주식수(``coalesce(knowledge_date, date) <= date``).
+
+    :func:`market_cap_asof_bulk` 한 줄판. ``legacy=True`` 는 옛 정의(``daily_bars.close`` — 이후 분할·병합이 소급 반영된 가격 —
+    × ``date`` 기준 주식수)로, 그 숫자를 재현해야 하는 호출부만 명시한다. 값이 없으면 ``None``.
+    """
+    if legacy:
+        return _market_cap_asof_legacy(con, code, date)
+    import pandas as pd  # noqa: PLC0415
+
+    v = market_cap_asof_bulk(con, pd.DataFrame({"code": [code], "date": [date]})).iloc[0]
+    return None if pd.isna(v) else float(v)
+
+
+def market_cap_asof_bulk(con: Any, df: Any, *, legacy: bool = False) -> Any:
+    """여러 ``(code, date)`` 의 시총 = 원 종가 × 그날까지 알려진 주식수. ``legacy=True`` 는 옛 정의(아래 :func:`_market_cap_asof_bulk_legacy`).
+
+    - 원 종가: 그 날짜의 ``supply_demand.close``(절댓값; 키움 피드의 원 가격) — 없으면 ``daily_bars.close``. 2026-09-14~ 은 분봉 정규장
+      종가 > 정규장 항등식(:mod:`swing_it.krx_session`) > 일봉(애프터마켓 오염 — 마지막 거래일·분봉 없는 종목만).
+      ``daily_bars.close`` 는 이후 분할·병합이 소급 반영된 가격이라(005930 2017 41,200 vs 실제 206만) 옛 정의는 분할 전 대형주를
+      수십 분의 1 로 만들었다.
+    - 주식수: ``asof = coalesce(knowledge_date, date) <= date`` 인 가장 최근 행(dart 행은 기준일보다 석 달쯤 늦게 알려진다), 0 이하 제외.
+
+    **남은 결함(거울상):** 주식수 행이 주로 연말 DART 라 분할·병합 뒤 수개월 늦게 바뀐다 — 원 종가 × 그 주식수는 그 사이 분할
+    배수만큼 틀린다. 패널 전체가 있으면 :func:`swing_it.krx_session.split_consistent_cap` 이 정답이다(정정 G28-4).
+
+    Returns: ``df.index`` 에 맞춘 ``pandas.Series``(없으면 NaN).
+    """
+    if legacy:
+        return _market_cap_asof_bulk_legacy(con, df)
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    from swing_it.krx_session import AFTERMARKET_START, combine_raw_close, read_regular_close, read_session_bars_any  # noqa: PLC0415
+
+    if df.empty:
+        return pd.Series([], dtype=float, index=df.index)
+    codes = sorted({str(c) for c in df["code"]})
+    dates = pd.to_datetime(df["date"].astype(str))
+    lo, hi = dates.min().strftime("%Y-%m-%d"), dates.max().strftime("%Y-%m-%d")
+    ph = _ph(con)
+    if _is_pg(con):
+        cw, cp = f"code = ANY({ph})", [codes]
+    else:
+        cw, cp = f"code IN ({', '.join([ph] * len(codes))})", list(codes)
+    sd = pd.read_sql_query(f"SELECT code, date, close FROM supply_demand WHERE {cw} AND date >= {ph} AND date <= {ph} "  # noqa: S608
+                           "AND close IS NOT NULL", con, params=(*cp, lo, hi))
+    bars = pd.read_sql_query(f"SELECT code, date, close FROM daily_bars WHERE {cw} AND date >= {ph} AND date <= {ph}",  # noqa: S608
+                             con, params=(*cp, lo, hi))
+    sess = ident = None
+    if hi >= AFTERMARKET_START:
+        a = max(lo, AFTERMARKET_START)
+        sess = read_session_bars_any(con, start=a, end=hi)          # sqlite 에 분봉이 없으면 None — 항등식으로 간다
+        ident = read_regular_close(con, start=a, end=hi)
+        if sess is not None:
+            sess = sess[sess["code"].astype(str).isin(codes)]
+        ident = ident[ident["code"].astype(str).isin(codes)]
+    for x in (sd, bars):
+        x["code"] = x["code"].astype(str)
+    rc = combine_raw_close(sd, bars, sess, identity=ident, sd_until=AFTERMARKET_START)
+    sh = read_shares(con, cols=("code", "shares_outstanding"), codes=codes, with_asof=True)
+    if rc.empty or sh.empty:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    sh["code"] = sh["code"].astype(str)
+    sh["asof"] = pd.to_datetime(sh["asof"].astype(str))
+    sh = sh.sort_values(["asof", "code"], kind="mergesort")
+    q = pd.DataFrame({"code": df["code"].astype(str).to_numpy(), "date": dates.to_numpy(), "_row": np.arange(len(df))})
+    q = q.merge(rc[["code", "date", "close"]], on=["code", "date"], how="left").sort_values(["date", "code"], kind="mergesort")
+    m = pd.merge_asof(q, sh[["code", "asof", "shares_outstanding"]], left_on="date", right_on="asof", by="code",
+                      direction="backward").sort_values("_row")
+    return pd.Series((m["close"].astype(float) * m["shares_outstanding"].astype(float)).to_numpy(), index=df.index)
+
+
+def _market_cap_asof_legacy(con: Any, code: str, date: str) -> int | float | None:
+    """**옛 정의**(``market_cap_asof(..., legacy=True)``) — ``daily_bars.close``(소급 수정 가격) × ``date`` 기준 주식수. 재현용.
+
+Market cap for ``code`` on exactly ``date``: close * shares outstanding.
 
     ``close`` must exist for that exact date (no guessing). Shares outstanding
     is looked up as the most recent row with ``date <= date`` — never a row
@@ -1051,8 +1176,10 @@ def market_cap_asof(con: Any, code: str, date: str) -> int | float | None:
     return close * shares
 
 
-def market_cap_asof_bulk(con: Any, df: Any) -> Any:
-    """Vectorized :func:`market_cap_asof` for many ``(code, date)`` rows at once.
+def _market_cap_asof_bulk_legacy(con: Any, df: Any) -> Any:
+    """**옛 정의**(``market_cap_asof_bulk(..., legacy=True)``) — 재현용.
+
+Vectorized :func:`market_cap_asof` for many ``(code, date)`` rows at once.
 
     Byte-identical semantics to the per-row function — close comes from
     ``daily_bars`` on the exact date (NOT any close column the caller's

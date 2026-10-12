@@ -17,6 +17,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (g2) 생존자 전용 조인 — ``supply_demand JOIN stocks`` 는 WHERE 없이도 폐지분을 떨군다.
   (h) 코드 없는 판정 — (b)의 역방향. VERDICT 에 러너가 등록·실재하거나 재현불가 선언 필요.
   (j) 애프터마켓 오염 열 — ``supply_demand`` 의 close·flu_rt·acc_trde_qty 를 정문 밖에서 직접 SELECT 하면 실패.
+  (k) 주식수 as-of — ``shares_outstanding_history`` 를 정문(storage.read_shares) 밖에서 직접 SELECT 하면 실패.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -394,6 +395,26 @@ def check_no_raw_supply_close() -> list[str]:
     return out
 
 
+# (k) 상장주식수는 정문 storage.read_shares 로만 읽는다. dart 행은 기준일(date)보다 중앙값 82일 늦게 알려지는데(knowledge_date),
+# 직접 SELECT 하는 코드는 date 로 as-of 를 걸어 석 달 미래 정보를 썼다(21~26세대 시총). 정문은 asof = coalesce(knowledge_date, date)
+# 열을 주고 0 이하 주식수를 뺀다.
+_RAW_SHARES = re.compile(r"\b(?:FROM|JOIN)\s+shares_outstanding_history\b", re.I)
+_SHARES_READ_EXEMPT = {
+    "src/swing_it/storage.py",            # 정문 자신 + 스키마 + shares_backfill_pending(존재 여부만 센다)
+    "scripts/check_guardrails.py",        # 규칙 자신
+    "tests/test_check_guardrails.py",     # 규칙의 회귀 테스트
+    # 무결성 감사기 — 0 이하 행 수·커버리지를 원 표에서 센다(유니버스·시총을 만들지 않는다; (g) 면제와 같은 이유).
+    "scripts/verify_report.py",
+}
+
+
+def check_no_raw_shares_select() -> list[str]:
+    """(k) storage 밖에서 shares_outstanding_history 를 직접 SELECT·JOIN 하면 위반."""
+    return _scan_sql(_SHARES_READ_EXEMPT, _RAW_SHARES, "shares",
+                     "shares_outstanding_history 를 직접 읽었다. swing_it.storage.read_shares(con, with_asof=True) 를 쓸 것 — "
+                     "as-of 키는 coalesce(knowledge_date, date)(dart 행은 기준일보다 석 달쯤 늦게 알려진다), 0 이하는 결측")
+
+
 def check_no_survivor_only_join() -> list[str]:
     """(g2) supply_demand 를 상장 마스터(stocks)와 INNER JOIN 하면 위반."""
     out = []
@@ -529,6 +550,7 @@ def main() -> int:
     violations += check_no_raw_price_select()
     violations += check_no_survivor_only_join()
     violations += check_no_raw_supply_close()
+    violations += check_no_raw_shares_select()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

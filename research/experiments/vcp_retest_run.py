@@ -1003,8 +1003,9 @@ def _trade_desc(t: pd.DataFrame) -> dict:
 def _eps_flags(con, sv: pd.DataFrame) -> np.ndarray:
     """주당 기준 E 가속(기술, 정정 M2) — ``shares_outstanding_history`` as-of 네 시점."""
     codes = [str(c) for c in pd.unique(sv["code"])]
-    sh = pd.read_sql_query("SELECT code, date, shares_outstanding FROM shares_outstanding_history WHERE code = ANY(%(c)s)",
-                           con, params={"c": codes})
+    from swing_it.storage import read_shares  # noqa: PLC0415
+
+    sh = read_shares(con, cols=("code", "date", "shares_outstanding"), codes=codes)   # 정문(린트 (k))
     if sh.empty:
         return np.zeros(len(sv), bool)
     sh["code"] = sh["code"].astype(str)

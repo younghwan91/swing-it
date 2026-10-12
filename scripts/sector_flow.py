@@ -94,7 +94,7 @@ def attach_daily_cap(con, df: pd.DataFrame) -> pd.DataFrame:
     정해져야 편향이 안 생긴다.
     """
     key = df[["code", "date"]].drop_duplicates()
-    key["cap"] = market_cap_asof_bulk(con, key).to_numpy() / EOK
+    key["cap"] = market_cap_asof_bulk(con, key, legacy=True).to_numpy() / EOK
     out = df.merge(key, on=["code", "date"], how="left").sort_values(["code", "date"])
     out["cap_lag"] = out.groupby("code")["cap"].shift(1)
     return out
@@ -143,7 +143,7 @@ def sector_cap(con, df: pd.DataFrame, last_date: str) -> pd.DataFrame:
     """기간말 섹터 시가총액(억) — 비중 변화의 분모."""
     codes = df[["code", "sector", "market"]].drop_duplicates("code").copy()
     codes["date"] = last_date
-    codes["cap"] = market_cap_asof_bulk(con, codes[["code", "date"]]).to_numpy() / EOK
+    codes["cap"] = market_cap_asof_bulk(con, codes[["code", "date"]], legacy=True).to_numpy() / EOK
     return codes.dropna(subset=["cap"])
 
 
@@ -163,7 +163,7 @@ def sector_cap_monthly(con, df: pd.DataFrame, dates: list[str]) -> dict:
     for ym, last in sorted(months.items()):
         q = codes[["code"]].copy()
         q["date"] = last
-        q["cap"] = market_cap_asof_bulk(con, q).to_numpy() / EOK
+        q["cap"] = market_cap_asof_bulk(con, q, legacy=True).to_numpy() / EOK
         m = q.merge(codes, on="code").dropna(subset=["cap"])
         for (mk, sec), g in m.groupby(["market", "sector"]):
             out.setdefault(mk, {}).setdefault(sec, {})[ym] = round(float(g["cap"].sum()), 1)

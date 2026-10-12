@@ -273,7 +273,7 @@ def main() -> int:
     """
     import argparse
     import pandas as _pd
-    from ..storage import connect, read_prices, db_default
+    from ..storage import connect, db_default, read_prices, read_shares
     from ..features.fundamentals import combined_signal, earnings_yoy_panel
 
     ap = argparse.ArgumentParser(description="PEAD⊕가치 저회전 알파 백테스트 (실적 드리프트 + 가치)")
@@ -304,9 +304,7 @@ def main() -> int:
     # 들어간다 — 그건 이 함수가 막을 수 없고, CSV 를 만든 쪽의 책임이다.
     prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
     prices = prices[prices["code"].isin(codes)]
-    shares = None if args.no_value else _pd.read_sql_query(
-        "SELECT code,date,shares_outstanding FROM shares_outstanding_history WHERE code = ANY(%(c)s)",
-        con, params={"c": codes})
+    shares = None if args.no_value else read_shares(con, cols=("code", "date", "shares_outstanding"), codes=codes)
     con.close()
     prices["date"] = prices["date"].astype(str)
     dates = sorted(prices["date"].unique())

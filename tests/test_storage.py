@@ -44,7 +44,7 @@ def test_market_cap_asof_normal_case(tmp_path):
     _insert_bar(con, "005930", "2026-02-01", 70000)
     _insert_shares(con, "005930", "2026-02-01", 1000000)
 
-    assert market_cap_asof(con, "005930", "2026-02-01") == 70000 * 1000000
+    assert market_cap_asof(con, "005930", "2026-02-01", legacy=True) == 70000 * 1000000
     con.close()
 
 
@@ -56,7 +56,7 @@ def test_market_cap_asof_avoids_lookahead_bias(tmp_path):
 
     # 2026-02-01 is between the two share counts — must use the earlier
     # (on-or-before) 1,000,000 figure, never the later 2,000,000 one.
-    assert market_cap_asof(con, "005930", "2026-02-01") == 70000 * 1000000
+    assert market_cap_asof(con, "005930", "2026-02-01", legacy=True) == 70000 * 1000000
     con.close()
 
 
@@ -64,7 +64,7 @@ def test_market_cap_asof_returns_none_without_shares_data(tmp_path):
     con = connect(tmp_path / "t.db")
     _insert_bar(con, "005930", "2026-02-01", 70000)
 
-    assert market_cap_asof(con, "005930", "2026-02-01") is None
+    assert market_cap_asof(con, "005930", "2026-02-01", legacy=True) is None
     con.close()
 
 
@@ -79,7 +79,7 @@ def test_market_cap_asof_treats_zero_shares_as_missing(tmp_path):
     _insert_shares(con, "005930", "2026-01-15", 0)      # 파싱 실패가 0 으로 적재된 행
     _insert_bar(con, "005930", "2026-02-01", 70000)
 
-    assert market_cap_asof(con, "005930", "2026-02-01") is None
+    assert market_cap_asof(con, "005930", "2026-02-01", legacy=True) is None
     con.close()
 
 
@@ -97,12 +97,74 @@ def test_market_cap_asof_bulk_matches_per_row_on_zero_shares(tmp_path):
     _insert_bar(con, "000660", "2026-02-01", 20000)
 
     df = pd.DataFrame({"code": ["005930", "000660"], "date": ["2026-02-01", "2026-02-01"]})
-    out = market_cap_asof_bulk(con, df)
+    out = market_cap_asof_bulk(con, df, legacy=True)
 
     assert pd.isna(out.iloc[0])                       # 0 행이 이긴 종목 → 결측
     assert out.iloc[1] == 20000 * 500000              # 정상 종목은 그대로
-    assert pd.isna(out.iloc[0]) == (market_cap_asof(con, "005930", "2026-02-01") is None)
+    assert pd.isna(out.iloc[0]) == (market_cap_asof(con, "005930", "2026-02-01", legacy=True) is None)
     con.close()
+
+
+
+# --- 새 정의(기본): 원 종가 × 알려진 주식수 — legacy=True 는 위의 옛 정의 ------------------------------------------
+
+def _insert_sd_close(con, code, date, close):
+    con.execute("INSERT INTO supply_demand(code, date, close) VALUES (?, ?, ?)", (code, date, close))
+    con.commit()
+
+
+def _insert_shares_kd(con, code, date, shares, knowledge_date):
+    con.execute("INSERT INTO shares_outstanding_history(code, date, shares_outstanding, source, knowledge_date) "
+                "VALUES (?, ?, ?, 'dart', ?)", (code, date, shares, knowledge_date))
+    con.commit()
+
+
+def test_market_cap_uses_raw_close_not_back_adjusted_daily_bars(tmp_path):
+    """daily_bars.close 는 이후 분할이 소급 반영된 가격이다(005930 2017 41,200 vs 실제 206만). 원 종가(수급표)를 쓴다."""
+    con = connect(tmp_path / "t.db")
+    _insert_bar(con, "005930", "2017-03-31", 41_200)              # 소급 수정 가격
+    _insert_sd_close(con, "005930", "2017-03-31", -2_060_000)     # 원 종가(키움 부호 포함)
+    _insert_shares(con, "005930", "2016-12-31", 140_000_000)
+    assert market_cap_asof(con, "005930", "2017-03-31") == 2_060_000 * 140_000_000
+    assert market_cap_asof(con, "005930", "2017-03-31", legacy=True) == 41_200 * 140_000_000
+
+
+def test_market_cap_uses_knowledge_date_not_report_date(tmp_path):
+    """dart 행은 기준일(date)보다 늦게 알려진다 — 알려지기 전 날짜의 시총에 쓰면 미래 정보다."""
+    con = connect(tmp_path / "t.db")
+    _insert_bar(con, "000660", "2026-02-01", 20_000)
+    _insert_shares(con, "000660", "2025-06-30", 500_000)                          # kiwoom(knowledge_date NULL) = 기준일에 안다
+    _insert_shares_kd(con, "000660", "2025-12-31", 900_000, "2026-03-20")        # 기준일 12-31, 공시 03-20
+    assert market_cap_asof(con, "000660", "2026-02-01") == 20_000 * 500_000
+    assert market_cap_asof(con, "000660", "2026-02-01", legacy=True) == 20_000 * 900_000   # 옛 정의 = 미래 정보
+
+
+def test_market_cap_new_definition_skips_zero_share_rows(tmp_path):
+    """새 정의는 0 이하 주식수 행을 결측으로 **빼고**(read_shares) 그 전의 알려진 값을 쓴다."""
+    con = connect(tmp_path / "t.db")
+    _insert_shares(con, "005930", "2026-01-01", 1_000_000)
+    _insert_shares(con, "005930", "2026-01-15", 0)
+    _insert_bar(con, "005930", "2026-02-01", 70_000)
+    assert market_cap_asof(con, "005930", "2026-02-01") == 70_000 * 1_000_000
+
+
+def test_read_shares_asof_column_and_filters(tmp_path):
+    from swing_it.storage import read_shares
+
+    con = connect(tmp_path / "t.db")
+    _insert_shares(con, "A", "2026-01-01", 10)
+    _insert_shares(con, "A", "2026-01-02", 0)
+    _insert_shares_kd(con, "B", "2025-12-31", 20, "2026-03-20")
+    df = read_shares(con, with_asof=True, parse_dates=True)
+    assert set(df["code"]) == {"A", "B"} and len(df) == 2                         # 0 주식수 행은 뺀다
+    b = df[df["code"] == "B"].iloc[0]
+    assert str(b["asof"].date()) == "2026-03-20"                                 # coalesce(knowledge_date, date)
+    a = df[df["code"] == "A"].iloc[0]
+    assert str(a["asof"].date()) == "2026-01-01"
+    assert len(read_shares(con, include_nonpositive=True)) == 3
+    assert set(read_shares(con, codes=["B"])["code"]) == {"B"}
+    with pytest.raises(ValueError):
+        read_shares(con, cols=("code; DROP TABLE x",))
 
 
 def _supply_schema(con):

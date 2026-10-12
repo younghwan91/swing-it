@@ -259,7 +259,9 @@ def build_inputs(path: str, t0: float) -> dict:
         raw_close = cvr.raw_close_panel(con, p)
     lmeta = load_listing_meta(con)
     ea = read_earnings(con, all_versions=True, cols=EARN_COLS)
-    shares = pd.read_sql_query("SELECT code, date, shares_outstanding, knowledge_date FROM shares_outstanding_history", con)
+    from swing_it.storage import read_shares  # noqa: PLC0415
+
+    shares = read_shares(con)                       # 정문(린트 (k))
     con.close()
     days, codes = p.days, p.close.columns
     _log(f"DB 패널 {p.close.shape} {days[0].date()} ~ {days[-1].date()} · 정규장 종가 컷 {SESSION_CLOSE}", t0)

@@ -440,10 +440,9 @@ def test_eps_panels_match_ga_kernel_definition(monkeypatch):
     from swing_it.live.features import earnings_panels_ga
 
     days, codes, raw, adj, ea, shares = _eps_fixture()
-    monkeypatch.setattr(ga_run, "pd", pd)
-    monkeypatch.setattr(ga_run.pd, "read_sql_query", lambda sql, con: shares.copy())
     import swing_it.storage as st
 
+    monkeypatch.setattr(st, "read_shares", lambda con, **kw: shares.copy())   # ga_run 은 주식수를 정문(read_shares)으로 읽는다
     monkeypatch.setattr(st, "read_earnings", lambda con, **kw: ea.copy())
     di, ci = np.meshgrid(np.arange(len(days)), np.arange(len(codes)), indexing="ij")
     di, ci = di.ravel(), ci.ravel()

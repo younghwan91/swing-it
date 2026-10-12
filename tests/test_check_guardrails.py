@@ -413,3 +413,36 @@ def test_rule_j_catches_tainted_supply_columns(lint, tmp_path, monkeypatch):
 def test_rule_j_allows_flow_only_and_date_reads(lint, tmp_path, monkeypatch):
     """순매매 열·날짜만 읽는 SELECT 와, 바깥 SELECT 의 close(다른 표)는 대상이 아니다 — 거짓 양성 방지."""
     assert _scan(lint, tmp_path, monkeypatch, _SD_CLEAN_READS, "check_no_raw_supply_close") == []
+
+
+# --- (k) 상장주식수 정문 -----------------------------------------------------------------------------------
+
+_RAW_SHARES_READS = '''
+import pandas as pd
+
+def a(con):
+    return pd.read_sql("select code, date, shares_outstanding from shares_outstanding_history", con)
+
+def b(con, has):
+    return pd.read_sql("select code, date" + (", orig_rcept_dt" if has else "") + " from shares_outstanding_history", con)
+
+def c(con):
+    con.execute("""SELECT b.code FROM daily_x b
+                   JOIN shares_outstanding_history h ON h.code = b.code""")
+'''
+
+
+def test_rule_k_catches_direct_shares_reads(lint, tmp_path, monkeypatch):
+    """직접 SELECT·문자열 연결·JOIN 모두 잡는다(recheck29 의 + 연결 모양 포함)."""
+    out = _scan(lint, tmp_path, monkeypatch, _RAW_SHARES_READS, "check_no_raw_shares_select")
+    assert len(out) == 3, out
+    assert all("read_shares" in o for o in out)
+
+
+def test_rule_k_ignores_prose_and_metadata(lint, tmp_path, monkeypatch):
+    src = '''
+"""주식수는 shares_outstanding_history 에서 — FROM shares_outstanding_history 직접 읽기 금지(독스트링 산문)."""
+def f(cur):
+    cur.execute("select column_name from information_schema.columns where table_name = 'shares_outstanding_history'")
+'''
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_shares_select") == []

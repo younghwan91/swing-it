@@ -189,8 +189,8 @@ def main() -> None:
     DN = L.build(days, codes, O2, H2, L2, C2, TR, cost, mkt, con, raw_close=False)
     cur.execute("select column_name from information_schema.columns where table_name = 'shares_outstanding_history'")
     has_orig = "orig_rcept_dt" in {r[0] for r in cur.fetchall()}
-    sh = pd.read_sql("select code, date, shares_outstanding" + (", orig_rcept_dt" if has_orig else "") + " from shares_outstanding_history",
-                     con, parse_dates=["date"] + (["orig_rcept_dt"] if has_orig else []))
+    from swing_it.storage import read_shares
+    sh = read_shares(con, cols=("code", "date", "shares_outstanding") + (("orig_rcept_dt",) if has_orig else ()), parse_dates=True)
     sh = sh[(sh["shares_outstanding"] > 0) & (sh["shares_outstanding"] <= 1e10)]
     if has_orig:                                    # 사전등록: 원 정기보고서 접수일 다음 날부터(없는 행은 date)
         sh["asof"] = pd.to_datetime(sh["orig_rcept_dt"]) + pd.Timedelta(days=1)

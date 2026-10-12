@@ -345,7 +345,7 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
     """
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars, read_session_bars_agg  # noqa: PLC0415
     from swing_it.storage import _is_pg  # noqa: PLC0415
-    from swing_it.storage import read_earnings, read_prices_wide, read_supply_demand, trading_window  # noqa: PLC0415
+    from swing_it.storage import read_earnings, read_prices_wide, read_shares, read_supply_demand, trading_window  # noqa: PLC0415
 
     # 정문의 와이드판, **날짜 창만** 읽는다(통합 검토 M6 — 전 기간 580만 행 대신 그날치 330행 × 전 종목; 폐지 포함 검사는 창 기준).
     if last_rows is not None:
@@ -391,8 +391,7 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
     meta = load_listing_meta(con)
     sd = read_supply_demand(con, session="raw", cols=SUPPLY_COLS, start=lo.strftime("%Y-%m-%d"), end=hi.strftime("%Y-%m-%d"))
     ea = read_earnings(con, all_versions=True, cols=EARN_COLS)
-    shares = pd.read_sql_query("SELECT code, date, shares_outstanding, knowledge_date FROM shares_outstanding_history",
-                               con)
+    shares = read_shares(con)                       # 정문(린트 (k)) — 같은 열·같은 행(0 이하 주식수는 결측이라 뺀다)
     return RawInputs(raw_close=raw_close, market=market_map(stocks, delisted, codes), meta=meta, supply=sd,
                      earnings=ea, patch_info=info, shares=shares, **piv)
 
