@@ -160,10 +160,10 @@ def _extras(days, codes, C, ma, uni, rs, cwi, regime_on, cand, con) -> dict:
 
 
 def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None,
-             paper: bool = False) -> "tuple[pd.Series, pd.DataFrame]":
+             paper: bool = False, start: str = START) -> "tuple[pd.Series, pd.DataFrame]":
     """``paper`` = 모의매매 보정(검증 24차): 거래정지일 매도 미룸 · 손절 비교 허용오차 · 국면 청산 사유 표시. 백테스트 기본은 끔(재현)."""
     days, O, H, L, C = D["days"], D["O"], D["H"], D["L"], D["C"]
-    t0, t1 = int(days.searchsorted(pd.Timestamp(START))), int(days.searchsorted(pd.Timestamp(end), side="right"))
+    t0, t1 = int(days.searchsorted(pd.Timestamp(start))), int(days.searchsorted(pd.Timestamp(end), side="right"))
     pos_cap = cfg.get("pos_cap", POS_CAP)             # 전진 팔 leader_C20: 비중 절반(pos_cap·risk) — 기본값 = 기존 상수
     unit = min(pos_cap, cfg.get("risk", RISK) / cfg["hard"])
     max_units = max(1, int(round(pos_cap / unit)))
@@ -340,9 +340,9 @@ def _task(a):
     return out
 
 
-def benchmarks(D: dict) -> pd.DataFrame:
+def benchmarks(D: dict, start: str = START, end: str = END) -> pd.DataFrame:
     days, C = D["days"], D["C"]
-    t0, t1 = int(days.searchsorted(pd.Timestamp(START))), int(days.searchsorted(pd.Timestamp(END), side="right"))
+    t0, t1 = int(days.searchsorted(pd.Timestamp(start))), int(days.searchsorted(pd.Timestamp(end), side="right"))
     r = C[:, 1:] / C[:, :-1] - 1
     r = np.concatenate([np.full((C.shape[0], 1), np.nan), r], axis=1)
     r = np.where(np.isfinite(r), np.clip(r, -0.3, 0.3), np.nan)
