@@ -2,8 +2,7 @@
 
 한국 주식(KOSPI·KOSDAQ) 리서치 레포. main = kqflow TUI(`sw-flow`·`sw-ledger`) + 알파 심사 프레임워크(공개, MIT).
 사용자의 실제 연구(스윙·미너비니·진화 GA·모의매매)는 대부분 **`feature-combined-strategy`**(이하 **fcs**,
-워크트리 `~/git/swing-it-feature-combined-strategy`)에 있고 main 에 머지되지 않았다. `perf/screen-batch`
-(`~/git/swing-it-evo-jit`)는 fcs 위 가속 브랜치. 아래에서 "(fcs)" 표시 경로는 main 에 없다.
+워크트리 `~/git/swing-it-feature-combined-strategy`)에 있고 main 에 머지되지 않았다. 아래에서 "(fcs)" 표시 경로는 main 에 없다.
 
 ## 명령 (검증됨)
 - 테스트: `uv run --extra dev pytest -q` — DB·네트워크 불요. fcs 는 `uv run --with numba --extra dev pytest -q`(약 3분).
@@ -38,7 +37,8 @@
 - 체결 수가 하한에 못 미치면 VOID·판단 불가로 적는다. 거래를 줄여 거래당 숫자를 올리는 방향은 피한다 —
   사용자는 거래 수 × 거래당을 본다.
 - 모의매매 팔(leader_A 등)은 도중에 규칙을 바꾸지 않는다. 바꾸려면 새 팔·새 장부로 사전등록한다.
-- 원장(`TRIALS.jsonl`·`RUNS.jsonl`·`research/paper/*.jsonl`)은 코드만 덧붙인다. 손으로 고치지 않는다(`.claude/settings.json` deny).
+- 원장(`TRIALS.jsonl`·`RUNS.jsonl`·`research/paper/*.jsonl`)은 코드만 덧붙인다. 손으로 고치지 않는다(`.claude/settings.json` 의 `Edit` deny —
+  편집 도구·`sed`·`>>` 리다이렉트를 막고, 파이썬 스크립트의 덧붙이기는 막지 않는다).
 - 가격·실적은 정문(`storage.read_prices`·`read_earnings`)으로 읽는다. 직접 SELECT 는 린트 (d)(g) 위반이다.
   fcs 에는 기존 위반이 남아 있다 — 새로 늘리지 않는다.
 
@@ -55,7 +55,8 @@
 - `trade_value` 단위는 **백만원**이다(ADV 10억 = 1,000; 4f6ef61 배선 오류).
 - `supply_demand` 의 주체 열(`individual`·`foreign_`·`institution`·`etc_corp`)은 금액이 아니라 순매매 **수량**이다
   (× 종가는 근사). `flu_rt` 는 등락률 ×100 이다. 네 주체를 더하면 ≈ 0 이라 `etc_corp` 를 빼면 안 된다.
-  `institution` 은 세부 합과 다르니 합계 열을 그대로 쓴다. 0 은 "0 또는 미보고"다.
+  `institution` 은 세부 합과 다르니 합계 열을 그대로 쓴다. 0 은 "0 또는 미보고"다. 폐지 종목은 기관·외국인만 있고
+  나머지는 NULL(0 과 다르다) — 정문 `storage.read_supply_demand`.
 - 상장주식수 `shares_outstanding_history` 는 knowledge_date 기준 as-of 로 쓴다. 시총 = 원 종가 × 그 시점 주식수(정정 G21-1).
 - 공식 지수 `sector_index`(001=KOSPI, 101=KOSDAQ, 값은 ×100 정수)는 2024-01-26 부터만 있다. 그 전의 대용 지수는 공식 지수 수준과 맞춘다
   (재구축 대용이 −4%/년 어긋나 거짓 통과를 낸 적 있다).
@@ -88,6 +89,7 @@
 - 미너비니 근거는 fcs `research/logs/sepa_explore/MINERVINI_RULES.md`(쪽 번호)와 책 그래프 `/home/young/minervini-graph/`
   (`graphify query`)에서 찾는다. 사용자는 "왠만하면 미너비니를 따라"라고 했다.
 - 파라미터 하나를 고정하자는 제안을 반복하지 않는다. 고정·사전등록하는 것은 절차와 합격 바이고, 파라미터는 워크포워드로 굴린다.
+  최적화는 확률적이다 — 한 경로의 극값·경계가 아니라 고원을 고르고, 거래별 R 분포로 본다.
 
 ## 보고·검증 방식 (사용자가 반복 요구한 것)
 - **IMPORTANT — 결과는 차트와 함께, 나오는 즉시 보여준다.** 차트에는 봉·거래량·MA·진입/청산·손절선을 그린다.
@@ -105,7 +107,7 @@
 - `docs/GUARDRAILS.md` — 연구 정석·완료 정의·사전등록 템플릿. 새 알파나 실험 전에 읽는다.
 - `docs/alpha-research.md` · `research/logs/*/VERDICT.md` — 기존 판정 전문. 가설을 세우기 전에 기각 목록을 확인한다.
 - `research/TEMPLATE.md` — 실험 파이프라인 규약(src 는 research 를 import 하지 않는다 등).
-- (fcs) `research/logs/sepa_explore/META_EVOLUTION.md` — 진화 세대 절차와 1~23세대 사전등록·결과·정정. 새 세대 전에 마지막 2~3세대를 읽는다.
+- (fcs) `research/logs/sepa_explore/META_EVOLUTION.md` — 진화 세대 절차와 세대별 사전등록·결과·정정. 새 세대 전에 마지막 2~3세대를 읽는다.
 - (fcs) `research/logs/sepa_explore/` 의 `*_RESULTS.md`·`REVIEW_*.md` — 실험별 결과와 리뷰.
 - (fcs) `docs/individual-trader-method.md` — 현재 완결 매매법(코어 지수 ETF + 위성).
 - (fcs) `research/paper/` — 모의매매 장부(덧붙이기 전용, `*_VOID_*` 는 무효 보관본).
