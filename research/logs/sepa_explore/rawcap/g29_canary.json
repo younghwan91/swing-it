@@ -1,0 +1,16 @@
+{
+ "canary": {
+  "repro_C2": 0.1474,
+  "repro_ok": true,
+  "derive_identical": true,
+  "samsung_split_ret": 0.02075471698113207,
+  "samsung_raw_2017": 2060000.0,
+  "seam_001230": 0.02117647157936009,
+  "data_ok": true,
+  "cap_jaccard_vs_D2": 0.9951444814855251,
+  "cap_jump_bad": 234,
+  "cap_jump_bad_D2": 253,
+  "shares_asof": "date(≈3개월 미래 정보)",
+  "cap_ok": true
+ }
+}
