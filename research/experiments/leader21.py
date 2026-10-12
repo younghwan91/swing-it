@@ -250,10 +250,17 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                 p_sell.add(ci)
             elif cfg["pyramid"] and p["units"] < max_units and c_ >= p["first_px"] * (1 + 0.10 * p["units"]) and D["hi20"][ci, t]:
                 p_add.add(ci)
-        if reg and not reg_arr[t]:                # 국면 꺼짐: 전부 다음 시가에 팔고 새로 안 산다
-            p_sell.update(pos.keys())
+        if reg and not reg_arr[t]:                # 국면 꺼짐: 새로 안 산다 + regime_mode 에 따라 보유 처리
+            rm = cfg.get("regime_mode", "liquidate")  # 26세대: liquidate(기존 전량) · gate(보유 유지) · weak(MA50 아래만 매도)
+            if rm == "liquidate":
+                victims = list(pos.keys())
+            elif rm == "weak":
+                victims = [c for c in pos if not (np.isfinite(D["ma"][50][c, t]) and C[c, t] >= D["ma"][50][c, t])]
+            else:
+                victims = []
+            p_sell.update(victims)
             if paper:
-                sell_why.update({c: "regime" for c in pos})
+                sell_why.update({c: "regime" for c in victims})
             p_add.clear()
             p_buy = []
             eq_prev = e
