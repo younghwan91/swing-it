@@ -32,7 +32,7 @@ def _roll(df: pd.DataFrame, w: int, fn: str) -> np.ndarray:
     return getattr(df.rolling(w, min_periods=w), fn)().to_numpy().T
 
 
-def prepare(cache: str, extras: bool = False) -> dict:
+def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
     import psycopg2
 
     from research.signals import pattern_events as PE
@@ -47,10 +47,11 @@ def prepare(cache: str, extras: bool = False) -> dict:
     mkt = np.array([mk_of.get(i, 0) for i in range(len(codes))], np.int64)
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
-    return build(days, codes, O, H, L, C, TR, cost, mkt, con, extras=extras)
+    return build(days, codes, O, H, L, C, TR, cost, mkt, con, extras=extras, raw_close=raw_close)
 
 
-def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False) -> dict:
+def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,
+          raw_close: bool = False) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
     from research.signals.eps_asof import eps_ok
     tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2016-08-01'", con, parse_dates=["date"])
@@ -74,9 +75,13 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
         tt = ((C > ma[50]) & (ma[50] > ma[150]) & (ma[150] > ma[200]) & (ma[200] > ma200_prev) & (C >= 0.75 * hi252) & (C >= 1.30 * lo252))
     brk = {n: C >= _roll(Cd, n, "max") - 1e-9 for n in GRID["N"]}
     # 시가총액(원 종가 × 상장주식수 as-of) → 그날 순위 · 시총 가중 시장(KOSPI 대용) 200일선 국면
-    px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
-    if sess is not None:
-        px = patch_prices(px, sess, adjusted=False)
+    if raw_close:                                   # 정정 G28-2: daily_bars.close 는 분할 소급 반영 가격 → 원 종가 정문
+        from swing_it.krx_session import read_raw_close
+        px = read_raw_close(con, start="2016-08-01")
+    else:                                           # 21~26세대 기록 재현용(결함 가격)
+        px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
+        if sess is not None:
+            px = patch_prices(px, sess, adjusted=False)
     pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
     sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
                      parse_dates=["date", "knowledge_date"])

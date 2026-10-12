@@ -113,3 +113,51 @@ def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NX
             df.loc[idx, col] = sv[col].to_numpy()
     df.loc[idx, "krx_patched"] = True
     return df
+
+
+# ── 원(미수정) 종가 ───────────────────────────────────────────────────────────────────────────────────────────────
+# **결함(2026-10-12 검증 29차):** ``daily_bars.close`` 는 이름과 달리 원 종가가 아니다 — 이후 액면분할·병합을 소급 반영한다
+# (005930 2017-03-31 41,200 원 vs 실제 2,060,000 원, 000670 2024-07-31 29,626 vs 314,500, 병합 종목은 5·10 배 위로).
+# 이것에 그 시점 주식수를 곱한 시총은 분할 전 대형주를 수십 분의 1 로, 병합 전 소형주를 수 배로 만든다(28세대 VOID, leader21 시총 상위 200).
+# 원 종가 = ``supply_demand.close``(키움·네이버, 2017~ 거의 전 종목; 키움은 부호가 붙을 수 있어 절댓값). 없을 때만 일봉으로 돌아가고
+# NXT 이후(``NXT_START``~)는 분봉 정규장 종가(원 가격)가 이긴다. 정본 수정은 quant-airflow(원 일봉 테이블) 소관.
+RAW_CLOSE_CANARY = ("005930", "2017-03-31", 1_000_000.0)   # 50:1 분할 전 — 원 종가는 200만 원대
+
+
+def combine_raw_close(sd: pd.DataFrame, bars: pd.DataFrame, session: "pd.DataFrame | None" = None) -> pd.DataFrame:
+    """(code, date, close) 세 원천을 우선순위(분봉 정규장 > 수급 종가 > 일봉)로 합친다. 반환 열 code, date, close, raw_src."""
+    parts = []
+    for df, src in ((session, "session"), (sd, "supply_demand"), (bars, "daily_bars")):
+        if df is None or df.empty:
+            continue
+        x = df[["code", "date", "close"]].copy()
+        x["date"] = pd.to_datetime(x["date"])
+        x["close"] = x["close"].astype(float).abs()
+        x = x[x["close"] > 0]
+        x["raw_src"] = src
+        parts.append(x)
+    if not parts:
+        return pd.DataFrame(columns=["code", "date", "close", "raw_src"])
+    out = pd.concat(parts, ignore_index=True).drop_duplicates(["code", "date"], keep="first")
+    return out.sort_values(["code", "date"]).reset_index(drop=True)
+
+
+def check_raw_close_canary(df: pd.DataFrame) -> None:
+    """원 종가 표가 소급 수정 가격으로 돌아갔으면 시끄럽게 실패한다(카나리아 행이 범위 안에 있을 때만)."""
+    code, day, floor = RAW_CLOSE_CANARY
+    hit = df[(df["code"] == code) & (pd.to_datetime(df["date"]) == pd.Timestamp(day))]
+    if not hit.empty and float(hit["close"].iloc[0]) < floor:
+        raise AssertionError(f"원 종가 카나리아 실패: {code} {day} close={hit['close'].iloc[0]} < {floor} — 소급 수정 가격을 읽었다")
+
+
+def read_raw_close(con: Any, *, start: str, end: "str | None" = None) -> pd.DataFrame:
+    """원(미수정) 종가 정문 — 시총(원 종가 × 그 시점 주식수)은 반드시 이것으로 만든다. Postgres."""
+    hi = end or "2100-01-01"
+    p = {"lo": start, "hi": hi}
+    sd = pd.read_sql_query("SELECT code, date, close FROM supply_demand WHERE date >= %(lo)s AND date <= %(hi)s "
+                           "AND close IS NOT NULL", con, params=p)
+    bars = pd.read_sql_query("SELECT code, date, close FROM daily_bars WHERE date >= %(lo)s AND date <= %(hi)s", con, params=p)
+    sess = read_session_bars_agg(con, start=max(start, NXT_START), end=end) if hi >= NXT_START else None
+    out = combine_raw_close(sd, bars, sess)
+    check_raw_close_canary(out)
+    return out

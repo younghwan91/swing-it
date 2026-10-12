@@ -57,3 +57,24 @@ def test_extended_closing_auction_at_1532_is_the_close():
     m = pd.DataFrame(rows, columns=["code", "ts", "open", "high", "low", "close", "volume", "trade_value"])
     r = session_bars_from_minutes(m).iloc[0]
     assert r["close"] == 130 and r["high"] == 130 and r["volume"] == 70
+
+
+def test_raw_close_prefers_session_then_supply_then_bars():
+    from swing_it.krx_session import combine_raw_close
+    sd = pd.DataFrame({"code": ["A", "B"], "date": ["2017-03-31", "2026-09-17"], "close": [-2_060_000, 250]})
+    bars = pd.DataFrame({"code": ["A", "B", "C"], "date": ["2017-03-31", "2026-09-17", "2017-03-31"], "close": [41_200, 260, 900]})
+    sess = pd.DataFrame({"code": ["B"], "date": ["2026-09-17"], "close": [252.0]})
+    out = combine_raw_close(sd, bars, sess).set_index("code")
+    assert out.loc["A", "close"] == 2_060_000 and out.loc["A", "raw_src"] == "supply_demand"   # 부호 제거·수급 우선
+    assert out.loc["B", "close"] == 252 and out.loc["B", "raw_src"] == "session"              # NXT 이후 분봉 우선
+    assert out.loc["C", "close"] == 900 and out.loc["C", "raw_src"] == "daily_bars"           # 없을 때만 일봉
+
+
+def test_raw_close_canary_rejects_retro_adjusted_price():
+    import pytest
+
+    from swing_it.krx_session import check_raw_close_canary
+    bad = pd.DataFrame({"code": ["005930"], "date": ["2017-03-31"], "close": [41_200.0]})
+    with pytest.raises(AssertionError):
+        check_raw_close_canary(bad)
+    check_raw_close_canary(bad.assign(close=2_060_000.0))
