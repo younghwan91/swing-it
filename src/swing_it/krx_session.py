@@ -208,3 +208,31 @@ def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFr
         r1 = (raw / raw.shift(1)).abs()
     bad = int((((jump > 3) | (jump < 1 / 3)) & (r1 < 1.3) & (r1 > 1 / 1.3)).sum().sum())
     return cap, bad
+
+
+def factor_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str = "date") -> "tuple[pd.DataFrame, pd.DataFrame]":
+    """시총 = 원 종가 × 분할 일관 주식수, 누적계수를 **원 일봉에서 재구성한 수정 가격**(daily_bars_adj_v2 = 원 × 누적 조정계수)에서 직접 읽는다.
+
+    F = adj / raw(앞으로 채움). 주식수 행은 그 행 ``date`` 의 F 로 나눠 사건 기준으로 옮긴 뒤 ``asof`` 열부터 앞으로 채우고 F_t 를 곱한다 —
+    :func:`split_consistent_cap` 과 같은 식이지만 점프 검출이 없다. 이음매 있는 daily_bars_adjusted 에 쓰면 안 된다(첫 판 위반 1,013, 정정 G28-5).
+
+    Returns:
+        (시총 넓은 표, F 넓은 표).
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        F = (adj / raw).where(lambda x: np.isfinite(x) & (x > 0)).ffill()
+    days, codes = raw.index, raw.columns
+    Fv = F.reindex(columns=codes).to_numpy(float)
+    sh = shares[shares["shares_outstanding"] > 0].copy()
+    sh["date"] = pd.to_datetime(sh["date"])
+    sh["k"] = pd.to_datetime(sh[asof]).fillna(sh["date"]) if asof in sh else sh["date"]
+    pos = days.searchsorted(sh["date"].to_numpy(), side="right") - 1
+    ci = codes.get_indexer(sh["code"])
+    ok = (pos >= 0) & (ci >= 0)
+    fb = np.full(len(sh), np.nan)
+    fb[ok] = Fv[pos[ok], ci[ok]]
+    fb = np.where(np.isfinite(fb), fb, 1.0)                    # 행 날짜에 F 없음(상장 전·범위 밖) → 그 뒤 첫 F 와 같다고 본다
+    sh["s0"] = sh["shares_outstanding"].to_numpy(float) / fb
+    S = sh.pivot_table(index="k", columns="code", values="s0", aggfunc="last")
+    S = S.reindex(index=S.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
+    return raw * S * F, F

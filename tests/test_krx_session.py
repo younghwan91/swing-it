@@ -93,3 +93,20 @@ def test_split_consistent_cap_bridges_stale_shares():
     assert np.isclose(cap["S"].iloc[0], 2_500_000 * 129e6)                 # 분할 전 = 원 종가 × 주식수
     assert np.isclose(cap["S"].iloc[1], 51_900 * 129e6 * 50)               # 분할 뒤에도 주식수가 50배로 이어진다
     assert bad == 0
+
+
+def test_factor_cap_reads_split_from_rebuilt_adjusted():
+    import numpy as np
+
+    from swing_it.krx_session import factor_cap
+    days = pd.DatetimeIndex(["2018-04-30", "2018-05-04", "2018-12-28"])
+    raw = pd.DataFrame({"S": [2_500_000.0, 51_900.0, 38_700.0]}, index=days)          # 5/4 50:1 분할
+    adj = pd.DataFrame({"S": [50_000.0, 51_900.0, 38_700.0]}, index=days)              # 원 × 누적계수(v2)
+    sh = pd.DataFrame({"code": ["S", "S"], "date": ["2017-12-31", "2018-04-30"], "shares_outstanding": [129_000_000, 129_000_000]})
+    cap, F = factor_cap(raw, adj, sh)
+    assert np.isclose(cap["S"].iloc[0], 2_500_000 * 129e6)
+    assert np.isclose(cap["S"].iloc[1], 51_900 * 129e6 * 50)                # 늦은 주식수(분할 전)가 50배로 이어진다
+    assert np.isclose(F["S"].iloc[2] / F["S"].iloc[0], 50)
+    sh2 = pd.DataFrame({"code": ["S"], "date": ["2018-12-28"], "shares_outstanding": [6_450_000_000]})   # 분할 뒤 행만 있는 경우
+    cap2, _ = factor_cap(raw, adj, sh2)
+    assert np.isclose(cap2["S"].iloc[2], 38_700 * 6.45e9)
