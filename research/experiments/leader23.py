@@ -24,16 +24,15 @@ ARMS = {"A_open": {}, "B_open_gap3": {"gap_max": 0.03}, "C_close": {"entry": "cl
 WIN = ("2017-10-02", "2024-01-01")
 
 
-def drop_top(eq: pd.Series, tr: pd.DataFrame, k: int) -> float:
-    """상위 k 종목(순손익 기여) 거래를 '안 산 것' 으로 근사: 그 거래들의 기여를 뺀 연복리(가산 근사)."""
+def drop_top(D, cfg: dict, cm: float, tr: pd.DataFrame, k: int) -> "tuple[float, list]":
+    """상위 k 종목(순손익 기여 ≈ ret × 최대 비중)을 후보에서 빼고 다시 시뮬레이션한 연복리 — 반사실."""
     if tr.empty:
-        return float("nan")
+        return float("nan"), []
     contrib = (tr["ret"] * tr["w_peak"]).groupby(tr["code"]).sum().sort_values(ascending=False)
-    top = set(contrib.index[:k])
+    top = list(contrib.index[:k])
+    eq, _ = L.simulate(D, {**cfg, "exclude": top}, cm)
     x = eq[(eq.index >= WIN[0]) & (eq.index < WIN[1])]
-    yrs = (x.index[-1] - x.index[0]).days / 365.25
-    total = x.iloc[-1] / x.iloc[0] - 1 - float(contrib[contrib.index.isin(top)].sum())
-    return float((1 + total) ** (1 / yrs) - 1)
+    return L.metrics(x)["cagr"], top
 
 
 def main() -> None:
@@ -49,7 +48,8 @@ def main() -> None:
             x = eq[(eq.index >= WIN[0]) & (eq.index < WIN[1])]
             m = L.metrics(x)
             trw = tr[(tr["entry"] >= WIN[0]) & (tr["entry"] < WIN[1])]
-            m.update(n_trades=int(len(trw)), drop_top5_cagr=drop_top(x, trw, 5), win=float((trw["ret"] > 0).mean()) if len(trw) else np.nan)
+            d5, top5 = drop_top(D, {**BASE, **ov}, cm, trw, 5)
+            m.update(n_trades=int(len(trw)), drop_top5_cagr=d5, top5=top5, win=float((trw["ret"] > 0).mean()) if len(trw) else np.nan)
             out[f"{nm}_{int(cm)}x"] = m
             curves[f"{nm}_{int(cm)}x"] = x
             tr.to_csv(os.path.join(a.out, f"trades_{nm}_{int(cm)}x.csv.gz"), index=False) if os.makedirs(a.out, exist_ok=True) is None else None

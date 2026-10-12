@@ -159,6 +159,9 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
     cand = D["cand"] & D["brk"][cfg["N"]] & (D["rs"] >= cfg["theta"])
     if cfg.get("univ") == "top200":
         cand = cand & (np.nan_to_num(D["crank"], nan=1e9) <= 200)
+    if cfg.get("exclude"):                          # 23세대 강건성: 이 종목들은 아예 안 산 것으로(반사실 재시뮬레이션)
+        ex = np.isin(np.asarray(D["codes"]), list(cfg["exclude"]))
+        cand = cand & ~ex[:, None]
     if cfg.get("rank") == "rs_sector":
         cand = cand & D["sector_strong"]
     elif cfg.get("rank") == "rs_eps":
