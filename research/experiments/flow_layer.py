@@ -88,7 +88,9 @@ def events(cache: str, max_hold: int) -> pd.DataFrame:
         dd = (e - sp) / e
         recs.append({"code": str(codes[c]), "d": d, "order_day": str(days[d].date()), "month": str(days[d])[:7], "year": int(days[d].year),
                      "n2s": net2 * min(1.0, 0.05 / dd), "R": out[PF.O_PNL] / dd, "reason": PF.REASONS[int(out[PF.O_REASON])],
-                     "stop": dd, "hold": x - d, "fl20": float(fl[r][0]), "fl5": float(fl[r][1])})
+                     "stop": dd, "hold": x - d, "fl20": float(fl[r][0]), "fl5": float(fl[r][1]),
+                     "signal_day": str(days[d - 1].date()), "exit_day": str(days[x].date()), "e": e, "sp": sp,   # 기술(스웜 검증용)
+                     "exit_px": float(out[PF.O_FIN]), "partial": bool(out[PF.O_TP] >= 0), "partial_px": float(out[PF.O_PX1])})
     return pd.DataFrame(recs)
 
 
