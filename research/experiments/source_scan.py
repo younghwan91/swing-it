@@ -64,9 +64,12 @@ def _task(a: tuple) -> list:
     n2 = t["net2"].where(~amb, E.pmix * t["net2_stop0"] + (1 - E.pmix) * t["net2"])
     n2 = n2 - SMALL_SLIP * t["wb"] * (t["adv20"] < SMALL_ADV)
     n2s = n2 * np.minimum(1.0, t["alloc"] / SLOT_W)
-    return [{"src": src, "i": i, "code": c, "order_day": d.strftime("%Y-%m-%d"), "n2s": float(v), "R": float(r_), "hold": int(h),
-             "reason": rs} for c, d, v, r_, h, rs in zip(t["code"], t["order_day"], n2s, t["real_R_post"], t["hold_days"],
-                                                       t["exit_reason"], strict=True)]
+    n1 = t["net"].where(~amb, E.pmix * t["net_stop0"] + (1 - E.pmix) * t["net"])        # 기술: 1배 비용(미끄러짐 추가 없음)
+    n1s = n1 * np.minimum(1.0, t["alloc"] / SLOT_W)
+    return [{"src": src, "i": i, "code": c, "order_day": d.strftime("%Y-%m-%d"), "n2s": float(v), "n1s": float(v1), "R": float(r_),
+             "hold": int(h), "reason": rs, "exit_day": x.strftime("%Y-%m-%d"), "e": float(e_), "sp": float(sp_)}
+            for c, d, v, v1, r_, h, rs, x, e_, sp_ in zip(t["code"], t["order_day"], n2s, n1s, t["real_R_post"], t["hold_days"],
+                                                         t["exit_reason"], t["exit_day"], t["entry_px"], t["stop_px"], strict=True)]
 
 
 def boot(x, cl, rng):
@@ -84,7 +87,7 @@ def summarize(tr, n_cfg: int) -> "tuple[dict, object]":
     import numpy as np
     import pandas as pd
     rng = np.random.default_rng(SEED)
-    ev = tr.groupby(["src", "code", "order_day"], as_index=False).agg(n2s=("n2s", "mean"), k=("i", "nunique"))
+    ev = tr.groupby(["src", "code", "order_day"], as_index=False).agg(n2s=("n2s", "mean"), n1s=("n1s", "mean"), k=("i", "nunique"))
     ev["month"] = ev["order_day"].str[:7]
     ev["year"] = ev["order_day"].str[:4].astype(int)
     out = {}
@@ -101,7 +104,7 @@ def summarize(tr, n_cfg: int) -> "tuple[dict, object]":
         dse = float(dd[db].mean(1).std(ddof=1)) if len(dd) > 2 else float("nan")
         yr = x.groupby("year")["n2s"].mean()
         out[src] = {"events": int(len(x)), "events_per_year": len(x) / 4.0, "mean_pct": m * 100, "t": m / se if se else float("nan"),
-                    "win": float((x["n2s"] > 0).mean()),
+                    "win": float((x["n2s"] > 0).mean()), "mean_1x_pct": float(x["n1s"].mean() * 100),   # 기술(바 아님)
                     "vs_ctx_pct": float(dd.mean() * 100) if len(dd) else float("nan"),
                     "t_vs_ctx": float(dd.mean() / dse) if len(dd) > 2 and dse else float("nan"),
                     "years_pos": int((yr > 0).sum()), "by_year_pct": {int(k): float(v * 100) for k, v in yr.items()},
