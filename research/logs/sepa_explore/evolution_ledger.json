@@ -83,5 +83,67 @@
    0.24
   ],
   "verified_note": "fails bars; top-5 trades >100% of P&L; paper started 2026-10-12"
+ },
+ {
+  "gen": "G22",
+  "label": "G22 leader + regime/sector/earnings arms (walk-forward)",
+  "metric": "OOS CAGR 2020-23 (2x cost)",
+  "headline_cagr": 0.041,
+  "mdd": -0.341,
+  "null_p": 0.9,
+  "verdict": "FAIL",
+  "verified_note": "worse than G21; ensemble 15.2% claim withdrawn (G22-1)"
+ },
+ {
+  "gen": "G23",
+  "label": "G23 execution: signal-day close entry (C)",
+  "metric": "CAGR 2017-10..2023 (2x cost)",
+  "headline_cagr": 0.148,
+  "mdd": -0.236,
+  "market_cw_cagr": 0.006,
+  "verdict": "PASS (C vs A pair bars), size not established",
+  "verified_note": "G28-5 split-consistent cap: C 14.7% / MDD -26.2%; swings 5-15% with cap construction; few trades (Shinpoong +270%) decide 2020"
+ },
+ {
+  "gen": "G24",
+  "label": "G24 cross-sectional hash split holdout",
+  "metric": "half-B CAGR vs baseline",
+  "headline_cagr": 0.168,
+  "verdict": "FAIL",
+  "verified_note": "rho 0.62 replication withdrawn (97th pct of random splits); robustness check not OOS"
+ },
+ {
+  "gen": "G25",
+  "label": "G25 core-satellite (top-200 cap-weighted core + C)",
+  "metric": "CAGR 2017-10..2023 (2x)",
+  "headline_cagr": 0.135,
+  "mdd": -0.273,
+  "verdict": "FAIL",
+  "verified_note": "alpha t 1.16 < 2; 2024-26 4.5% vs market 38%"
+ },
+ {
+  "gen": "G26",
+  "label": "G26 regime role: gate / weak vs liquidate",
+  "metric": "CAGR 2017-10..2023 (2x)",
+  "headline_cagr": 0.188,
+  "verdict": "FAIL",
+  "verified_note": "capture-rate t<2; gain is 2023 alone"
+ },
+ {
+  "gen": "G27",
+  "label": "G27 index inclusion swing (KOSPI200+KOSDAQ150 adds, ann+1 close -> eff-1 close)",
+  "metric": "mean net excess per event (2x cost)",
+  "headline_excess": 0.0428,
+  "cluster_t": 2.3,
+  "verdict": "FAIL",
+  "verified_note": "G27-1: peer mean + PIT peers -> +2.61%, t 1.38; KOSPI200 none; KOSDAQ150 +2.98% t 2.25 post-hoc; forward paper arm from 2026-12"
+ },
+ {
+  "gen": "G28",
+  "label": "G28 index inclusion prediction (pre-announcement, cap-rank proxy)",
+  "metric": "mean net excess per prediction (2x cost)",
+  "headline_excess": -0.0134,
+  "verdict": "VOID",
+  "verified_note": "G28-2: daily_bars.close retro-adjusted for splits -> cap ranks broken; not re-run (post-hoc); G28-4/5 cap gateway fixed (split-consistent shares)"
  }
 ]
