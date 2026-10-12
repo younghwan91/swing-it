@@ -89,6 +89,8 @@ def gene_mask(XF: np.ndarray, Ff: np.ndarray, g: dict, fam: str, FI: dict) -> np
     with np.errstate(invalid="ignore"):
         eq, eqp = f("e_q"), f("e_q_prev")
         m = np.isfinite(eq) & np.isfinite(eqp) & (eq > 0) & (eq > eqp)            # 사용자 고정: EPS 전년 같은 분기 대비 상승·흑자
+        if g.get("eps_mode") == "external":                                       # 20세대: EPS 는 바깥에서 새 as-of 로 거른다(avail_date 미래 정보 제거)
+            m = np.ones(len(eq), bool)
         mk = g.get("mkt", "off")
         if mk == "nhnl":
             m &= f("mkt_nhnl") > 0.5

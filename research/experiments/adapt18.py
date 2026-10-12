@@ -42,7 +42,7 @@ SG = {"004690", "017390", "016710", "003100", "004360", "032190", "003380", "030
 _W: dict = {}
 
 
-def _init(cache: str) -> None:
+def _init(cache: str, seal: str = SEAL, eps_new: bool = False) -> None:
     import research.experiments.pattern_ga_run as G
     from research.experiments.source_scan import MINERVINI
     from research.signals import event_families as EF
@@ -53,7 +53,7 @@ def _init(cache: str) -> None:
     meta = json.load(open(f"{cache}/meta.json", encoding="utf-8"))
     days = pd.DatetimeIndex(np.load(f"{cache}/days_ns.npy"))
     codes = np.load(f"{cache}/codes.npy", allow_pickle=True)
-    seal, lo_d = int(days.searchsorted(pd.Timestamp(SEAL))), int(days.searchsorted(pd.Timestamp(LO)))
+    seal, lo_d = int(days.searchsorted(pd.Timestamp(seal))), int(days.searchsorted(pd.Timestamp(LO)))
     F = np.load(f"{cache}/F.npy", mmap_mode="r")
     I_ = np.asarray(np.load(f"{cache}/I.npy", mmap_mode="r"))
     XF = np.load(f"{cache}/XF.npy")
@@ -68,7 +68,16 @@ def _init(cache: str) -> None:
     pops = {}
     for pop, kind in (("M0", "ctx"), ("tight", "tight")):
         g = dict(g0, s_kind=ES.K[kind])
+        if eps_new:                                                            # 20세대: EPS 새 as-of(정정 G19-1)
+            g = dict(g, eps_mode="external")
         r = rows0[EF.gene_mask(XF[rows0 - fam_lo], np.asarray(F[rows0]), g, "S", PE.FI)]
+        if eps_new and len(r):
+            import psycopg2  # noqa: PLC0415
+
+            from research.signals.eps_asof import eps_ok  # noqa: PLC0415
+            con = psycopg2.connect(os.environ["KR_QUANT_DB"])
+            con.set_session(readonly=True)
+            r = r[eps_ok(codes, days, I_[r, PE.II["ci"]].astype(np.int64), I_[r, PE.II["i0"]].astype(np.int64), con)]
         pops[pop] = r
     _W.update(G=G, PF=PF, PE=PE, EF=EF, A=A, days=days, codes=codes, seal=seal, reform=int(days.searchsorted(pd.Timestamp(PE.TICK_REFORM_DAY))),
               LIM=np.minimum(A["LIM"], seal).astype(np.int64), I=I_, F=F, pops=pops, g0=g0, hi10=hi10, lo10=lo10,
