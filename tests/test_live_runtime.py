@@ -1389,10 +1389,36 @@ def test_db_quote_provider_replays_minute_bars_without_kiwoom(tmp_path):
     assert m.last == 10_040 and m.high == 10_070 and m.low == 9_950
     clock.set(D1, "15:40")
     e = q.quote("AAAAAA")
-    assert e.last == 10_050 and e.high == 10_080                                   # 15:30 봉까지, 19:59(NXT) 봉은 안 본다
+    assert e.last == 10_050 and e.high == 10_080                                   # 15:30 봉까지, 19:59(애프터마켓) 봉은 안 본다
     assert session_date(q, D1) == D1 and session_date(q, date(2026, 10, 11)) == date(2026, 10, 9)
     with pytest.raises(ValueError):
         q.quote("ZZZZZZ")
+
+
+
+def test_db_quote_provider_includes_extended_closing_auction_at_1532(tmp_path):
+    """VI 로 종가 단일가가 연장되면 15:32 에 찍힌다 — 재생 창은 krx_session.SESSION_CLOSE(15:32)까지여야 그 값이 종가다.
+    15:35 봉과 16:00~ 애프터마켓 봉은 넣지 않는다(예전 15:30 컷은 연장 종가를 놓쳤다)."""
+    import sqlite3
+
+    from swing_it.krx_session import SESSION_CLOSE
+    from swing_it.live.brokers import DBQuoteProvider
+
+    assert SESSION_CLOSE == "15:32:00"
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE minute_bars (code TEXT, ts TEXT, open REAL, high REAL, low REAL, close REAL)")
+    con.execute("CREATE TABLE daily_bars (code TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL)")
+    con.executemany("INSERT INTO minute_bars VALUES (?,?,?,?,?,?)", [
+        ("AAAAAA", "2026-10-12 09:00:00", 100, 101, 99, 100), ("AAAAAA", "2026-10-12 15:19:00", 100, 102, 99, 101),
+        ("AAAAAA", "2026-10-12 15:32:00", 105, 105, 105, 105),          # 연장된 종가 단일가
+        ("AAAAAA", "2026-10-12 15:35:00", 106, 106, 106, 106),
+        ("AAAAAA", "2026-10-12 16:00:00", 120, 130, 90, 125)])           # 애프터마켓
+    con.executemany("INSERT INTO daily_bars VALUES (?,?,?,?,?,?)", [("AAAAAA", "2026-10-09", 1, 1, 1, 99)])
+    clock = Clock()
+    q = DBQuoteProvider(con, D1, clock=clock)
+    clock.set(D1, "17:00")
+    e = q.quote("AAAAAA")
+    assert e.last == 105 and e.high == 105 and e.low == 99
 
 
 def test_rest_quote_provider_is_lazy_and_paper_bundle_does_not_touch_kiwoom(tmp_path):

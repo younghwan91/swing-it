@@ -20,6 +20,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (k) 주식수 as-of — ``shares_outstanding_history`` 를 정문(storage.read_shares) 밖에서 직접 SELECT 하면 실패.
   (l) 실적 as-of — ``avail_date`` 를 as-of 키로 쓰는 자리(``avail_col="avail_date"``·merge_asof 키)는 ``# legacy-asof: <이유>``
       표시가 있어야 하고, ``avail_col`` 매개변수는 기본값을 가질 수 없다.
+  (m) 분봉 시간대 — ``minute_bars`` 가 나오는 파일에서 ``at time zone``·``tz_localize``·``tz_convert``·``utc=True`` 금지.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -475,6 +476,44 @@ def check_avail_date_asof() -> list[str]:
     return out
 
 
+# (m) minute_bars.ts 는 시간대 없는 KST 다. 여기에 at time zone·tz_localize·tz_convert·utc=True 를 걸면 9시간 어긋나는데,
+# 실제로 그 실수로 정상 데이터를 "오진"이라 잘못 판정했다(krx_session 독스트링). 분봉을 다루는 파일에서는 시간대 변환 자체를 막는다.
+_TZ_SQL = re.compile(r"\bat\s+time\s+zone\b", re.I)
+_TZ_CALLS = {"tz_localize", "tz_convert"}
+_TZ_EXEMPT = {"scripts/check_guardrails.py", "tests/test_check_guardrails.py"}
+
+
+def check_minute_bars_naive_kst() -> list[str]:
+    """(m) minute_bars 를 다루는 파일에서 시간대 변환을 쓰면 위반."""
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _TZ_EXEMPT or rel.startswith(".venv/"):
+            continue
+        text = p.read_text(encoding="utf-8")
+        if "minute_bars" not in text:
+            continue
+        try:
+            tree = ast.parse(text)
+            strings = _sql_strings(text)
+        except (SyntaxError, ValueError) as exc:
+            out.append(f"[tz] {rel} — 파싱 실패: {exc}")
+            continue
+        bad: list[tuple[int, str]] = [(ln, "at time zone") for ln, sv in strings if _TZ_SQL.search(sv)]
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call):
+                f = n.func
+                if isinstance(f, ast.Attribute) and f.attr in _TZ_CALLS:
+                    bad.append((n.lineno, f.attr))
+                for k in n.keywords:
+                    if k.arg == "utc" and isinstance(k.value, ast.Constant) and k.value.value is True:
+                        bad.append((n.lineno, "utc=True"))
+        out += [f"[tz] {rel}:{ln} — minute_bars 를 다루는 파일에서 {what} 를 썼다. minute_bars.ts 는 시간대 없는 KST 다 — "
+                f"변환하면 9시간 어긋난다(정규장 구간은 swing_it.krx_session.SESSION_OPEN·SESSION_CLOSE 로 자른다)."
+                for ln, what in sorted(set(bad))]
+    return out
+
+
 def check_no_survivor_only_join() -> list[str]:
     """(g2) supply_demand 를 상장 마스터(stocks)와 INNER JOIN 하면 위반."""
     out = []
@@ -612,6 +651,7 @@ def main() -> int:
     violations += check_no_raw_supply_close()
     violations += check_no_raw_shares_select()
     violations += check_avail_date_asof()
+    violations += check_minute_bars_naive_kst()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

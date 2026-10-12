@@ -290,7 +290,7 @@ class SimClock:
 class DBQuoteProvider:
     """DB 재생 시세(통합 검토 M2) — 키움을 전혀 부르지 않는다. ``sw-live … --quotes db --asof <과거일>``.
 
-    ``minute_bars``(KST naive, 09:00~15:30 정규장 봉)로 ``asof`` 하루를 재생한다: 시계 시각 t 까지의 봉으로 시가(첫 봉)·고가·저가·
+    ``minute_bars``(KST naive, 09:00~15:32 정규장 봉 — :data:`swing_it.krx_session.SESSION_CLOSE`, VI 로 연장된 종가 단일가 포함)로 ``asof`` 하루를 재생한다: 시계 시각 t 까지의 봉으로 시가(첫 봉)·고가·저가·
     현재가(t 이하 마지막 봉 종가)를 만들고, ``date=asof``(F4 신선도 증거)를 단다. 09:00 전이거나 봉이 없으면 현재가 = 직전 거래일
     종가, 시가 없음(실제 장전 시세와 같은 모양). 기준 종목 일봉은 ``daily_bars``(날짜만 쓴다). Postgres·sqlite 둘 다 된다.
     """
@@ -310,8 +310,10 @@ class DBQuoteProvider:
 
     def _minutes(self, code: str) -> list[tuple[datetime, float, float, float, float]]:
         if code not in self._cache:
-            lo = f"{self._asof.isoformat()} 09:00:00"
-            hi = f"{self._asof.isoformat()} 15:30:00"
+            from swing_it.krx_session import SESSION_CLOSE, SESSION_OPEN  # noqa: PLC0415 — 정규장 구간의 정본
+
+            lo = f"{self._asof.isoformat()} {SESSION_OPEN}"
+            hi = f"{self._asof.isoformat()} {SESSION_CLOSE}"     # 15:30 이면 VI 연장 종가(15:32)를 놓친다(REVIEW_META_GEN2 N1)
             rows = self._rows("SELECT ts, open, high, low, close FROM minute_bars WHERE code = ? AND ts >= ? AND ts <= ? "
                               "ORDER BY ts", (code, lo, hi))
             out = []

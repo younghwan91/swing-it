@@ -493,3 +493,29 @@ def test_rule_l_catches_unmarked_avail_date_asof(lint, tmp_path, monkeypatch):
 
 def test_rule_l_accepts_known_date_and_marked_legacy(lint, tmp_path, monkeypatch):
     assert _scan(lint, tmp_path, monkeypatch, _AVAIL_ASOF_OK, "check_avail_date_asof") == []
+
+
+# --- (m) 분봉 시간대 ---------------------------------------------------------------------------------------
+
+_TZ_BAD = '''
+import pandas as pd
+
+def a(con):
+    return pd.read_sql("SELECT code, ts AT TIME ZONE 'Asia/Seoul' AS t FROM minute_bars", con)
+
+def b(m):
+    m["ts"] = pd.to_datetime(m["ts"], utc=True).dt.tz_convert("Asia/Seoul")
+    return m["ts"].dt.tz_localize(None)
+'''
+
+
+def test_rule_m_catches_timezone_conversion_on_minute_bars(lint, tmp_path, monkeypatch):
+    out = _scan(lint, tmp_path, monkeypatch, _TZ_BAD, "check_minute_bars_naive_kst")
+    kinds = {o.split(" 를 썼다")[0].rsplit(" ", 1)[-1] for o in out}
+    assert kinds == {"zone", "utc=True", "tz_convert", "tz_localize"}, out
+
+
+def test_rule_m_ignores_files_without_minute_bars(lint, tmp_path, monkeypatch):
+    """분봉과 무관한 파일의 시간대 처리(뉴스 발행 시각 등)는 대상이 아니다."""
+    src = 'import pandas as pd\nx = pd.to_datetime(["2026-01-01"], utc=True).tz_convert("Asia/Seoul")\n'
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_minute_bars_naive_kst") == []
