@@ -27,3 +27,15 @@ def eps_ok(codes, days: pd.DatetimeIndex, ci: np.ndarray, s: np.ndarray, con) ->
     out = np.zeros(len(ci), bool)
     out[m["k"].to_numpy()] = ok
     return out
+
+
+def eps_yoy(codes, days: pd.DatetimeIndex, ci: np.ndarray, s: np.ndarray, con) -> np.ndarray:
+    """22세대: 그 시점 최신 분기 순이익 YoY 증가율(전년 같은 분기 ≤ 0 이면 NaN) — 같은 as-of 규칙."""
+    kt = known_table(con, days)
+    ev = pd.DataFrame({"code": [str(codes[i]) for i in ci], "s": np.asarray(s, np.int64), "k": np.arange(len(ci))}).sort_values("s")
+    m = pd.merge_asof(ev, kt[["code", "krow", "netinc", "netinc_prior"]], left_on="s", right_on="krow", by="code", direction="backward")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        g = np.where(m["netinc_prior"] > 0, m["netinc"] / m["netinc_prior"] - 1.0, np.nan)
+    out = np.full(len(ci), np.nan)
+    out[m["k"].to_numpy()] = g
+    return out

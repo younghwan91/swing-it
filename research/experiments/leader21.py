@@ -32,7 +32,7 @@ def _roll(df: pd.DataFrame, w: int, fn: str) -> np.ndarray:
     return getattr(df.rolling(w, min_periods=w), fn)().to_numpy().T
 
 
-def prepare(cache: str) -> dict:
+def prepare(cache: str, extras: bool = False) -> dict:
     import psycopg2
 
     from research.signals import pattern_events as PE
@@ -47,10 +47,10 @@ def prepare(cache: str) -> dict:
     mkt = np.array([mk_of.get(i, 0) for i in range(len(codes))], np.int64)
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
-    return build(days, codes, O, H, L, C, TR, cost, mkt, con)
+    return build(days, codes, O, H, L, C, TR, cost, mkt, con, extras=extras)
 
 
-def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False) -> dict:
+def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
     from research.signals.eps_asof import eps_ok
     tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2016-08-01'", con, parse_dates=["date"])
@@ -97,7 +97,48 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False)
     eps[ci[ok], s[ok]] = True
     return {"days": days, "codes": codes, "O": O, "H": H, "L": L, "C": C, "TR": TR, "cost": cost, "mkt": mkt, "rs": rs,
             "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cw": cw,
-            "regime_on": regime_on}
+            "regime_on": regime_on, **(_extras(days, codes, C, ma, uni, rs, cwi, regime_on, base & eps, con) if extras else {})}
+
+
+def _extras(days, codes, C, ma, uni, rs, cwi, regime_on, cand, con) -> dict:
+    """22세대 팔(결과 전 고정): 국면 변형 · 업종(WICS) 강도 · 실적 성장."""
+    from research.signals.eps_asof import eps_yoy
+    ma50i = pd.Series(cwi).rolling(50, min_periods=50).mean().to_numpy()
+    regime_r50 = regime_on | (cwi >= ma50i)                                   # 200일선 위 ∨ 50일선 회복(V자 재진입)
+    with np.errstate(invalid="ignore"):
+        above = (C > ma[200]) & uni & np.isfinite(ma[200])
+    breadth = above.sum(0) / np.maximum((uni & np.isfinite(ma[200])).sum(0), 1)
+    breadth_on = breadth >= 0.40
+    # WICS 업종(coalesce(industry_cd, wi26_cd)) 주간 스냅샷 → 날짜별 앞으로 채움 → 업종 평균 RS 상위 30%
+    w = pd.read_sql("select date, code, coalesce(industry_cd, wi26_cd) as g from wics_membership", con, parse_dates=["date"])
+    gid = {g: i for i, g in enumerate(sorted(w["g"].dropna().unique()))}
+    w["gi"] = w["g"].map(gid)
+    gw = w.pivot_table(index="date", columns="code", values="gi", aggfunc="last")
+    gw = gw.reindex(index=gw.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
+    G = gw.to_numpy().T                                                       # 종목×날짜, NaN = 모름
+    strong = np.zeros_like(cand)
+    ng = len(gid)
+    for t in np.flatnonzero(cand.any(0)):
+        g = G[:, t]
+        ok = np.isfinite(g) & np.isfinite(rs[:, t])
+        if ok.sum() < 50:
+            strong[:, t] = True                                               # 업종 정보 없는 시기(2019 전) = 거르지 않음
+            continue
+        gi = g[ok].astype(int)
+        cnt = np.bincount(gi, minlength=ng)
+        mean = np.bincount(gi, weights=rs[ok, t], minlength=ng) / np.maximum(cnt, 1)
+        valid = cnt >= 3
+        if valid.sum() < 5:
+            strong[:, t] = True
+            continue
+        thr = np.quantile(mean[valid], 0.70)
+        top = valid & (mean >= thr)
+        strong[ok, t] = top[gi]
+    ci, s = np.nonzero(cand)
+    yoy = eps_yoy(codes, days, ci, s, con)
+    growth = np.zeros_like(cand)
+    growth[ci, s] = np.nan_to_num(yoy, nan=-1) >= 0.25
+    return {"regime_r50": regime_r50, "breadth_on": breadth_on, "breadth": breadth, "sector_strong": strong, "eps_growth": growth}
 
 
 def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None,
@@ -111,7 +152,13 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
     cand = D["cand"] & D["brk"][cfg["N"]] & (D["rs"] >= cfg["theta"])
     if cfg.get("univ") == "top200":
         cand = cand & (np.nan_to_num(D["crank"], nan=1e9) <= 200)
+    if cfg.get("rank") == "rs_sector":
+        cand = cand & D["sector_strong"]
+    elif cfg.get("rank") == "rs_eps":
+        cand = cand & D["eps_growth"]
     reg = cfg.get("regime", 0)
+    reg_arr = {"k200": D["regime_on"], "k200r50": D.get("regime_r50"), "breadth": D.get("breadth_on")}.get(cfg.get("regime_kind", "k200"))
+    max_pos = int(cfg.get("max_pos", MAX_POS))
     cash, pos = 1.0, {}                        # ci → {qty, cost_basis, first_px, units, entry_t, last_px}
     p_buy, p_sell, p_add = [], set(), set()
     sell_why: dict = {}
@@ -147,7 +194,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                     cash -= amt
         p_add.clear()
         for ci in p_buy:
-            if ci in pos or len(pos) >= MAX_POS:
+            if ci in pos or len(pos) >= max_pos:
                 continue
             op, pc = O[ci, t], C[ci, t - 1]
             if not (np.isfinite(op) and op > 0 and D["TR"][ci, t]) or (np.isfinite(pc) and op >= pc * LU):
@@ -187,7 +234,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                 p_sell.add(ci)
             elif cfg["pyramid"] and p["units"] < max_units and c_ >= p["first_px"] * (1 + 0.10 * p["units"]) and D["hi20"][ci, t]:
                 p_add.add(ci)
-        if reg and not D["regime_on"][t]:                # 국면 꺼짐: 전부 다음 시가에 팔고 새로 안 산다
+        if reg and not reg_arr[t]:                # 국면 꺼짐: 전부 다음 시가에 팔고 새로 안 산다
             p_sell.update(pos.keys())
             if paper:
                 sell_why.update({c: "regime" for c in pos})
@@ -195,7 +242,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
             p_buy = []
             eq_prev = e
             continue
-        free = MAX_POS - len(pos) + len(p_sell)
+        free = max_pos - len(pos) + len(p_sell)
         if free > 0:
             cs = np.flatnonzero(cand[:, t])
             cs = [c for c in cs if c not in pos]
@@ -227,8 +274,8 @@ def metrics(eq: pd.Series, lo=None, hi=None) -> dict:
             "sharpe_m": float(r.mean() / r.std() * np.sqrt(12)) if r.std() > 0 else np.nan, "by_year": by}
 
 
-def _init(cache):
-    _D.update(prepare(cache))
+def _init(cache, extras=False):
+    _D.update(prepare(cache, extras))
 
 
 def _task(a):
@@ -271,13 +318,17 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--limit", type=int, default=0)
-    a = ap.parse_args()
-    keys = list(GRID)
-    cfgs = [dict(zip(keys, v, strict=True)) for v in itertools.product(*GRID.values())]
+    run(GRID, ap.parse_args())
+
+
+def run(grid: dict, a, extras: bool = False, fixed: "dict | None" = None) -> dict:
+    """격자 실행 · 확장 워크포워드 · 널 · 기준선(21·22세대 공통). ``fixed`` = 모든 설정에 덮어쓸 고정 유전자."""
+    keys = list(grid)
+    cfgs = [{**(fixed or {}), **dict(zip(keys, v, strict=True))} for v in itertools.product(*grid.values())]
     if a.limit:
         cfgs = cfgs[:a.limit]
     os.makedirs(a.out, exist_ok=True)
-    with cf.ProcessPoolExecutor(min(a.workers, len(cfgs)), initializer=_init, initargs=(a.cache,)) as ex:
+    with cf.ProcessPoolExecutor(min(a.workers, len(cfgs)), initializer=_init, initargs=(a.cache, extras)) as ex:
         res = sorted(ex.map(_task, list(enumerate(cfgs))), key=lambda r: r["i"])
     idx = res[0]["idx"]
     E1 = pd.DataFrame({i: r["eq1"] for i, r in enumerate(res)}, index=idx)
@@ -286,7 +337,7 @@ def main() -> None:
     E2.to_pickle(os.path.join(a.out, "eq2.pkl"))
     for cm in (1, 2):
         pd.concat([r[f"tr{cm}"].assign(cfg=r["i"]) for r in res]).to_csv(os.path.join(a.out, f"trades{cm}.csv.gz"), index=False)
-    _init(a.cache)
+    _init(a.cache, extras)
     B = benchmarks(_D)
     B.to_csv(os.path.join(a.out, "bench.csv"))
     rng = np.random.default_rng(SEED)
@@ -328,6 +379,7 @@ def main() -> None:
     pd.DataFrame({"oos_1x": oos1, "oos_2x": oos2}).to_csv(os.path.join(a.out, "oos.csv"))
     json.dump(summ, open(os.path.join(a.out, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=float)
     print(json.dumps({k: v for k, v in summ.items() if k not in ("grid_oos_2x", "full_2017_2026_2x")}, ensure_ascii=False, indent=1, default=float))
+    return summ
 
 
 if __name__ == "__main__":
