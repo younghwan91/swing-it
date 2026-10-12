@@ -67,9 +67,11 @@ def prepare(cache: str) -> dict:
     px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
     pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
     sh = pd.read_sql("select code, date, shares_outstanding from shares_outstanding_history", con, parse_dates=["date"])
+    sh = sh[(sh["shares_outstanding"] > 0) & (sh["shares_outstanding"] <= 1e10)]       # 정제(21세대 결과 뒤 발견 — 082640 161조 주 등 오류 행)
     shw = sh.pivot_table(index="date", columns="code", values="shares_outstanding", aggfunc="last")
     shw = shw.reindex(index=shw.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
     cap = (pxw * shw).to_numpy().T
+    cap = np.where(cap <= 2e15, cap, np.nan)                                          # 시총 2,000조원 초과 = 오류
     crank = pd.DataFrame(cap.T).rank(axis=1, ascending=False).to_numpy().T
     r1 = C[:, 1:] / C[:, :-1] - 1
     r1 = np.concatenate([np.full((C.shape[0], 1), np.nan), r1], axis=1)
