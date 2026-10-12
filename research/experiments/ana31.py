@@ -1,4 +1,4 @@
-"""31 새 정보원 실행기 — META_EVOLUTION.md '31 새 정보원 사전등록' + 정정 31-1(F_ana 단일 · 투입 R) + 31 보충 2(커버리지 · 리포트 있는 후보 널).
+"""31 새 정보원 실행기 — META_EVOLUTION.md '31 새 정보원 사전등록' + 정정 31-1(F_ana 단일 · 투입 R) + 31 보충 2(커버리지 · 리포트 있는 후보 널) + 정정 31-2(직전 목표가 = 같은 증권사 직전 리포트).
 
 F_ana(t) = [t−20, t−1] 에 알게 된(write_date 다음 거래일 ≤ t−1) 목표가 리포트 중 상향 건수 − 하향 건수 ≥ 1(목표가 · 직전 목표가 둘 다 > 0).
 팔 = leader_M 설정 · 엔진 · 가격(leaderM_desc 와 같은 경로) 그대로에 ``cand_and = F_ana``. 리포트가 없으면 거짓.
@@ -33,15 +33,21 @@ _G: dict = {}
 
 def report_events(con, days: pd.DatetimeIndex, codes) -> "tuple[np.ndarray, np.ndarray]":
     """종목 × 행 배열 두 개: net(상향 +1 · 하향 −1, 알게 된 행에) · cnt(목표가 있는 리포트 수, 알게 된 행에)."""
-    rr = pd.read_sql("select code, write_date, goal_price, prev_goal_price from naver_research_reports where goal_price is not null",
+    # 정정 31-2: 표의 prev_goal_price 는 작성일 주가(price_at_write)와 같은 값이라(수집 결함, 첫 실행 VOID) 쓰지 않는다.
+    # 직전 목표가 = 같은 (종목, 증권사)의 직전 리포트(작성일, 같은 날이면 research_id 순) goal_price — 기간 제한 없음.
+    rr = pd.read_sql("select research_id, code, broker, write_date, goal_price from naver_research_reports where goal_price is not null",
                      con, parse_dates=["write_date"])
+    rr = rr.sort_values(["code", "broker", "write_date", "research_id"])
+    rr["prev_goal_price"] = rr.groupby(["code", "broker"])["goal_price"].shift(1)
     ix = pd.Index([str(c) for c in codes])
     rr = rr[rr["code"].astype(str).isin(ix)]
     ci = ix.get_indexer(rr["code"].astype(str))
     k = days.searchsorted(rr["write_date"].to_numpy(), side="right")      # write_date 다음 거래일 행
     ok = k < len(days)
     g, pg = rr["goal_price"].to_numpy(float), rr["prev_goal_price"].to_numpy(float)
-    both = (g > 0) & (pg > 0)
+    both = (g > 0) & (pg > 0)                                           # NaN(직전 없음)은 비교 False
+    _G["sign_by_year"] = pd.DataFrame({"y": rr["write_date"].dt.year, "s": np.where(both, np.sign(g - pg), np.nan)}).groupby("y")["s"].agg(
+        up=lambda s: int((s > 0).sum()), down=lambda s: int((s < 0).sum()), same=lambda s: int((s == 0).sum()), noprev=lambda s: int(s.isna().sum())).to_dict("index")
     sgn = np.where(both & (g > pg), 1, np.where(both & (g < pg), -1, 0))
     net = np.zeros((len(ix), len(days)), np.int32)
     cnt = np.zeros((len(ix), len(days)), np.int32)
@@ -142,7 +148,7 @@ def main() -> None:
             coverage[f"{w}d_{grp}"] = {int(y): float(c[:, yr[j0:] == y].sum() / max(b[:, yr[j0:] == y].sum(), 1)) for y in np.unique(yr[j0:])}
     yrs = (days[-1] - pd.Timestamp(JUDGE0)).days / 365.25
     out: dict = {"end": end, "smoke": a.smoke, "pass_rate_mean": float((base & D["F_ana"])[:, j0:].sum() / max(base[:, j0:].sum(), 1)),
-                 "coverage": coverage, "arms": {}}
+                 "coverage": coverage, "sign_by_year": _G.get("sign_by_year"), "arms": {}}
     trades = {}
     for arm, c_ in (("leader_M", cfg), ("M_ana", {**cfg, "cand_and": "F_ana"})):
         res = {}
