@@ -196,6 +196,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
     if cfg.get("exclude"):                          # 23세대 강건성: 이 종목들은 아예 안 산 것으로(반사실 재시뮬레이션)
         ex = np.isin(np.asarray(D["codes"]), list(cfg["exclude"]))
         cand = cand & ~ex[:, None]
+    if cfg.get("cand_and"):                         # 30 독립 표본 널: 부르는 쪽이 만든 무작위 솎기 마스크(D[키]) — 없으면 기존 경로
+        cand = cand & D[cfg["cand_and"]]
     if cfg.get("rank") == "rs_sector":
         cand = cand & D["sector_strong"]
     elif cfg.get("rank") == "rs_eps":

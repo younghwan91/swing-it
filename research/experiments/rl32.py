@@ -66,7 +66,8 @@ def cand_mask(D: dict, cfg: dict) -> "tuple[np.ndarray, np.ndarray, np.ndarray]"
         sdist = 1.0 - low10 / C
         cand = cand & (sdist > 0) & (sdist <= cfg["stop_max"])
         pc = np.concatenate([np.full((C.shape[0], 1), np.nan), C[:, :-1]], axis=1)
-        lu = np.isfinite(pc) & (C >= pc * L.LU)
+        lu_t = D["lu"][None, :] if D.get("lu") is not None else L.LU     # 30 독립 표본: 2015-06-15 전 ±15%
+        lu = np.isfinite(pc) & (C >= pc * lu_t)
     ok = cand & D["TR"] & np.isfinite(C) & (C > 0) & ~lu & D["regime_on"][None, :]
     return ok, low10, sdist
 
