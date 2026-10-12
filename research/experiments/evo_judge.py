@@ -88,6 +88,9 @@ def main(cands: list[str]) -> None:
             if c == lead:
                 continue
             offs = sorted(set(A[c]) & set(A[lead]))
+            if len(offs) < 2:                           # 15세대: 새 시드 집합은 공유 오프셋이 없다 — race 생략(기술)
+                print(f"  {c} − {lead}: 공유 시드 오프셋 {len(offs)} — 생략")
+                continue
             d = [A[c][o] - A[lead][o] for o in offs]
             m, se = st.mean(d), st.stdev(d) / len(d) ** 0.5
             print(f"  {c} − {lead}: {m:+.2f} ± {se:.2f} → m + {K:g}SE {m + K * se:+.2f} {'탈락' if m + K * se < 0 else '유지'}")
