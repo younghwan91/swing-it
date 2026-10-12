@@ -1,0 +1,47 @@
+{
+ "selected": [
+  {
+   "pop": "M0",
+   "stop_max": 0.1,
+   "gap_max": 0.05,
+   "be_r": 3.0,
+   "take_r": 4.0,
+   "take_frac": 0.5,
+   "trail": "ma20",
+   "trail_gate": 0,
+   "climax": 1,
+   "max_hold": 120
+  },
+  {
+   "pop": "tight",
+   "stop_max": 0.075,
+   "gap_max": 0.03,
+   "be_r": 2.0,
+   "take_r": 6.0,
+   "take_frac": 0.3333333333333333,
+   "trail": "ma20",
+   "trail_gate": 0,
+   "climax": 0,
+   "max_hold": 120
+  }
+ ],
+ "oos_n": 1217,
+ "oos_mean_pct": 0.2957468729658293,
+ "oos_t": 0.72940206057232,
+ "oos_median_R": -0.4526200551590561,
+ "oos_pR4": 0.05012325390304026,
+ "oos_exSG_mean_pct": 0.20943518433214164,
+ "by_year_pct": {
+  "2020": 1.2067248354166553,
+  "2021": -0.2064333463796023,
+  "2022": -0.2894978880397424,
+  "2023": -0.44259619717967774
+ },
+ "null_median_pct": 0.2946441848569293,
+ "null_p95_pct": 0.9271487362621166,
+ "p_null": 0.4996,
+ "grid_oos_frac_pos": 0.770703125,
+ "grid_oos_best_pct": 1.2670217079098727,
+ "n_cfgs": 5120,
+ "pass": false
+}

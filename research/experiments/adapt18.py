@@ -93,7 +93,7 @@ def _fills(pop: str, stop_max: float, gap_max: float) -> dict:
     return _W["fills"][key]
 
 
-def run_cfg(cfg: dict) -> pd.DataFrame:
+def run_cfg(cfg: dict, detail: bool = False) -> pd.DataFrame:
     W = _W
     PF, PE, A = W["PF"], W["PE"], W["A"]
     fx = _fills(cfg["pop"], cfg["stop_max"], cfg["gap_max"])
@@ -104,7 +104,7 @@ def run_cfg(cfg: dict) -> pd.DataFrame:
         px[k_] = 0
     px[PF.X_MAX_HOLD] = cfg["max_hold"]
     out = np.empty(PF.N_O)
-    d_, n_, R_, code_ = [], [], [], []
+    d_, n_, R_, code_, det = [], [], [], [], []
     busy = {}
     for j in fx["order"]:
         c, d, e, sp = int(fx["ci"][j]), int(fx["d"][j]), float(fx["e"][j]), float(fx["sp"][j])
@@ -124,7 +124,12 @@ def run_cfg(cfg: dict) -> pd.DataFrame:
         n_.append(net2 * min(1.0, 0.05 / dd))
         R_.append(out[PF.O_PNL] / dd)
         code_.append(str(W["codes"][c]))
-    return pd.DataFrame({"d": d_, "n2s": n_, "R": R_, "code": code_})
+        det.append((x, e, sp, float(out[PF.O_FIN]), PF.REASONS[int(out[PF.O_REASON])], bool(out[PF.O_TP] >= 0), float(out[PF.O_PX1])))
+    t = pd.DataFrame({"d": d_, "n2s": n_, "R": R_, "code": code_})
+    if detail:                                   # 기술(스웜 검증용) — 판정 숫자는 같다
+        dd = pd.DataFrame(det, columns=["x", "e", "sp", "exit_px", "reason", "partial", "partial_px"])
+        t = pd.concat([t, dd], axis=1)
+    return t
 
 
 def _task(a: tuple) -> dict:
@@ -177,7 +182,7 @@ def main() -> None:
         ok = r[r[f"tr{k}_n"] >= MIN_TRAIN]
         best = ok[f"tr{k}_m"].idxmax()
         sel.append(int(best))
-        t = run_cfg(cfgs[best])
+        t = run_cfg(cfgs[best], detail=True)
         dd = _W["days"][t["d"].to_numpy()]
         oos_parts.append(t[(dd >= FOLDS[k][1]) & (dd < FOLDS[k][2])].assign(date=dd[(dd >= FOLDS[k][1]) & (dd < FOLDS[k][2])]))
     oos = pd.concat(oos_parts)
