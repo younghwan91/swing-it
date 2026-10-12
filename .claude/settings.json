@@ -2,11 +2,8 @@
   "permissions": {
     "deny": [
       "Edit(**/TRIALS.jsonl)",
-      "Write(**/TRIALS.jsonl)",
       "Edit(**/RUNS.jsonl)",
-      "Write(**/RUNS.jsonl)",
-      "Edit(**/research/paper/*.jsonl)",
-      "Write(**/research/paper/*.jsonl)"
+      "Edit(**/research/paper/*.jsonl)"
     ]
   }
 }
