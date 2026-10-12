@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(**/TRIALS.jsonl)",
+      "Edit(**/RUNS.jsonl)",
+      "Edit(**/research/paper/*.jsonl)"
+    ]
+  }
+}
