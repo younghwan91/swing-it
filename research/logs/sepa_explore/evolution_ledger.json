@@ -1,0 +1,10 @@
+[
+ {"gen": "G7", "label": "G7 lead (G7A wedge)", "headline_pct": 1.22, "verified_pct": 0.40, "verified_note": "new seeds +0.4% (t~0.4)"},
+ {"gen": "G13", "label": "G13 P/C families", "headline_pct": -0.85, "verified_pct": -0.85, "verified_note": "no edge"},
+ {"gen": "G16", "label": "G16 tight (random exits)", "headline_pct": 0.23, "verified_pct": 0.03, "verified_note": "ex-top5"},
+ {"gen": "G16b", "label": "G16b tight (Minervini exits)", "headline_pct": 0.62, "verified_pct": 0.08, "verified_note": "ex-top5; vs geometry null +0.44pp t0.8"},
+ {"gen": "G17", "label": "G17 M0 skeleton", "headline_pct": -0.52, "verified_pct": -0.52, "verified_note": "2017-23"},
+ {"gen": "G17f", "label": "G17 + flows fl20>0", "headline_pct": -0.68, "verified_pct": -0.68, "verified_note": "spread -0.93pp, perm p 0.97"},
+ {"gen": "G18", "label": "G18 walk-forward (5,120 cfgs)", "headline_pct": 0.30, "verified_pct": -0.22, "verified_note": "ex-2020; null p 0.50"},
+ {"gen": "G19", "label": "G19 PEAD EAR>=5%", "headline_pct": -0.74, "verified_pct": -0.74, "verified_note": "gross -0.01%, loss = 2x cost"}
+]
