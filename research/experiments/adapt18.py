@@ -74,7 +74,7 @@ def _init(cache: str, seal: str = SEAL, eps_new: bool = False) -> None:
         if eps_new and len(r):
             import psycopg2  # noqa: PLC0415
 
-            from research.signals.eps_asof import eps_ok  # noqa: PLC0415
+            from swing_it.features.eps_asof import eps_ok  # noqa: PLC0415
             con = psycopg2.connect(os.environ["KR_QUANT_DB"])
             con.set_session(readonly=True)
             r = r[eps_ok(codes, days, I_[r, PE.II["ci"]].astype(np.int64), I_[r, PE.II["i0"]].astype(np.int64), con)]

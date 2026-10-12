@@ -389,7 +389,7 @@ def eps_features(con, days: pd.DatetimeIndex, codes: pd.Index, di: np.ndarray, c
     ea2["netinc_prior"] = np.where(have, ea["netinc_prior"].to_numpy(float) / out["prev"], ea["netinc_prior"].to_numpy(float))
     ea2["op_income"] = np.where(have, 2.0, 1.0)          # op_yoy = 1 → EPS 기준, 0 → 순이익 대체(표시용 자리)
     ea2["op_income_prior"] = 1.0
-    panel = earnings_leg_panel(ea2, [d.strftime("%Y-%m-%d") for d in days])
+    panel = earnings_leg_panel(ea2, [d.strftime("%Y-%m-%d") for d in days], avail_col="avail_date")  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
     pdi = days.get_indexer(pd.to_datetime(panel["date"]))
     pci = codes.get_indexer(panel["code"])
     okp = (pdi >= 0) & (pci >= 0)

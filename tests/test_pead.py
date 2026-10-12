@@ -32,7 +32,7 @@ def _synthetic(n_days=400, n_codes=60, drift=0.002, seed=0):
 def test_pead_is_net_positive_when_earnings_predict_drift():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     periods, summary = pead_backtest(
         prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0, start_index=40,
     )
@@ -45,7 +45,7 @@ def test_pead_is_net_positive_when_earnings_predict_drift():
 def test_cost_reduces_net_below_gross():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     periods, _ = pead_backtest(prices, panel, horizon=20, adv_floor=0,
                                cost_one_way=0.0023, start_index=40)
     # net = gross - turnover*cost, so net <= gross whenever any turnover occurs.
@@ -56,7 +56,7 @@ def test_cost_reduces_net_below_gross():
 def test_rank_ic_confirms_positive_predictive_signal():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     res = pead_rank_ic(prices, panel, horizon=20, adv_floor=0, start_index=40, n_regimes=4)
     assert res["n_days"] > 20
     assert res["ic_mean"] > 0            # YoY rank predicts forward return
@@ -70,7 +70,7 @@ def test_fresh_days_gate_limits_universe():
     prices, earnings, dates = _synthetic()
     # Earnings became available before the window -> age grows large; a tight
     # fresh_days gate should drop everything and yield no tradeable periods.
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     _, summary = pead_backtest(prices, panel, horizon=20, adv_floor=0,
                                start_index=40, fresh_days=5)
     assert summary["n"] == 0  # all filings older than 5 days -> nothing eligible
@@ -79,7 +79,7 @@ def test_fresh_days_gate_limits_universe():
 def test_backtest_accepts_precomputed_signal_panel():
     from swing_it.features.fundamentals import blend_rank, earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     # Blend YoY with itself -> identical ranking -> same result as the raw path.
     blended = blend_rank([panel, panel], [0.5, 0.5], value_cols=["yoy", "yoy"])
     _, s_sig = pead_backtest(prices, panel, signal_panel=blended, horizon=20,
@@ -93,7 +93,7 @@ def test_backtest_accepts_precomputed_signal_panel():
 def test_long_only_reports_excess_and_charges_no_borrow():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     periods, summary = pead_backtest(prices, panel, horizon=20, adv_floor=0,
                                      cost_one_way=0.0, start_index=40,
                                      long_only=True, borrow_cost_annual=0.05)
@@ -106,7 +106,7 @@ def test_long_only_reports_excess_and_charges_no_borrow():
 def test_staggered_backtest_runs_and_reports_payoff():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     periods, summary = staggered_backtest(prices, panel, horizon=60, step=20,
                                           top_n=5, adv_floor=0, start_index=40)
     assert summary["n"] > 3
@@ -120,7 +120,7 @@ def test_recommend_holdings_returns_top_mid_large_names():
     from swing_it.features.fundamentals import earnings_yoy_panel
     from swing_it.strategies.pead import recommend_holdings
     prices, earnings, dates = _synthetic(n_codes=60)
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     shares = pd.DataFrame([
         {"code": c, "date": dates[0], "shares_outstanding": (int(c) + 1) * 1000}
         for c in prices["code"].unique()
@@ -136,7 +136,7 @@ def test_recommend_holdings_returns_top_mid_large_names():
 def test_staggered_cap_tier_restricts_universe():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic(n_codes=60)
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     # Give each code a distinct, constant market cap (code index scales it).
     cap = pd.DataFrame([
         {"code": c, "date": d, "market_cap": (int(c) + 1) * 1e9}
@@ -152,7 +152,7 @@ def test_staggered_cap_tier_restricts_universe():
 def test_top_n_concentrates_and_reports_payoff_ratio():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     _, summary = pead_backtest(prices, panel, horizon=20, adv_floor=0,
                                cost_one_way=0.0, start_index=40,
                                long_only=True, top_n=5)
@@ -165,7 +165,7 @@ def test_top_n_concentrates_and_reports_payoff_ratio():
 def test_borrow_cost_reduces_long_short_net():
     from swing_it.features.fundamentals import earnings_yoy_panel
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     _, s0 = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0,
                           start_index=40, borrow_cost_annual=0.0)
     _, s1 = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0,
@@ -178,7 +178,7 @@ def test_liquidity_floor_excludes_illiquid_names():
     prices, earnings, dates = _synthetic(n_codes=40)
     # Make half the names illiquid (trade_value below the floor).
     prices.loc[prices["code"] >= "000020", "trade_value"] = 10.0
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     _, summary = pead_backtest(prices, panel, horizon=20, adv_floor=1000,
                                start_index=40, min_names=5)
     assert summary["n"] > 0  # still trades the liquid half

@@ -48,7 +48,7 @@ def _bdays(lo, hi):
 
 def test_not_visible_before_avail_date():
     ea = _rows(("A", "2022Q1", "2022-05-16", "2022-05-16", 150.0, 100.0))
-    p = earnings_leg_panel(ea, ["2022-05-13", "2022-05-16", "2022-05-17"])
+    p = earnings_leg_panel(ea, ["2022-05-13", "2022-05-16", "2022-05-17"], avail_col="avail_date")
     assert p[p["date"] == "2022-05-13"].empty, "공시 전 날짜에 행이 있으면 안 된다(= 모름)"
     r = _at(p, "2022-05-16")
     assert r["yoy"] == pytest.approx(0.5)
@@ -61,7 +61,7 @@ def test_newer_quarter_supersedes_on_its_avail_date():
         ("A", "2022Q1", "2022-05-16", "2022-05-16", 150.0, 100.0),
         ("A", "2022Q2", "2022-08-15", "2022-08-15", 300.0, 100.0),
     )
-    p = earnings_leg_panel(ea, ["2022-08-12", "2022-08-15"])
+    p = earnings_leg_panel(ea, ["2022-08-12", "2022-08-15"], avail_col="avail_date")
     assert _at(p, "2022-08-12")["period"] == "2022Q1"
     r = _at(p, "2022-08-15")
     assert r["period"] == "2022Q2" and r["yoy"] == pytest.approx(2.0)
@@ -71,7 +71,7 @@ def test_newer_quarter_supersedes_on_its_avail_date():
 def test_late_collected_filing_waits_for_knowledge_date():
     """공시일보다 늦게 수집된 행은 '알게 된 날' 부터. 그러나 age 는 공시일부터 잰다."""
     ea = _rows(("A", "2022Q1", "2022-05-16", "2022-09-01", 150.0, 100.0))
-    p = earnings_leg_panel(ea, ["2022-06-01", "2022-09-01"])
+    p = earnings_leg_panel(ea, ["2022-06-01", "2022-09-01"], avail_col="avail_date")
     assert p[p["date"] == "2022-06-01"].empty
     r = _at(p, "2022-09-01")
     assert r["age_days"] == (pd.Timestamp("2022-09-01") - pd.Timestamp("2022-05-16")).days
@@ -79,7 +79,7 @@ def test_late_collected_filing_waits_for_knowledge_date():
 
 def test_age_tdays_counts_from_first_trading_day_on_or_after_avail():
     ea = _rows(("A", "2022Q1", "2022-05-15", "2022-05-15", 150.0, 100.0))  # 일요일
-    p = earnings_leg_panel(ea, _bdays("2022-05-10", "2022-05-20"))
+    p = earnings_leg_panel(ea, _bdays("2022-05-10", "2022-05-20"), avail_col="avail_date")
     assert _at(p, "2022-05-16")["age_tdays"] == 0
     assert _at(p, "2022-05-16")["age_days"] == 1
     assert _at(p, "2022-05-20")["age_tdays"] == 4
@@ -92,7 +92,7 @@ def test_restatement_of_latest_quarter_flips_only_after_knowledge_date():
         ("A", "2026Q1", "2026-05-15", "2026-05-15", 110.0, 100.0),   # +10%
         ("A", "2026Q1", "2026-05-15", "2026-07-01", 200.0, 100.0),   # 정정 → +100%
     )
-    p = earnings_leg_panel(ea, ["2026-06-30", "2026-07-01", "2026-07-02"])
+    p = earnings_leg_panel(ea, ["2026-06-30", "2026-07-01", "2026-07-02"], avail_col="avail_date")
     assert _at(p, "2026-06-30")["yoy"] == pytest.approx(0.10)
     assert _at(p, "2026-07-01")["yoy"] == pytest.approx(1.00)
     # 신선도는 정정으로 리셋되지 않는다.
@@ -105,7 +105,7 @@ def test_old_quarter_restatement_never_displaces_newest_quarter():
         ("A", "2024Q4", "2025-03-31", "2025-03-31", 150.0, 100.0),
         ("A", "2020Q1", "2020-05-15", "2025-06-01", 999.0, 100.0),   # 옛 분기 정정
     )
-    p = earnings_leg_panel(ea, ["2025-04-01", "2025-06-02"])
+    p = earnings_leg_panel(ea, ["2025-04-01", "2025-06-02"], avail_col="avail_date")
     assert _at(p, "2025-06-02")["period"] == "2024Q4"
     assert _at(p, "2025-06-02")["yoy"] == pytest.approx(0.5)
 
@@ -116,7 +116,7 @@ def test_restated_previous_quarter_changes_yoy_prev_only_after_knowledge_date():
         ("A", "2024Q2", "2024-08-14", "2024-08-14", 150.0, 100.0),   # +50%
         ("A", "2024Q1", "2024-05-15", "2024-09-02", 180.0, 100.0),   # Q1 정정 → +80%
     )
-    p = add_earnings_flags(earnings_leg_panel(ea, ["2024-08-30", "2024-09-02"]))
+    p = add_earnings_flags(earnings_leg_panel(ea, ["2024-08-30", "2024-09-02"], avail_col="avail_date"))
     before, after = _at(p, "2024-08-30"), _at(p, "2024-09-02")
     assert before["yoy_prev"] == pytest.approx(0.2) and bool(before["accel"])
     assert after["yoy_prev"] == pytest.approx(0.8) and not bool(after["accel"])
@@ -132,7 +132,7 @@ def test_restatement_does_not_disturb_unrelated_dates():
     restated = pd.concat(
         [base, _rows(("A", "2020Q1", "2020-05-15", "2025-01-01", 999.0, 100.0))], ignore_index=True)
     dates = ["2020-06-01", "2021-06-01", "2024-06-01", "2026-06-01"]
-    pd.testing.assert_frame_equal(earnings_leg_panel(base, dates), earnings_leg_panel(restated, dates))
+    pd.testing.assert_frame_equal(earnings_leg_panel(base, dates, avail_col="avail_date"), earnings_leg_panel(restated, dates, avail_col="avail_date"))
 
 
 # --- PEAD 와 같은 YoY 정의 -------------------------------------------------------
@@ -142,7 +142,7 @@ def test_negative_prior_uses_abs_denominator_like_pead():
         ("A", "2022Q1", "2022-05-16", "2022-05-16", 10.0, -100.0),    # 흑자 전환
         ("B", "2022Q1", "2022-05-16", "2022-05-16", -50.0, -100.0),   # 적자 축소
     )
-    p = add_earnings_flags(earnings_leg_panel(ea, ["2022-05-16"]))
+    p = add_earnings_flags(earnings_leg_panel(ea, ["2022-05-16"], avail_col="avail_date"))
     a, b = _at(p, "2022-05-16", "A"), _at(p, "2022-05-16", "B")
     assert a["yoy"] == pytest.approx(1.1) and bool(a["e_flag"])
     assert b["yoy"] == pytest.approx(0.5) and not bool(b["e_flag"]), "적자면 YoY 가 커도 E 가 아니다"
@@ -158,7 +158,7 @@ def test_zero_or_missing_prior_falls_back_to_older_quarter_like_pead():
         ("B", "2022Q1", "2022-05-16", "2022-05-16", 150.0, 100.0),
         ("B", "2022Q2", "2022-08-15", "2022-08-15", 150.0, np.nan),   # 분모 결측
     )
-    p = earnings_leg_panel(ea, ["2022-09-01"])
+    p = earnings_leg_panel(ea, ["2022-09-01"], avail_col="avail_date")
     for code in ("A", "B"):
         r = _at(p, "2022-09-01", code)
         assert r["period"] == "2022Q1" and r["yoy"] == pytest.approx(0.5)
@@ -181,10 +181,10 @@ def test_parity_with_validated_pead_panel():
         ("C", "2020Q4", "2021-03-31", "2021-03-31", -5.0, 10.0),
     )
     dates = _bdays("2020-04-01", "2021-08-31")
-    mine = earnings_leg_panel(ea, dates)
+    mine = earnings_leg_panel(ea, dates, avail_col="avail_date")
 
     ref_in = ea.assign(yoy=_yoy_vec(ea["netinc"], ea["netinc_prior"])).dropna(subset=["yoy"])
-    ref = earnings_yoy_panel(ref_in, dates, knowledge_col=KN).dropna(subset=["yoy"])
+    ref = earnings_yoy_panel(ref_in, dates, knowledge_col=KN, avail_col="avail_date").dropna(subset=["yoy"])
     m = ref.merge(mine, on=["code", "date"], how="outer", suffixes=("_ref", ""), indicator=True)
     assert (m["_merge"] == "both").all(), "행 집합이 다르다"
     np.testing.assert_allclose(m["yoy"], m["yoy_ref"])
@@ -204,7 +204,7 @@ def test_accel_flag_requires_consecutive_finite_quarters():
         ("D", "2022Q4", "2023-03-31", "2023-03-31", 190.0, 100.0),    # 감속
         ("D", "2023Q1", "2023-05-15", "2023-05-15", 150.0, 100.0),
     )
-    p = add_earnings_flags(earnings_leg_panel(ea, ["2023-05-16"]))
+    p = add_earnings_flags(earnings_leg_panel(ea, ["2023-05-16"], avail_col="avail_date"))
     got = p.set_index("code")
     assert got.loc["A", "yoy_prev"] == pytest.approx(0.3) and bool(got.loc["A", "accel"])
     assert np.isnan(got.loc["B", "yoy_prev"]) and not bool(got.loc["B", "accel"])
@@ -223,7 +223,7 @@ def test_e_flag_thresholds():
     )
     on_edge = (avail + pd.Timedelta(days=E_MAX_AGE_DAYS)).strftime("%Y-%m-%d")
     past = (avail + pd.Timedelta(days=E_MAX_AGE_DAYS + 1)).strftime("%Y-%m-%d")
-    p = earnings_leg_panel(ea, ["2022-05-16", on_edge, past])
+    p = earnings_leg_panel(ea, ["2022-05-16", on_edge, past], avail_col="avail_date")
     p["e"] = e_flag(p)
     e = p.set_index(["code", "date"])["e"]
     assert e[("A", "2022-05-16")] and e[("A", on_edge)]
@@ -239,7 +239,7 @@ def test_pead_rank_is_daily_percentile_among_valued_and_eligible():
         ("C", "2022Q1", "2022-05-16", "2022-05-16", 300.0, 100.0),
         ("D", "2022Q1", "2022-05-16", "2022-05-16", 900.0, 100.0),
     )
-    p = earnings_leg_panel(ea, ["2022-05-16"])
+    p = earnings_leg_panel(ea, ["2022-05-16"], avail_col="avail_date")
     r = pead_rank(p).set_axis(p["code"])
     assert list(r[["A", "B", "C", "D"]]) == pytest.approx([0.25, 0.5, 0.75, 1.0])
     r2 = pead_rank(p, eligible=p["code"] != "D").set_axis(p["code"])
@@ -251,13 +251,13 @@ def test_revenue_and_op_yoy_come_from_the_same_row():
         ("A", "2022Q1", "2022-05-16", "2022-05-16", 150.0, 100.0, 220.0, 200.0, 30.0, -10.0),
         ("A", "2022Q2", "2022-08-15", "2022-08-15", 150.0, 0.0, 999.0, 1.0, 999.0, 1.0),  # 순이익 YoY 불가
     )
-    r = _at(earnings_leg_panel(ea, ["2022-09-01"]), "2022-09-01")
+    r = _at(earnings_leg_panel(ea, ["2022-09-01"], avail_col="avail_date"), "2022-09-01")
     assert r["period"] == "2022Q1"
     assert r["rev_yoy"] == pytest.approx(0.1) and r["op_yoy"] == pytest.approx(4.0)
 
 
 def test_empty_input_returns_schema():
-    p = earnings_leg_panel(_rows(("A", "2022Q1", "2022-05-16", "2022-05-16", 1.0, 0.0)), ["2022-06-01"])
+    p = earnings_leg_panel(_rows(("A", "2022Q1", "2022-05-16", "2022-05-16", 1.0, 0.0)), ["2022-06-01"], avail_col="avail_date")
     assert p.empty and "yoy" in p.columns
 
 

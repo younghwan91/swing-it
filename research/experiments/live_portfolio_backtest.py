@@ -146,7 +146,7 @@ def research_events(con, cfg: StrategyConfig, t0: float) -> "tuple[pd.DataFrame,
     ms["F"] = fl["F"].to_numpy()[di, ci]
     del sd, fl
     ea = read_earnings(con, all_versions=True, cols=EARN_COLS)
-    ep = earnings_leg_panel(ea, [d.strftime("%Y-%m-%d") for d in p.days])
+    ep = earnings_leg_panel(ea, [d.strftime("%Y-%m-%d") for d in p.days], avail_col="avail_date")  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
     edi = p.days.get_indexer(pd.to_datetime(ep["date"]))
     eci = p.close.columns.get_indexer(ep["code"])
     ok = (edi >= 0) & (eci >= 0)

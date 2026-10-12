@@ -347,7 +347,7 @@ def _ea_rows():
 
 
 def test_q4_standalone_is_annual_minus_9m():
-    st = V.standalone_quarter_states(_ea_rows())
+    st = V.standalone_quarter_states(_ea_rows(), avail_col="avail_date")
     r = V.e_accel_asof(st, ["X"], ["2025-04-10"]).iloc[0]
     assert r["e_period"] == "2024Q4"
     # 2024 연간 = 4×20 + 6 + 30 = 116, 9M = 21+22+23 = 66 → Q4 단독 50.
@@ -363,13 +363,13 @@ def test_q4_standalone_is_annual_minus_9m():
 
 def test_e_pit_before_q4_and_restatement():
     ea = _ea_rows()
-    st = V.standalone_quarter_states(ea)
+    st = V.standalone_quarter_states(ea, avail_col="avail_date")
     assert V.e_accel_asof(st, ["X"], ["2025-03-30"]).iloc[0]["e_period"] == "2024Q3"   # 사업보고서 전날
     # 정정: 2024Q2 순이익을 2025-06-01 에 고쳐 알게 된다 → 그 전 날짜의 Q4 단독은 옛 값, 그 뒤는 새 값.
     fix = ea[ea["period"] == "2024Q2"].copy()
     fix["knowledge_date"] = "2025-06-01"
     fix["netinc"] = 32.0
-    st2 = V.standalone_quarter_states(pd.concat([ea, fix], ignore_index=True))
+    st2 = V.standalone_quarter_states(pd.concat([ea, fix], ignore_index=True), avail_col="avail_date")
     q = V.e_accel_asof(st2, ["X", "X"], ["2025-04-10", "2025-06-02"])
     assert q.loc[0, "e_period"] == "2024Q4" and q.loc[0, "e_netinc"] == pytest.approx(50.0)
     assert q.loc[1, "e_period"] == "2024Q4" and q.loc[1, "e_netinc"] == pytest.approx(116 - (21 + 32 + 23))
@@ -378,7 +378,7 @@ def test_e_pit_before_q4_and_restatement():
 def test_q4_unknown_without_all_three_quarters_no_rollback():
     ea = _ea_rows()
     ea = ea[ea["period"] != "2024Q2"]
-    r = V.e_accel_asof(V.standalone_quarter_states(ea), ["X"], ["2025-04-10"]).iloc[0]
+    r = V.e_accel_asof(V.standalone_quarter_states(ea, avail_col="avail_date"), ["X"], ["2025-04-10"]).iloc[0]
     assert r["e_period"] == "2024Q4"                # 앞 분기(2024Q3)로 밀리지 않는다
     assert not bool(r["e_known"]) and not bool(r["e_accel"])
 
@@ -386,13 +386,13 @@ def test_q4_unknown_without_all_three_quarters_no_rollback():
 def test_yoy_prev_requires_profitable_prior():
     ea = _ea_rows()
     ea.loc[ea["period"] == "2024Q3", "netinc_prior"] = -5.0     # 직전 분기 전년 동기 적자 → yoy_prev 무효
-    r = V.e_accel_asof(V.standalone_quarter_states(ea), ["X"], ["2025-04-10"]).iloc[0]
+    r = V.e_accel_asof(V.standalone_quarter_states(ea, avail_col="avail_date"), ["X"], ["2025-04-10"]).iloc[0]
     assert np.isnan(r["e_yoy_prev"]) and not bool(r["e_accel"])
 
 
 def test_no_age_gate():
     """정정 M2: 140일 문 삭제 — 다음 분기가 안 보이면 오래된 최신 분기도 그대로 쓴다."""
-    st = V.standalone_quarter_states(_ea_rows())
+    st = V.standalone_quarter_states(_ea_rows(), avail_col="avail_date")
     a = V.e_accel_asof(st, ["X", "X"], ["2025-04-10", "2025-12-30"])
     assert a.loc[1, "e_period"] == "2024Q4" and a.loc[1, "e_accel"] == a.loc[0, "e_accel"]
 

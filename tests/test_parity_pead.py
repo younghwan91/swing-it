@@ -90,7 +90,7 @@ def _assert_backtest_parity(old, new):
 
 def test_parity_pead_default_long_short():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0, start_index=40)
     new = rank_tilt_backtest(C, V, sig, dcols, horizon=20, adv_floor=0,
@@ -100,7 +100,7 @@ def test_parity_pead_default_long_short():
 
 def test_parity_pead_with_cost():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0023, start_index=40)
     new = rank_tilt_backtest(C, V, sig, dcols, horizon=20, adv_floor=0,
@@ -110,7 +110,7 @@ def test_parity_pead_with_cost():
 
 def test_parity_pead_long_only_excess():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0,
                         start_index=40, long_only=True, borrow_cost_annual=0.05)
@@ -121,7 +121,7 @@ def test_parity_pead_long_only_excess():
 
 def test_parity_pead_top_n_concentrated():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0,
                         start_index=40, long_only=True, top_n=5)
@@ -132,7 +132,7 @@ def test_parity_pead_top_n_concentrated():
 
 def test_parity_pead_borrow_cost():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=0, cost_one_way=0.0,
                         start_index=40, borrow_cost_annual=0.03)
@@ -143,7 +143,7 @@ def test_parity_pead_borrow_cost():
 
 def test_parity_pead_fresh_days_empty():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=0, start_index=40, fresh_days=5)
     new = rank_tilt_backtest(C, V, sig, dcols, horizon=20, adv_floor=0,
@@ -154,7 +154,7 @@ def test_parity_pead_fresh_days_empty():
 def test_parity_pead_adv_floor_filters():
     prices, earnings, dates = _synthetic(n_codes=40)
     prices.loc[prices["code"] >= "000020", "trade_value"] = 10.0
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_backtest(prices, panel, horizon=20, adv_floor=1000, start_index=40, min_names=5)
     new = rank_tilt_backtest(C, V, sig, dcols, horizon=20, adv_floor=1000,
@@ -164,7 +164,7 @@ def test_parity_pead_adv_floor_filters():
 
 def test_parity_pead_signal_panel():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     blended = blend_rank([panel, panel], [0.5, 0.5], value_cols=["yoy", "yoy"])
     C, V, sig, age, dcols, _ = _arrays(prices, panel, signal_panel=blended)
     old = pead_backtest(prices, panel, signal_panel=blended, horizon=20,
@@ -178,7 +178,7 @@ def test_parity_pead_signal_panel():
 
 def test_parity_staggered_basic():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, _, dcols, _ = _arrays(prices, panel)
     old = staggered_backtest(prices, panel, horizon=60, step=20, top_n=5,
                              adv_floor=0, start_index=40)
@@ -189,7 +189,7 @@ def test_parity_staggered_basic():
 
 def test_parity_staggered_cap_tier():
     prices, earnings, dates = _synthetic(n_codes=60)
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     cap = pd.DataFrame([
         {"code": c, "date": d, "market_cap": (int(c) + 1) * 1e9}
         for c in prices["code"].unique() for d in dates
@@ -208,7 +208,7 @@ def test_parity_staggered_cap_tier():
 
 def test_parity_rank_ic():
     prices, earnings, dates = _synthetic()
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_rank_ic(prices, panel, horizon=20, adv_floor=0, start_index=40, n_regimes=4)
     new = rank_ic(C, V, sig, dcols, horizon=20, adv_floor=0, start_index=40,
@@ -219,7 +219,7 @@ def test_parity_rank_ic():
 def test_parity_rank_ic_with_adv_floor():
     prices, earnings, dates = _synthetic(n_codes=40)
     prices.loc[prices["code"] >= "000020", "trade_value"] = 10.0
-    panel = earnings_yoy_panel(earnings, dates)
+    panel = earnings_yoy_panel(earnings, dates, avail_col="avail_date")
     C, V, sig, age, dcols, _ = _arrays(prices, panel)
     old = pead_rank_ic(prices, panel, horizon=20, adv_floor=1000, start_index=40, n_regimes=4)
     new = rank_ic(C, V, sig, dcols, horizon=20, adv_floor=1000, start_index=40,

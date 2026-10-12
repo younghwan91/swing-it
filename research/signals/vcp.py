@@ -1011,7 +1011,7 @@ def _pname(q: int) -> str:
     return f"{q // 4}Q{q % 4 + 1}"
 
 
-def standalone_quarter_states(ea: pd.DataFrame, *, avail_col: str = "avail_date",
+def standalone_quarter_states(ea: pd.DataFrame, *, avail_col: str,
                               knowledge_col: "str | None" = "knowledge_date") -> pd.DataFrame:
     """실적 전 버전(``read_earnings(all_versions=True)``) → 종목별 "상태가 바뀌는 순간" 표(:data:`E_STATE_COLS`).
 

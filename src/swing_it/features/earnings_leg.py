@@ -119,7 +119,7 @@ def earnings_leg_panel(
     earnings: pd.DataFrame,
     trading_dates: list[str],
     *,
-    avail_col: str = "avail_date",
+    avail_col: str,
     knowledge_col: str | None = "knowledge_date",
 ) -> pd.DataFrame:
     """시점 안전 (code, date) 롱 패널 — 그날 알던 최신 분기의 실적 상태.
@@ -129,7 +129,8 @@ def earnings_leg_panel(
             ``avail_col``·``netinc``·``netinc_prior``, 있으면 ``revenue``·``revenue_prior``·``op_income``·
             ``op_income_prior``, 그리고 ``knowledge_col``.
         trading_dates: 거래일(``YYYY-MM-DD``). 보통 ``sorted(prices["date"].unique())``.
-        avail_col: 공시(가용)일 열.
+        avail_col: 공시(가용)일 열 — **필수(기본값 없음, 린트 (l))**. ``"avail_date"`` 는 제출 마감일 고정값이라 미래 정보가 섞인다;
+            새 코드는 ``read_earnings(with_known=True)`` 의 ``"known_date"``, ``"avail_date"`` 호출부는 ``# legacy-asof: <이유>``.
         knowledge_col: 정정공시 버전 열. ``None`` 이면 입력에 버전이 하나뿐이고 공시일에 알았다고 본다.
 
     Returns:

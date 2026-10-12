@@ -95,8 +95,8 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     prices["code"] = prices["code"].astype(str)
     prices["date"] = prices["date"].astype(str)
     dates = sorted(prices["date"].unique())
-    yoy_panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates,
-                                   knowledge_col="knowledge_date")
+    yoy_panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates,  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
+                                   knowledge_col="knowledge_date", avail_col="avail_date")
     return prices, yoy_panel
 
 

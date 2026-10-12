@@ -58,8 +58,8 @@ def load_frames(db: str):
     con.close()
     ea["yoy"] = _yoy_vec(ea["netinc"], ea["netinc_prior"])
     dates = sorted(prices["date"].unique())
-    panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates,
-                              knowledge_col="knowledge_date")
+    panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates,  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
+                              knowledge_col="knowledge_date", avail_col="avail_date")
     return prices, panel
 
 

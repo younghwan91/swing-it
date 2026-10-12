@@ -232,8 +232,8 @@ def earnings_panels_ga(ea: pd.DataFrame, shares: "pd.DataFrame | None", adj_clos
     :func:`eps_adjusted_earnings` → ``earnings_leg_panel`` → 넓은 패널. 가속 = ``accel_flag``(NaN → 0, GA 와 같다), 실적 행 없음 = NaN."""
     from swing_it.features.earnings_leg import accel_flag  # noqa: PLC0415
 
-    ep = earnings_leg_panel(eps_adjusted_earnings(ea, shares, adj_close, raw_close),
-                            [d.strftime("%Y-%m-%d") for d in days])
+    ep = earnings_leg_panel(eps_adjusted_earnings(ea, shares, adj_close, raw_close),  # legacy-asof: 라이브 엔진 전략 정의 그대로(known_date 전환은 새 사전등록)
+                            [d.strftime("%Y-%m-%d") for d in days], avail_col="avail_date")
     if ep.empty:
         nan = pd.DataFrame(np.nan, index=days, columns=codes)
         return {"eps_yoy": nan, "accel": nan.copy(), "rev_yoy": nan.copy(), "eps_from_netinc": nan.copy()}
@@ -302,7 +302,7 @@ def build_signal_panels(inp: RawInputs, cfg: StrategyConfig = DEFAULT_STRATEGY, 
     out["smart"], out["foreign"] = fl["smart_ratio_20"], fl["foreign_ratio_20"]
     out["persist"] = fl["smart_pos_days_20"]
     log("flow")
-    ep = earnings_leg_panel(inp.earnings, [d.strftime("%Y-%m-%d") for d in inp.days])
+    ep = earnings_leg_panel(inp.earnings, [d.strftime("%Y-%m-%d") for d in inp.days], avail_col="avail_date")  # legacy-asof: 라이브 엔진 전략 정의 그대로(known_date 전환은 새 사전등록)
     out["pead_rank"] = pead_rank_panel(ep, uni)
     out.update(earnings_panels_ga(inp.earnings, inp.shares, c, inp.raw_close, inp.days, c.columns))
     log("pead")

@@ -308,11 +308,11 @@ def main() -> int:
     con.close()
     prices["date"] = prices["date"].astype(str)
     dates = sorted(prices["date"].unique())
-    yoy = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates)
+    yoy = earnings_yoy_panel(ea.dropna(subset=["yoy"]), dates, avail_col="avail_date")  # legacy-asof: PEAD 기록 재현(입력 CSV 의 avail_date)
     # Pure PEAD (--no-value) needs only earnings + prices; the value blend adds a
     # market-cap (shares) dependency for marginal benefit on the long-only form.
-    sig = None if args.no_value else combined_signal(
-        ea, market_cap_panel(prices, shares), dates, value_weight=args.value_weight)
+    sig = None if args.no_value else combined_signal(  # legacy-asof: PEAD 기록 재현(입력 CSV 의 avail_date)
+        ea, market_cap_panel(prices, shares), dates, value_weight=args.value_weight, avail_col="avail_date")
     if args.staggered and not args.market_neutral:
         _, s = staggered_backtest(
             prices, yoy, signal_panel=sig, horizon=args.horizon, step=args.step,

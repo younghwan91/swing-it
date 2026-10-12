@@ -532,7 +532,7 @@ def test_build_signal_panels_matches_research_assembly():
     pd.testing.assert_frame_equal(got["contraction_low"], contraction_low_level(p.low, 10))
     fl = flow_leg(inp.supply, index=p.days, columns=p.close.columns, weight=p.trade_value)
     pd.testing.assert_frame_equal(got["F"], fl["F"])
-    ep = earnings_leg_panel(inp.earnings, [d.strftime("%Y-%m-%d") for d in p.days])
+    ep = earnings_leg_panel(inp.earnings, [d.strftime("%Y-%m-%d") for d in p.days], avail_col="avail_date")
     di = p.days.get_indexer(pd.to_datetime(ep["date"]))
     ci = p.close.columns.get_indexer(ep["code"])
     elig = h5.to_numpy()[di, ci]

@@ -36,7 +36,7 @@ def test_restatement_is_invisible_before_it_was_filed():
         ("A", "2020Q1", "2020-05-15", "2020-05-15", 0.10),   # 최초 보고
         ("A", "2020Q1", "2020-05-15", "2024-03-01", 0.99),   # 4년 뒤 정정
     )
-    p = earnings_yoy_panel(ea, DATES, knowledge_col=KN)
+    p = earnings_yoy_panel(ea, DATES, knowledge_col=KN, avail_col="avail_date")
     assert _at(p, "2022-06-01") == 0.10, "정정 이전 시점은 최초 보고치여야 한다"
     assert _at(p, "2025-06-01") == 0.99, "정정 이후 시점은 정정본이어야 한다"
 
@@ -44,8 +44,8 @@ def test_restatement_is_invisible_before_it_was_filed():
 def test_without_knowledge_col_behavior_is_unchanged():
     """기본 경로는 건드리지 않는다 — 발표 수치·패리티 테스트가 여기 고정돼 있다."""
     ea = _rows(("A", "2020Q1", "2020-05-15", "2020-05-15", 0.10))
-    a = earnings_yoy_panel(ea[["code", "avail_date", "yoy"]], DATES)
-    b = earnings_yoy_panel(ea, DATES, knowledge_col=KN)
+    a = earnings_yoy_panel(ea[["code", "avail_date", "yoy"]], DATES, avail_col="avail_date")
+    b = earnings_yoy_panel(ea, DATES, knowledge_col=KN, avail_col="avail_date")
     pd.testing.assert_frame_equal(a, b)
 
 
@@ -60,7 +60,7 @@ def test_newer_period_wins_over_a_later_restatement_of_an_old_one():
         ("A", "2024Q4", "2025-03-15", "2025-03-15", 0.50),   # 최신 분기
         ("A", "2020Q1", "2020-05-15", "2025-06-01", 0.99),   # 그 뒤 옛 분기 정정
     )
-    p = earnings_yoy_panel(ea, DATES, knowledge_col=KN)
+    p = earnings_yoy_panel(ea, DATES, knowledge_col=KN, avail_col="avail_date")
     assert _at(p, "2026-06-01") == 0.50, "옛 분기의 정정본이 최신 분기를 밀어내면 안 된다"
 
 
@@ -68,7 +68,7 @@ def test_late_collected_filing_is_not_usable_before_collection():
     """공시일과 수집일이 다르면 '알게 된 날' 이후부터만 쓸 수 있다."""
     ea = _rows(("A", "2020Q1", "2020-05-15", "2022-09-01", 0.10))
     p = earnings_yoy_panel(ea, ["2020-06-01", "2021-06-01", "2023-06-01"],
-                           knowledge_col=KN)
+                           knowledge_col=KN, avail_col="avail_date")
     assert pd.isna(p[(p["date"] == "2021-06-01")]["yoy"].iloc[0])
     assert _at(p, "2023-06-01") == 0.10
 
@@ -79,7 +79,7 @@ def test_age_days_measures_filing_age_not_restatement_age():
         ("A", "2020Q1", "2020-05-15", "2020-05-15", 0.10),
         ("A", "2020Q1", "2020-05-15", "2024-03-01", 0.99),
     )
-    p = earnings_yoy_panel(ea, ["2024-06-01"], knowledge_col=KN)
+    p = earnings_yoy_panel(ea, ["2024-06-01"], knowledge_col=KN, avail_col="avail_date")
     row = p[p["date"] == "2024-06-01"].iloc[0]
     assert row["yoy"] == 0.99
     expected = (pd.Timestamp("2024-06-01") - pd.Timestamp("2020-05-15")).days
@@ -92,7 +92,7 @@ def test_multiple_codes_stay_independent():
         ("A", "2020Q1", "2020-05-15", "2024-03-01", 0.99),
         ("B", "2020Q1", "2020-05-15", "2020-05-15", 0.20),
     )
-    p = earnings_yoy_panel(ea, DATES, knowledge_col=KN)
+    p = earnings_yoy_panel(ea, DATES, knowledge_col=KN, avail_col="avail_date")
     assert _at(p, "2022-06-01", "A") == 0.10
     assert _at(p, "2025-06-01", "A") == 0.99
     assert _at(p, "2022-06-01", "B") == 0.20
@@ -106,7 +106,7 @@ def test_three_versions_pick_the_one_current_at_each_date():
         ("A", "2020Q1", "2020-05-15", "2025-01-01", 0.99),
     )
     p = earnings_yoy_panel(ea, ["2020-06-01", "2023-06-01", "2026-06-01"],
-                           knowledge_col=KN)
+                           knowledge_col=KN, avail_col="avail_date")
     assert _at(p, "2020-06-01") == 0.10
     assert _at(p, "2023-06-01") == 0.50
     assert _at(p, "2026-06-01") == 0.99
@@ -129,8 +129,8 @@ def test_restatement_does_not_disturb_other_quarters():
         ignore_index=True)
     dates = ["2020-06-01", "2021-06-01", "2024-06-01", "2026-06-01"]
 
-    a = earnings_yoy_panel(base, dates, knowledge_col=KN)
-    b = earnings_yoy_panel(restated, dates, knowledge_col=KN)
+    a = earnings_yoy_panel(base, dates, knowledge_col=KN, avail_col="avail_date")
+    b = earnings_yoy_panel(restated, dates, knowledge_col=KN, avail_col="avail_date")
     pd.testing.assert_frame_equal(
         a.sort_values(["code", "date"]).reset_index(drop=True),
         b.sort_values(["code", "date"]).reset_index(drop=True),
@@ -143,6 +143,6 @@ def test_restatement_of_the_newest_quarter_flips_on_its_knowledge_date():
         ("A", "2026Q1", "2026-05-15", "2026-05-15", 1.00),
         ("A", "2026Q1", "2026-05-15", "2026-07-01", 9.99),
     )
-    p = earnings_yoy_panel(ea, ["2026-06-30", "2026-07-02"], knowledge_col=KN)
+    p = earnings_yoy_panel(ea, ["2026-06-30", "2026-07-02"], knowledge_col=KN, avail_col="avail_date")
     assert _at(p, "2026-06-30") == 1.00
     assert _at(p, "2026-07-02") == 9.99

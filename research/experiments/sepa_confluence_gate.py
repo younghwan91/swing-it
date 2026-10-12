@@ -317,7 +317,7 @@ class Data:
         ea = read_earnings(con, all_versions=True, cols=("code", "period", "avail_date", "knowledge_date", "netinc",
                                                        "netinc_prior", "revenue", "revenue_prior", "op_income",
                                                        "op_income_prior"))
-        ep = earnings_leg_panel(ea, [d.strftime("%Y-%m-%d") for d in p.days])
+        ep = earnings_leg_panel(ea, [d.strftime("%Y-%m-%d") for d in p.days], avail_col="avail_date")  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
         del ea
         di = p.days.get_indexer(pd.to_datetime(ep["date"]))
         ci = p.close.columns.get_indexer(ep["code"])

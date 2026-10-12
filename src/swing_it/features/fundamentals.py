@@ -63,7 +63,7 @@ def earnings_yoy_panel(
     earnings: pd.DataFrame,
     trading_dates: list[str],
     *,
-    avail_col: str = "avail_date",
+    avail_col: str,
     value_col: str = "yoy",
     knowledge_col: str | None = None,
     key_cols: tuple[str, ...] = ("code", "period"),
@@ -81,7 +81,9 @@ def earnings_yoy_panel(
             ``YYYY-MM-DD`` — both are normalized to datetime.
         trading_dates: Sorted trading dates (``YYYY-MM-DD``) to build the panel
             over — typically ``sorted(daily_bars["date"].unique())``.
-        avail_col: Availability-date column name.
+        avail_col: Availability-date column name — **필수(기본값 없음, 린트 (l))**. ``"avail_date"`` 는 제출 마감일 고정값이라
+            정기보고서 17.7% 가 그보다 늦게 나왔다(미래 정보). 새 코드는 ``read_earnings(with_known=True)`` 의 ``"known_date"``;
+            ``"avail_date"`` 를 넘기는 호출부는 ``# legacy-asof: <이유>`` 를 단다.
         value_col: Signal column name to forward-fill from each filing.
         knowledge_col: 정정공시 버전 컬럼(보통 ``knowledge_date``). 주면 **이중
             시간축(bitemporal)** 으로 판단한다 — 어느 분기가 공시됐나(``avail_col``)와
@@ -179,7 +181,7 @@ def earnings_yield_panel(
     annual_earnings: pd.DataFrame,
     market_cap: pd.DataFrame,
     *,
-    avail_col: str = "avail_date",
+    avail_col: str,
     earnings_col: str = "netinc",
 ) -> pd.DataFrame:
     """Lookahead-safe (code × date) earnings yield E/P = annual net income / market cap.
@@ -253,6 +255,7 @@ def combined_signal(
     trading_dates: list[str],
     *,
     value_weight: float = 0.25,
+    avail_col: str,
 ) -> pd.DataFrame:
     """The validated tradeable signal: PEAD (YoY growth) ⊕ value (E/P), blended.
 
@@ -271,13 +274,14 @@ def combined_signal(
         value_weight: Weight on the E/P value leg (growth leg gets the rest).
             0.25 is the validated default — enough to lift regime persistence
             without diluting the growth signal's net Sharpe.
+        avail_col: 실적 as-of 열 — 필수(:func:`earnings_yoy_panel` 참조).
 
     Returns:
         Long ``code``/``date``/``signal`` DataFrame ready for ``pead_backtest``.
     """
-    yoy = earnings_yoy_panel(earnings.dropna(subset=["yoy"]), trading_dates)
+    yoy = earnings_yoy_panel(earnings.dropna(subset=["yoy"]), trading_dates, avail_col=avail_col)
     annual = earnings[earnings["period"].astype(str).str.endswith("Q4")]
-    ep = earnings_yield_panel(annual, market_cap)
+    ep = earnings_yield_panel(annual, market_cap, avail_col=avail_col)
     return blend_rank([yoy, ep], [1.0 - value_weight, value_weight], value_cols=["yoy", "ep"])
 
 

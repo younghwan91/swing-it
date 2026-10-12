@@ -172,8 +172,8 @@ def pead_entries(prices: pd.DataFrame, earnings: pd.DataFrame, p: dict) -> list[
     exactly as pead_refinement does.
     """
     dates = p["dates"]
-    yoy_panel = earnings_yoy_panel(earnings.dropna(subset=["yoy"]), dates,
-                                   knowledge_col="knowledge_date")
+    yoy_panel = earnings_yoy_panel(earnings.dropna(subset=["yoy"]), dates,  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
+                                   knowledge_col="knowledge_date", avail_col="avail_date")
     yoy = (yoy_panel.pivot_table(index="date", columns="code", values="yoy", aggfunc="first")
            .reindex(index=dates))
     adv = p["adv"]

@@ -235,3 +235,29 @@ def test_read_supply_demand_window_scopes_the_delisted_expectation(tmp_path):
                             start="2026-08-26", end="2026-08-26")
     assert list(df["code"]) == ["005930"]
     con.close()
+
+
+def test_read_earnings_with_known_dates(tmp_path):
+    """known_date = max(avail_date, 정기보고서 첫 rcept_dt) 다음 거래일, event_date = 첫 공시 다음 거래일 — eps_asof 와 같은 규칙."""
+    import pandas as pd
+
+    from swing_it.storage import read_earnings
+
+    con = connect(tmp_path / "t.db")
+    con.executemany("INSERT INTO earnings(code, period, avail_date, knowledge_date, netinc, netinc_prior) VALUES (?,?,?,?,?,?)",
+                    [("A", "2024Q1", "2024-05-15", "2024-05-20", 10, 5),     # 정기보고서가 마감일보다 늦다(5/17 금)
+                     ("B", "2024Q1", "2024-05-15", "2024-05-20", 3, 4),      # 공시 기록 없음 → avail_date 로 돌아간다
+                     ("C", "2024Q1", "2024-05-15", "2024-05-20", 1, 1)])     # 잠정실적이 먼저(4/30)
+    con.executemany("INSERT INTO earnings_disclosures(code, period, kind, rcept_dt) VALUES (?,?,?,?)",
+                    [("A", "2024Q1", "periodic", "2024-05-17"), ("A", "2024Q1", "periodic", "2024-05-30"),
+                     ("C", "2024Q1", "prelim", "2024-04-30"), ("C", "2024Q1", "periodic", "2024-05-14")])
+    con.commit()
+    cal = pd.DatetimeIndex(["2024-04-30", "2024-05-02", "2024-05-14", "2024-05-16", "2024-05-17", "2024-05-20", "2024-05-21"])
+    df = read_earnings(con, cols=("code", "period", "netinc"), with_known=True, calendar=cal).set_index("code")
+    assert list(df.columns) == ["period", "netinc", "known_date", "event_date"]       # 안에서 읽은 avail_date 는 버린다
+    assert df.loc["A", "known_date"] == pd.Timestamp("2024-05-20")      # max(5/15, 5/17) 다음 거래일(주말 건너뜀)
+    assert df.loc["A", "event_date"] == pd.Timestamp("2024-05-20")
+    assert df.loc["B", "known_date"] == pd.Timestamp("2024-05-16")      # avail_date 5/15 다음 거래일
+    assert pd.isna(df.loc["B", "event_date"])
+    assert df.loc["C", "known_date"] == pd.Timestamp("2024-05-16")      # max(5/15, 5/14) = 5/15
+    assert df.loc["C", "event_date"] == pd.Timestamp("2024-05-02")      # 잠정 4/30 다음 거래일

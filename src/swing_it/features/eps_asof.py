@@ -2,6 +2,9 @@
 
 ``eps_ok(codes, days, ci, s, con)`` → 사건 (종목 ci, 신호 행 s) 마다 그 시점 최신 분기 순이익 > 전년 같은 분기 ∧ > 0(사용자 고정 규칙).
 earnings.avail_date 는 제출 마감일 기반이라 정기보고서의 18% 가 그보다 늦게 나왔다(미래 정보) — 이 함수가 그것을 막는다.
+
+2026-10-12 ``research/signals/eps_asof.py`` 에서 옮겼다(내용 그대로 — leader21 모의매매 팔이 쓴다). 같은 규칙의 긴 표판은 정문
+:func:`swing_it.storage.read_earnings` 의 ``with_known=True``(``known_date``·``event_date`` 열)다.
 """
 from __future__ import annotations
 

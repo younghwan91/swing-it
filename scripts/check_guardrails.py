@@ -18,6 +18,8 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (h) 코드 없는 판정 — (b)의 역방향. VERDICT 에 러너가 등록·실재하거나 재현불가 선언 필요.
   (j) 애프터마켓 오염 열 — ``supply_demand`` 의 close·flu_rt·acc_trde_qty 를 정문 밖에서 직접 SELECT 하면 실패.
   (k) 주식수 as-of — ``shares_outstanding_history`` 를 정문(storage.read_shares) 밖에서 직접 SELECT 하면 실패.
+  (l) 실적 as-of — ``avail_date`` 를 as-of 키로 쓰는 자리(``avail_col="avail_date"``·merge_asof 키)는 ``# legacy-asof: <이유>``
+      표시가 있어야 하고, ``avail_col`` 매개변수는 기본값을 가질 수 없다.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -415,6 +417,64 @@ def check_no_raw_shares_select() -> list[str]:
                      "as-of 키는 coalesce(knowledge_date, date)(dart 행은 기준일보다 석 달쯤 늦게 알려진다), 0 이하는 결측")
 
 
+# (l) earnings.avail_date 는 제출 마감일 고정값이라 정기보고서 17.7% 가 그보다 늦게 공시됐다 — as-of 키로 쓰면 미래 정보다(정정 G19-1).
+# 올바른 키는 read_earnings(with_known=True) 의 known_date(max(avail_date, 정기 첫 rcept_dt) 다음 거래일). 옛 숫자를 재현해야 하는
+# 자리는 막지 않고 **표시**를 요구한다 — 표시 없는 새 사용이 조용히 들어오는 것을 막는 게 목적이다. 기본값 avail_col="avail_date" 는
+# 표시 없이 옛 키를 퍼뜨리는 통로라 금지한다. tests/ 는 그 동작 자체를 검사하므로 (l1) 표시 요구에서 뺀다.
+_LEGACY_ASOF = "# legacy-asof:"
+_ASOF_EXEMPT = {
+    "src/swing_it/storage.py",            # 정문(known_date 를 만든다)
+    "src/swing_it/features/eps_asof.py",  # 같은 규칙의 배열판(max(avail_date, rcept_dt))
+    "scripts/check_guardrails.py",
+    "tests/test_check_guardrails.py",
+}
+
+
+def _is_str(node, value: str) -> bool:
+    return isinstance(node, ast.Constant) and node.value == value
+
+
+def check_avail_date_asof() -> list[str]:
+    """(l) avail_date as-of 키 사용엔 # legacy-asof: 표시, avail_col 기본값 금지."""
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _ASOF_EXEMPT or rel.startswith(".venv/"):
+            continue
+        text = p.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as exc:
+            out.append(f"[asof] {rel} — 파싱 실패: {exc}")
+            continue
+        lines = text.splitlines()
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = n.args
+                pos = a.posonlyargs + a.args
+                pairs = list(zip(pos[len(pos) - len(a.defaults):], a.defaults)) + list(zip(a.kwonlyargs, a.kw_defaults))
+                for arg, d in pairs:
+                    if arg.arg == "avail_col" and d is not None:
+                        out.append(f"[asof] {rel}:{n.lineno} — {n.name}() 의 avail_col 에 기본값이 있다. 필수로 두고 호출부가 "
+                                   f"고르게 하라(avail_date 는 미래 정보 — read_earnings(with_known=True) 의 known_date).")
+            if rel.startswith("tests/") or not isinstance(n, ast.Call):
+                continue
+            kw = {k.arg: k.value for k in n.keywords if k.arg}
+            f = n.func
+            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+            hit = _is_str(kw.get("avail_col"), "avail_date") or (
+                name == "merge_asof" and any(_is_str(kw.get(k), "avail_date") for k in ("on", "left_on", "right_on")))
+            if not hit:
+                continue
+            span = lines[max(n.lineno - 2, 0): n.end_lineno]
+            if any(_LEGACY_ASOF in ln for ln in span):
+                continue
+            out.append(f"[asof] {rel}:{n.lineno} — avail_date 를 as-of 키로 썼다(제출 마감일 고정값 — 정기보고서 17.7% 가 더 늦게 "
+                       f"공시). read_earnings(with_known=True) 의 known_date 를 쓰거나, 옛 숫자 재현이면 "
+                       f"'{_LEGACY_ASOF} <이유>' 를 단다.")
+    return out
+
+
 def check_no_survivor_only_join() -> list[str]:
     """(g2) supply_demand 를 상장 마스터(stocks)와 INNER JOIN 하면 위반."""
     out = []
@@ -551,6 +611,7 @@ def main() -> int:
     violations += check_no_survivor_only_join()
     violations += check_no_raw_supply_close()
     violations += check_no_raw_shares_select()
+    violations += check_avail_date_asof()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

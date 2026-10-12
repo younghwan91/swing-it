@@ -181,6 +181,16 @@ CREATE TABLE IF NOT EXISTS earnings (
 );
 CREATE INDEX IF NOT EXISTS idx_earnings_avail_date ON earnings(avail_date);
 CREATE INDEX IF NOT EXISTS idx_earnings_asof ON earnings(code, period, knowledge_date DESC);
+-- DART 공시 목록(quant-airflow). kind = periodic(정기보고서)·prelim(잠정실적)·pl_change(손익구조 변경).
+-- 실적을 **실제로 알게 된 날**은 earnings.avail_date(제출 마감일 고정값)가 아니라 여기 rcept_dt 다 — read_earnings(with_known=True).
+CREATE TABLE IF NOT EXISTS earnings_disclosures (
+    code      TEXT NOT NULL,
+    period    TEXT NOT NULL,
+    kind      TEXT NOT NULL,
+    rcept_dt  TEXT NOT NULL,
+    rcept_no  TEXT,
+    report_nm TEXT
+);
 CREATE TABLE IF NOT EXISTS consensus (
     code         TEXT NOT NULL,
     date         TEXT NOT NULL,   -- 스냅샷 수집일 (오늘)
@@ -349,7 +359,8 @@ _EARNINGS_READ_COLS = (
 
 
 def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None,
-                  all_versions: bool = False, avail_from: "str | None" = None, parse_dates: bool = False):
+                  all_versions: bool = False, avail_from: "str | None" = None, parse_dates: bool = False,
+                  with_known: bool = False, calendar: "Any | None" = None):
     """Earnings as a long frame with **one row per (code, period)** — as-of ``asof``.
 
     ``earnings`` is versioned: a DART restatement lands as a new row keyed by
@@ -375,11 +386,24 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
             조용한 룩어헤드가 된다 — 터지지 않고 성과만 좋아지는 종류다.
         avail_from: ``all_versions`` 와 함께 — ``avail_date >= avail_from`` 행만(SQL 에서 자른다).
         parse_dates: ``avail_date`` 를 datetime64 로(``pd.read_sql(parse_dates=[...])`` 와 같은 경로).
+        with_known: **실적 as-of 열 두 개**를 덧붙인다(:func:`_attach_known_dates`) —
+            ``known_date`` = max(avail_date, 그 분기 정기보고서 첫 rcept_dt) **다음 거래일**(값을 쓸 수 있는 첫날),
+            ``event_date`` = 그 분기 공시(잠정·정정·정기 아무거나) 첫 rcept_dt 다음 거래일(서프라이즈·PEAD 사건일).
+            ``avail_date`` 는 제출 마감일 고정값이라 정기보고서 17.7% 가 그보다 늦게 나왔다 — as-of 키로 쓰면 미래 정보다
+            (정정 G19-1). 2019-02-28 전에는 정기보고서 날짜가 없어 known 은 avail_date 로 돌아가고 event_date 는 NaT.
+        calendar: ``with_known`` 의 거래일 달력(DatetimeIndex). 없으면 ``daily_bars_adjusted`` 의 날짜.
 
     Returns a pandas DataFrame.
     """
     import pandas as pd
 
+    if with_known:
+        want = tuple(cols or _EARNINGS_READ_COLS)
+        need = tuple(c for c in ("code", "period", "avail_date") if c not in want)
+        df = read_earnings(con, asof=asof, cols=want + need, all_versions=all_versions, avail_from=avail_from,
+                           parse_dates=parse_dates)
+        df = _attach_known_dates(con, df, calendar=calendar)
+        return df.drop(columns=list(need)) if need else df
     use = tuple(cols or _EARNINGS_READ_COLS)
     sel = ", ".join(use)
     pdates = ["avail_date"] if parse_dates and "avail_date" in use else None
@@ -410,6 +434,41 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
         )
         params = (asof,) if asof else ()
     return pd.read_sql_query(sql, con, params=params or None, parse_dates=pdates)
+
+
+def _attach_known_dates(con: Any, df, *, calendar=None):
+    """``known_date``·``event_date`` 열(:func:`read_earnings` ``with_known``). 규칙은 :mod:`swing_it.features.eps_asof` 와 같다."""
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    disc = pd.read_sql_query("SELECT code, period, kind, rcept_dt FROM earnings_disclosures", con)
+    disc["rcept_dt"] = pd.to_datetime(disc["rcept_dt"].astype(str))
+    per = (disc[disc["kind"] == "periodic"].groupby(["code", "period"])["rcept_dt"].min().rename("_per"))
+    ev = disc.groupby(["code", "period"])["rcept_dt"].min().rename("_ev")
+    if calendar is None:
+        cur = con.cursor()
+        cur.execute(f"SELECT DISTINCT date FROM {PRICE_TABLE} ORDER BY date")  # noqa: S608 — 모듈 상수
+        calendar = [r[0] for r in cur.fetchall()]
+    days = pd.DatetimeIndex(pd.to_datetime([str(d)[:10] for d in calendar])).sort_values()
+    out = df.copy()
+    key = pd.MultiIndex.from_arrays([out["code"].astype(str), out["period"].astype(str)])
+    per_dt = per.reindex(key).to_numpy()
+    ev_dt = ev.reindex(key).to_numpy()
+    avail = pd.to_datetime(out["avail_date"].astype(str).replace({"None": None, "nan": None, "NaT": None})).to_numpy()
+    known = pd.DataFrame({"a": avail, "p": per_dt}).max(axis=1).to_numpy()
+
+    def nxt(x):
+        x = np.asarray(x, dtype="datetime64[ns]")
+        ok = ~np.isnat(x)
+        i = days.searchsorted(x[ok], side="right")
+        res = np.full(len(x), np.datetime64("NaT"), dtype="datetime64[ns]")
+        inside = i < len(days)
+        res[np.flatnonzero(ok)[inside]] = days.to_numpy()[i[inside]]
+        return res
+
+    out["known_date"] = nxt(known)
+    out["event_date"] = nxt(ev_dt)
+    return out
 
 
 PRICE_TABLE = "daily_bars_adjusted"   # 분할조정. 백테스트는 원자료(daily_bars) 금지.

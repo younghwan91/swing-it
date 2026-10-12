@@ -495,7 +495,7 @@ class Ctx:
         self.br = self.D.feats["breadth"].reindex(index=self.days, columns=self.codes).to_numpy(float)
         ea = read_earnings(self.con, all_versions=True, cols=("code", "period", "avail_date", "knowledge_date", "netinc",
                                                              "netinc_prior", "revenue", "revenue_prior"))
-        self.est = V.standalone_quarter_states(ea)
+        self.est = V.standalone_quarter_states(ea, avail_col="avail_date")  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
         del ea
         sd = read_supply_demand(self.con, session="raw", cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
                                 start="2016-09-01")

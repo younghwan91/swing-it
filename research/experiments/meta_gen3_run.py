@@ -268,7 +268,7 @@ def build_inputs(path: str, t0: float) -> dict:
     h5 = universe_mask(p.close, p.trade_value, lmeta, raw_close=raw_close, adv_floor=cvr.PEAD_POP_FLOOR)
     tt = trend_template(p.close, high=p.high, low=p.low)
     _log("H5·추세 템플릿", t0)
-    ep = earnings_leg_panel(eps_adjusted_earnings(ea, shares, p.close, raw_close), [d.strftime("%Y-%m-%d") for d in days])
+    ep = earnings_leg_panel(eps_adjusted_earnings(ea, shares, p.close, raw_close), [d.strftime("%Y-%m-%d") for d in days], avail_col="avail_date")  # legacy-asof: 사전등록 재현 경로 — 옛 as-of 그대로
     pead = pead_rank_panel(ep, h5)
     di = days.get_indexer(pd.to_datetime(ep["date"]))
     ci = codes.get_indexer(ep["code"])

@@ -446,3 +446,50 @@ def f(cur):
     cur.execute("select column_name from information_schema.columns where table_name = 'shares_outstanding_history'")
 '''
     assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_shares_select") == []
+
+
+# --- (l) 실적 as-of 키 ------------------------------------------------------------------------------------
+
+_AVAIL_ASOF_USES = '''
+import pandas as pd
+
+def a(ea, dates):
+    return earnings_yoy_panel(ea, dates, avail_col="avail_date")
+
+def b(ev, ea):
+    return pd.merge_asof(ev, ea, left_on="date", right_on="avail_date", by="code")
+
+def c(ea, dates):
+    return earnings_leg_panel(ea, dates,
+                              avail_col="avail_date")
+
+def leaky(ea, *, avail_col="avail_date"):
+    return ea
+'''
+
+_AVAIL_ASOF_OK = '''
+def a(ea, dates):
+    return earnings_yoy_panel(ea, dates, avail_col="known_date")
+
+def b(ea, dates):  # legacy-asof: 18세대 기록 재현
+    return earnings_yoy_panel(ea, dates,
+                              avail_col="avail_date")
+
+def c(ea, dates):
+    return earnings_leg_panel(ea, dates, avail_col="avail_date")  # legacy-asof: 라이브 엔진 사전등록 그대로
+
+def d(ea, *, avail_col):
+    return ea
+'''
+
+
+def test_rule_l_catches_unmarked_avail_date_asof(lint, tmp_path, monkeypatch):
+    """표시 없는 avail_date as-of 키(키워드·merge_asof·여러 줄)와 avail_col 기본값을 잡는다."""
+    out = _scan(lint, tmp_path, monkeypatch, _AVAIL_ASOF_USES, "check_avail_date_asof")
+    assert len(out) == 4, out
+    assert sum("기본값" in o for o in out) == 1
+    assert all("[asof]" in o for o in out)
+
+
+def test_rule_l_accepts_known_date_and_marked_legacy(lint, tmp_path, monkeypatch):
+    assert _scan(lint, tmp_path, monkeypatch, _AVAIL_ASOF_OK, "check_avail_date_asof") == []

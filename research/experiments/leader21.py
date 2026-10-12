@@ -53,7 +53,7 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
 def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,  # noqa: E741
           raw_close: bool = False) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
-    from research.signals.eps_asof import eps_ok
+    from swing_it.features.eps_asof import eps_ok
     from swing_it.storage import read_prices
     tv = read_prices(con, session="raw", cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
     sess = None
@@ -121,7 +121,7 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
 
 def _extras(days, codes, C, ma, uni, rs, cwi, regime_on, cand, con) -> dict:
     """22세대 팔(결과 전 고정): 국면 변형 · 업종(WICS) 강도 · 실적 성장."""
-    from research.signals.eps_asof import eps_yoy
+    from swing_it.features.eps_asof import eps_yoy
     ma50i = pd.Series(cwi).rolling(50, min_periods=50).mean().to_numpy()
     regime_r50 = regime_on | (cwi >= ma50i)                                   # 200일선 위 ∨ 50일선 회복(V자 재진입)
     with np.errstate(invalid="ignore"):
