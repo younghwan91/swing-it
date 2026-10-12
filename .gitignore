@@ -38,3 +38,6 @@ research/bo_best_params.json
 # 에이전트용 레포 복사본 — 커밋 대상이 아니다
 .claude/worktrees/
 research/logs/sepa_explore/ga2/TRIALS.jsonl
+
+# Orca 앱 드롭(책 PDF 등 저작권 자료가 들어온 적 있다) — 커밋 대상이 아니다
+.orca/
