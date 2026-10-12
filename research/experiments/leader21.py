@@ -81,11 +81,9 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
         from swing_it.krx_session import read_raw_close, split_consistent_cap
         rc = read_raw_close(con, start="2016-08-01")
         rcw = rc.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
-        px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
-        if sess is not None:
-            px = patch_prices(px, sess, adjusted=False)
-        adw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
-        capw, n_bad = split_consistent_cap(rcw, adw, sh, asof="knowledge_date" if pit_shares else "date")
+        src = rc.pivot_table(index="date", columns="code", values="raw_src", aggfunc="last").reindex(index=days, columns=codes)
+        adw = pd.DataFrame(C.T, index=days, columns=codes)                               # 연속 수정 종가(이 build 의 C)
+        capw, n_bad = split_consistent_cap(rcw, adw, sh, asof="knowledge_date" if pit_shares else "date", raw_src=src)
         cap = capw.to_numpy().T
     else:                                           # 21~26세대 기록 재현용(결함: 소급 수정 가격 × 그 시점 주식수)
         px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])

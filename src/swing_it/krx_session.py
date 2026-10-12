@@ -163,38 +163,48 @@ def read_raw_close(con: Any, *, start: str, end: "str | None" = None) -> pd.Data
     return out
 
 
-def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str = "date") -> "tuple[pd.DataFrame, int]":
-    """시총 = 원 종가 × **분할 일관 주식수**(정정 G28-4).
+def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str = "date",
+                         raw_src: "pd.DataFrame | None" = None) -> "tuple[pd.DataFrame, int]":
+    """시총 = 원 종가 × **분할 일관 주식수**(정정 G28-4·5, 검증 30차 D2 방식).
 
     주식수 표는 주로 연말 DART 행이라 분할·병합 뒤 수개월 늦게 바뀐다 — 원 종가 × 그 주식수는 그 사이 분할 배수만큼 틀린다(삼성전자 2018-05~12
-    시총 순위 36~38). ``daily_bars.close``(``adj``)는 분할을 소급 반영한 가격이므로 f = adj / raw 가 그날의 누적 분할 배수다. 주식수 행(그 행의
-    ``date`` = 집계 시점)을 f 로 나눠 '현재 기준 주식수' 로 바꾸면 분할에 연속이고, ``asof`` 열 날짜부터 앞으로 채운 뒤 시총 = adj × 현재 기준 주식수
-    = raw × (f_t / f_d) × 주식수. 수집 뒤 일어난 분할(daily_bars 가 아직 소급 안 한 것)은 못 잡는다 — 최근 구간은 주간 키움 주식수가 덮는다.
+    시총 순위 36~38). 분할 사건 = 원 가격 일 변동 |log| > 0.4(가격제한 ±30% 밖) 인데 연속 수정 가격(``adj``)과 |log| > 0.3 어긋난 날, 배수 =
+    수정 변동 / 원 변동. 누적 배수 F 로 주식수 행(그 행 ``date`` 시점)을 사건 기준으로 옮긴 뒤 ``asof`` 열부터 앞으로 채우고 F_t 를 곱한다.
+    ``raw_src`` 를 주면 원천이 바뀌는 날(supply_demand ↔ 일봉 대체)은 사건으로 치지 않는다. (f = daily_bars/원 종가 로 배수를 직접 구하는 첫 판은
+    daily_bars 가 수집 구간마다 따로 소급돼 있어 분할을 놓쳤다 — 점검 위반 1,013.)
 
     Args:
-        raw, adj: 날짜 × 종목 넓은 표(같은 색인·열). raw = :func:`read_raw_close`, adj = daily_bars.close(NXT 보정 전후 같은 처리).
+        raw: 원 종가 넓은 표(날짜 × 종목), :func:`read_raw_close`.
+        adj: 같은 색인·열의 연속 수정 종가(daily_bars_adjusted).
         shares: 긴 표 code, date, shares_outstanding(+ ``asof`` 열).
     Returns:
         (시총 넓은 표, 점검 위반 수 = 원 가격 일 변동 30% 안쪽인데 시총이 3배 넘게 뛴 종목-일).
     """
-    f = (adj / raw).where((adj > 0) & (raw > 0))
-    f = f.ffill()
-    sh = shares[(shares["shares_outstanding"] > 0)].copy()
+    rf = raw.ffill()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rr = (rf / rf.shift(1)).to_numpy(float)
+        ra = (adj / adj.shift(1)).to_numpy(float)
+        ev = np.isfinite(rr) & np.isfinite(ra) & (np.abs(np.log(rr)) > 0.4) & (np.abs(np.log(rr / ra)) > 0.3)
+    if raw_src is not None:
+        sd = (raw_src.reindex(index=raw.index, columns=raw.columns) == "supply_demand").to_numpy()
+        ev &= sd & np.vstack([np.zeros((1, sd.shape[1]), bool), sd[:-1]])
+    f = np.where(ev, ra / rr, 1.0)
+    F = np.cumprod(f, axis=0)
+    days, codes = raw.index, raw.columns
+    sh = shares[shares["shares_outstanding"] > 0].copy()
     sh["date"] = pd.to_datetime(sh["date"])
-    sh["k"] = pd.to_datetime(sh[asof]).fillna(sh["date"])
-    days = raw.index
-    pos = np.clip(days.searchsorted(sh["date"].to_numpy(), side="right") - 1, 0, len(days) - 1)
-    fl = f.stack().rename("f").reset_index()
-    fl.columns = ["date_t", "code", "f"]
-    key = pd.DataFrame({"code": sh["code"].to_numpy(), "date_t": days[pos]})
-    fd = key.merge(fl, on=["date_t", "code"], how="left")["f"].to_numpy()
-    sh["s_cb"] = sh["shares_outstanding"].to_numpy(float) / fd
-    sh = sh[np.isfinite(sh["s_cb"]) & (sh["s_cb"] > 0)]
-    S = sh.pivot_table(index="k", columns="code", values="s_cb", aggfunc="last")
-    S = S.reindex(index=S.index.union(days)).sort_index().ffill().reindex(index=days, columns=raw.columns)
-    cap = adj * S
+    sh["k"] = pd.to_datetime(sh[asof]).fillna(sh["date"]) if asof in sh else sh["date"]
+    pos = days.searchsorted(sh["date"].to_numpy(), side="right") - 1
+    ci = codes.get_indexer(sh["code"])
+    ok = (pos >= 0) & (ci >= 0)
+    fb = np.ones(len(sh))
+    fb[ok] = F[pos[ok], ci[ok]]
+    sh["s0"] = sh["shares_outstanding"].to_numpy(float) / fb
+    S = sh.pivot_table(index="k", columns="code", values="s0", aggfunc="last")
+    S = S.reindex(index=S.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
+    cap = raw * S * F
     with np.errstate(divide="ignore", invalid="ignore"):
         jump = (cap / cap.shift(1)).abs()
-        rr = (raw / raw.shift(1)).abs()
-    bad = int((((jump > 3) | (jump < 1 / 3)) & (rr < 1.3) & (rr > 1 / 1.3)).sum().sum())
+        r1 = (raw / raw.shift(1)).abs()
+    bad = int((((jump > 3) | (jump < 1 / 3)) & (r1 < 1.3) & (r1 > 1 / 1.3)).sum().sum())
     return cap, bad

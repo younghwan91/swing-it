@@ -86,7 +86,7 @@ def test_split_consistent_cap_bridges_stale_shares():
     from swing_it.krx_session import split_consistent_cap
     days = pd.DatetimeIndex(["2018-04-30", "2018-05-04", "2018-12-28"])
     raw = pd.DataFrame({"S": [2_500_000.0, 51_900.0, 38_700.0]}, index=days)          # 5/4 50:1 분할
-    adj = pd.DataFrame({"S": [50_000.0, 51_900.0, 38_700.0]}, index=days)              # 소급 수정 가격
+    adj = pd.DataFrame({"S": [50_000.0, 51_900.0, 38_700.0]}, index=days)              # 연속 수정 가격
     sh = pd.DataFrame({"code": ["S"], "date": ["2017-12-31"], "shares_outstanding": [129_000_000]})   # 분할 전 주식수(늦게 바뀜)
     sh = pd.concat([sh, pd.DataFrame({"code": ["S"], "date": ["2018-04-30"], "shares_outstanding": [129_000_000]})])
     cap, bad = split_consistent_cap(raw, adj, sh)
