@@ -54,11 +54,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", default="leader_A")
     ap.add_argument("--ledger", default=LEDGER)
+    ap.add_argument("--legacy-close", action="store_true", help="정정 G28-3 전 결함 가격(daily_bars.close)으로 시총 — 비교용만")
     a = ap.parse_args()
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
     days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)
-    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True)
+    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close)
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
     kx = pd.read_sql("select date, close from sector_index where code='001' order by date", con, parse_dates=["date"]).set_index("date")["close"]
     kma = kx.rolling(200, min_periods=200).mean()
@@ -81,7 +82,7 @@ def main() -> None:
     import subprocess  # noqa: PLC0415
     sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     row = {"date": st["last_day"], "arm": a.arm, "cfg": cfg, "git": sha, "run_at": pd.Timestamp.now().isoformat(timespec="seconds"),
-           "krx_patched": True, "ret_today": ret_today, "equity_sim": float(st["equity"]),
+           "krx_patched": True, "raw_close": not a.legacy_close, "ret_today": ret_today, "equity_sim": float(st["equity"]),
            "cash_w": float(st["cash"] / st["equity"]), "regime_on": st["regime_on"],
            "positions": {c: {"name": names.get(c, ""), "w": round(float(p["w"]), 4), "units": int(p["units"]),
                              "entry": str(days[p["entry_t"]].date()), "avg": float(p["cost_basis"] / p["qty"]), "last": float(p["last_px"])}

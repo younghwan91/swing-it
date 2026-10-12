@@ -79,7 +79,6 @@ def main() -> None:
     sh["d"] = sh["knowledge_date"].fillna(sh["date"])
     S = sh.pivot_table(index="d", columns="code", values="shares_outstanding", aggfunc="last")
     S = S.reindex(index=S.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
-    first_known = S.notna().idxmax().where(S.notna().any())
     S_bf = S.bfill()                                    # 아직 기록 없는 날 = 첫 기록 뒤채움(건수 보고)
     CAP = R * S_bf
     if a.cap in ("b", "c"):
@@ -87,7 +86,7 @@ def main() -> None:
         CAP = CAP_b if a.cap == "b" else CAP.where(((CAP / CAP_b) < 3) & ((CAP_b / CAP) < 3), CAP_b)
     BF = (S.isna() & S_bf.notna()).to_numpy()
     Cf = C.ffill(limit=10).to_numpy(float)              # 창 안 상폐·거래정지 → 직전 종가(최대 10일)
-    CAPv, TVv, Rv = CAP.to_numpy(float), TV.to_numpy(float), R.to_numpy(float)
+    CAPv, TVv = CAP.to_numpy(float), TV.to_numpy(float)
     name = {**dl.set_index("code")["name"].to_dict(), **stk.set_index("code")["name"].to_dict()}
     mkt = {r.code: {"유가증권": "거래소"}.get(r.market, r.market) for r in dl.itertuples()}
     mkt.update(stk.set_index("code")["market"].to_dict())
