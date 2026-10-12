@@ -90,6 +90,7 @@ def run_arms(D: dict, tag: str, out_dir: str) -> dict:
             if cm == 2.0:
                 m["drop_top5_cagr"], m["top5"] = drop_top(D, cfg, cm, trw, 5)
                 m["drop_top10_cagr"], _ = drop_top(D, cfg, cm, trw, 10)
+                m["drop_scan"] = {k: drop_top(D, cfg, cm, trw, k)[0] for k in range(3, 9)}   # 정정 R29-1: 판정 무관 보고 열
                 em = expo_matched(D, eq)
                 m["expo_mkt_cagr"] = win_metrics(em)["cagr"]
                 mk = pd.Series(np.cumprod(1 + D["cw"]), index=D["days"]).reindex(eq.index)
@@ -101,6 +102,8 @@ def run_arms(D: dict, tag: str, out_dir: str) -> dict:
             res[f"{nm}_{int(cm)}x"] = m
     B = L.benchmarks(D)
     res["bench"] = {k: win_metrics(B[k])["cagr"] for k in B.columns}
+    mc = res["bench"]["market_cw"]
+    res["mkt_multiple_C2"] = res["C_close_2x"]["cagr"] / mc if mc > 0 else float("nan")   # 기록만(2017~23 시장 ≈ 0 → 판정에 안 씀)
     return res
 
 
@@ -118,7 +121,7 @@ def bars(r: dict) -> dict:
 def main() -> None:
     import psycopg2
 
-    from swing_it.krx_session import factor_cap, read_raw_close, split_consistent_cap
+    from swing_it.krx_session import factor_cap, read_raw_close
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", required=True)
     ap.add_argument("--out", required=True)
@@ -184,13 +187,31 @@ def main() -> None:
         return np.where(use[:, None], x, old)
     O2, H2, L2, C2 = pick("open", Op), pick("high", H), pick("low", Lo), np.where(use[:, None], Cn, C)
     DN = L.build(days, codes, O2, H2, L2, C2, TR, cost, mkt, con, raw_close=False)
-    sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
-                     parse_dates=["date", "knowledge_date"])
+    cur.execute("select column_name from information_schema.columns where table_name = 'shares_outstanding_history'")
+    has_orig = "orig_rcept_dt" in {r[0] for r in cur.fetchall()}
+    sh = pd.read_sql("select code, date, shares_outstanding" + (", orig_rcept_dt" if has_orig else "") + " from shares_outstanding_history",
+                     con, parse_dates=["date"] + (["orig_rcept_dt"] if has_orig else []))
     sh = sh[(sh["shares_outstanding"] > 0) & (sh["shares_outstanding"] <= 1e10)]
-    capv2, Fw = factor_cap(raw, pd.DataFrame(C2.T, index=days, columns=codes), sh)
-    capold, _ = split_consistent_cap(raw, pd.DataFrame(C.T, index=days, columns=codes), sh)
-    cap = np.where(use[:, None], capv2.to_numpy().T, capold.to_numpy().T)
+    if has_orig:                                    # 사전등록: 원 정기보고서 접수일 다음 날부터(없는 행은 date)
+        sh["asof"] = pd.to_datetime(sh["orig_rcept_dt"]) + pd.Timedelta(days=1)
+    diag_asof = "orig_rcept_dt+1" if has_orig else "date(≈3개월 미래 정보)"
+    capv2, Fw = factor_cap(raw, pd.DataFrame(C2.T, index=days, columns=codes), sh, asof="asof" if has_orig else "date")
+    cap = np.where(use[:, None], capv2.to_numpy().T, D2["cap"])     # v2 없는 종목 = D2 시총 그대로(검증 29 MINOR)
     DN.update(derive(C2, cap))
+    # 카나리아 3(정정 R29-1, 검증 29 M2): 시총 경로 — 상위 200 자카드(대 D2) 평균 ≥ 0.85 ∧ 시총 점프 위반 ≤ D2
+    w0, w1 = days.searchsorted(pd.Timestamp(WIN[0])), days.searchsorted(pd.Timestamp(WIN[1]))
+    t200n, t200o = DN["crank"][:, w0:w1] <= 200, D2["crank"][:, w0:w1] <= 200
+    jac = float(np.nanmean((t200n & t200o).sum(0) / np.maximum((t200n | t200o).sum(0), 1)))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rw_ = raw.to_numpy(float).T
+        jump, r1 = DN["cap"][:, 1:] / DN["cap"][:, :-1], rw_[:, 1:] / rw_[:, :-1]
+        n_bad = int((((jump > 3) | (jump < 1 / 3)) & (r1 < 1.3) & (r1 > 1 / 1.3)).sum())
+    can.update(cap_jaccard_vs_D2=jac, cap_jump_bad=n_bad, cap_jump_bad_D2=int(D2["cap_jump_bad"]), shares_asof=diag_asof)
+    can["cap_ok"] = bool(jac >= 0.85 and n_bad <= D2["cap_jump_bad"])
+    print("canary cap", can)
+    json.dump({"canary": can}, open(os.path.join(a.out, "canary.json"), "w"), ensure_ascii=False, indent=1, default=float)
+    if not can["cap_ok"]:
+        sys.exit(3)                                 # 판정 전에 원인 조사(실행 안 함)
     # 진단: corporate_actions 밖 F 변화
     with np.errstate(divide="ignore", invalid="ignore"):
         dF = np.abs(np.log(Fw / Fw.shift(1)))
@@ -198,10 +219,12 @@ def main() -> None:
     st = dF.stack()
     st = st[st > 0.01]
     off = int(sum((c, d) not in evset for d, c in st.index))
-    diag = {"n_codes": len(codes), "v2_codes": int(use.sum()), "fallback_codes": int((~use & (valid.sum(1) > 0)).sum()),
+    diag = {"shares_asof": diag_asof, "n_codes": len(codes), "v2_codes": int(use.sum()), "fallback_codes": int((~use & (valid.sum(1) > 0)).sum()),
             "F_change_outside_events": off, "F_change_total": int(len(st))}
 
-    out = {"canary": can, "diag": diag, "v2": run_arms(DN, "v2", a.out), "D2_old": run_arms(D2, "D2", a.out)}
+    D0 = L.build(days, codes, Op, H, Lo, C, TR, cost, mkt, con, raw_close=False)
+    out = {"canary": can, "diag": diag, "v2": run_arms(DN, "v2", a.out), "D2_old": run_arms(D2, "D2", a.out),
+           "D0_defect": run_arms(D0, "D0", a.out)}
     out["judge"] = bars(out["v2"])
     fb_codes = {c for c, u, v in zip(codes, use, valid.sum(1) > 0, strict=True) if not u and v}
     trc = pd.read_csv(os.path.join(a.out, "trades_v2_C_close_2x.csv.gz"), dtype={"code": str})
@@ -209,8 +232,8 @@ def main() -> None:
     diag["fallback_trades_C2"] = int(trc["code"].isin(fb_codes).sum())
     json.dump(out, open(os.path.join(a.out, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=float)
     print(json.dumps({"diag": diag, "judge": out["judge"],
-                      **{f"{t}|{k}": (round(v["cagr"], 4), round(v["mdd"], 4), v["n_trades"]) for t in ("v2", "D2_old")
-                         for k, v in out[t].items() if k != "bench"}}, ensure_ascii=False, indent=1, default=float))
+                      **{f"{t}|{k}": (round(v["cagr"], 4), round(v["mdd"], 4), v["n_trades"]) for t in ("v2", "D2_old", "D0_defect")
+                         for k, v in out[t].items() if k.endswith("x")}}, ensure_ascii=False, indent=1, default=float))
 
 
 if __name__ == "__main__":

@@ -229,9 +229,14 @@ def factor_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, as
     pos = days.searchsorted(sh["date"].to_numpy(), side="right") - 1
     ci = codes.get_indexer(sh["code"])
     ok = (pos >= 0) & (ci >= 0)
+    # 행 날짜에 F 없음(데이터 시작 전·상장 전) → 그 종목의 첫 유한 F. v2 의 F 는 최신일이 1 이라 1.0 대체는 틀린다(검증 29 C1:
+    # 042700 시총 1/5, 053110 20배).
+    first = F.reindex(columns=codes).bfill().iloc[0].to_numpy(float)
     fb = np.full(len(sh), np.nan)
     fb[ok] = Fv[pos[ok], ci[ok]]
-    fb = np.where(np.isfinite(fb), fb, 1.0)                    # 행 날짜에 F 없음(상장 전·범위 밖) → 그 뒤 첫 F 와 같다고 본다
+    pre = (ci >= 0) & ~np.isfinite(fb)
+    fb[pre] = first[ci[pre]]
+    fb = np.where(np.isfinite(fb), fb, 1.0)                    # 그 종목에 F 가 아예 없음 → 시총도 NaN 이라 영향 없음
     sh["s0"] = sh["shares_outstanding"].to_numpy(float) / fb
     S = sh.pivot_table(index="k", columns="code", values="s0", aggfunc="last")
     S = S.reindex(index=S.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)

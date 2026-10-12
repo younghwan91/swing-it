@@ -110,3 +110,17 @@ def test_factor_cap_reads_split_from_rebuilt_adjusted():
     sh2 = pd.DataFrame({"code": ["S"], "date": ["2018-12-28"], "shares_outstanding": [6_450_000_000]})   # 분할 뒤 행만 있는 경우
     cap2, _ = factor_cap(raw, adj, sh2)
     assert np.isclose(cap2["S"].iloc[2], 38_700 * 6.45e9)
+
+
+def test_factor_cap_row_before_data_start_uses_first_factor():
+    """검증 29 C1: 주식수 행이 데이터 시작 전이면 F 대체값은 1 이 아니라 그 종목의 첫 F(v2 는 최신일 F = 1)."""
+    import numpy as np
+
+    from swing_it.krx_session import factor_cap
+    days = pd.DatetimeIndex(["2017-01-02", "2018-05-04", "2023-06-01"])
+    raw = pd.DataFrame({"S": [100_000.0, 21_000.0, 30_000.0]}, index=days)             # 2018-05-04 5:1 분할
+    adj = pd.DataFrame({"S": [20_000.0, 21_000.0, 30_000.0]}, index=days)              # v2: 최신 F = 1, 분할 전 F = 0.2
+    sh = pd.DataFrame({"code": ["S"], "date": ["2016-03-31"], "shares_outstanding": [25_000_000]})   # 데이터 시작 전 행(분할 전 주식수)
+    cap, _ = factor_cap(raw, adj, sh)
+    assert np.isclose(cap["S"].iloc[0], 100_000 * 25e6)                    # 분할 전 = 원 × 행 주식수
+    assert np.isclose(cap["S"].iloc[2], 30_000 * 25e6 * 5)                 # 분할 뒤 주식수 5배로 이어진다
