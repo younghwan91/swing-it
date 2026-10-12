@@ -1752,6 +1752,10 @@ def trade_frame(E: Engine, r: dict, cfgs: "list[dict]") -> pd.DataFrame:
     t["base"] = [PE.BASES[k % len(PE.BASES)] if k < PE.N_TABLES else ("P" if k == EF.TID_P else "C") for k in t["table"]]
     t["fam"] = np.where(t["table"] == EF.TID_P, "P", np.where(t["table"] == EF.TID_C, "C", "W"))   # 13세대 가족
     t["entry_close"] = (t["fam"] == "P").to_numpy() & (d == I_[ev, PE.II["d"]] - 1)          # 종가 진입(주문 행 = s)
+    if t["entry_close"].any():                         # 검증 16차: 종가 진입은 신호일 = 진입일(s), 보유일은 다음날부터
+        ec = t["entry_close"].to_numpy()
+        t.loc[ec, "event_day"] = t.loc[ec, "entry_day"]
+        t.loc[ec, "hold_days"] = t.loc[ec, "hold_days"] - 1
     return t
 
 
