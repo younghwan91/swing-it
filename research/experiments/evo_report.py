@@ -19,6 +19,7 @@ import pandas as pd
 
 sys.path[:0] = ["."]
 from research.experiments.evo_judge import EVO, SLOT_W, boot_t  # noqa: E402
+from swing_it.units import eok  # noqa: E402
 
 N_SEED_MIN = 30
 
@@ -37,7 +38,7 @@ def load_rows(c: str) -> "tuple[pd.DataFrame, list[int]]":
         p = 0.275
         t["n2"] = t["net2"].where(~amb, p * t["net2_stop0"] + (1 - p) * t["net2"])
         if "adv20" in t:                               # evo_judge 와 같은 소형주 추가 미끄러짐
-            t["n2"] = t["n2"] - 0.004 * t["wb"] * (t["adv20"] < 1000.0)
+            t["n2"] = t["n2"] - 0.004 * t["wb"] * (t["adv20"] < eok(10))
         t["n2s"] = t["n2"] * (t["alloc"] / SLOT_W).clip(upper=1.0)
     return t, ns
 

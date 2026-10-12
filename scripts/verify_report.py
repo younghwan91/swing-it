@@ -1335,11 +1335,11 @@ def layer_f(P: dict, db: str | None) -> None:
                 f"WHERE s.source={ph} AND s.date BETWEEN {ph} AND {ph} GROUP BY 1", args)
     ins = {r[0]: (float(r[1]), float(r[2])) for r in cur.fetchall()}
     share = {m: out[m][1] / ins[m][0] * 100 for m in out if m in ins}
-    tot_tv = sum(v[1] for v in out.values()) / sum(v[0] for v in ins.values()) * 100
+    tot_tv_pct = sum(v[1] for v in out.values()) / sum(v[0] for v in ins.values()) * 100
     tot_inst = sum(v[2] for v in out.values()) / sum(v[1] for v in ins.values()) * 100
-    detail = (f"빠진 거래대금 {tot_tv:.3f}% · 기관 gross {tot_inst:.3f}% · "
+    detail = (f"빠진 거래대금 {tot_tv_pct:.3f}% · 기관 gross {tot_inst:.3f}% · "
               + " · ".join(f"{m} {share[m]:.3f}%({out[m][0]}종목)" for m in sorted(share)))
-    chk("F", "한계 §7: 빠진 거래대금 비중이 1% 미만인가", tot_tv < 1.0, detail)
+    chk("F", "한계 §7: 빠진 거래대금 비중이 1% 미만인가", tot_tv_pct < 1.0, detail)
     chk("F", "한계 §7: 빠진 금액은 코스닥이 아니라 거래소에서 큰가",
         share.get("거래소", 0) > share.get("코스닥", 0),
         f"거래소 {share.get('거래소', 0):.3f}% vs 코스닥 {share.get('코스닥', 0):.3f}%")

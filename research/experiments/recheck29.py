@@ -160,7 +160,7 @@ def main() -> None:
         s = tab.get(code)
         return float(s.get(pd.Timestamp(d), np.nan)) if s is not None else np.nan
     rwp = rw.pivot_table(index="date", columns="code", values="close", aggfunc="last")
-    rc = read_raw_close(con, start="2016-08-01")
+    rc = read_raw_close(con, start="2016-08-01", aftermarket_fix=False)
     rcp = rc.pivot_table(index="date", columns="code", values="close", aggfunc="last")
     raw = rwp.reindex(index=days, columns=codes).combine_first(rcp.reindex(index=days, columns=codes))
     vc = W["close"]

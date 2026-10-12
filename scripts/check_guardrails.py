@@ -23,6 +23,10 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (m) 분봉 시간대 — ``minute_bars`` 가 나오는 파일에서 ``at time zone``·``tz_localize``·``tz_convert``·``utc=True`` 금지.
   (n) 거래대금 단위 — ``ADV_*``·``adv_floor``·``TV_FLOOR`` 류 이름에 맨 숫자 리터럴(0 제외)을 넣으면 실패(swing_it.units.eok 등).
   (o) 공식 지수 — ``sector_index`` 를 정문(storage.read_index) 밖에서 직접 SELECT·JOIN 하면 실패.
+  (p) 정문 인자 명시 — 모의매매·재현 파일(``PAPER_PATHS``)의 정문 호출은 동작 인자(``session=``·``aftermarket_fix=``·``legacy=`` …,
+      ``EXPLICIT_KWARGS``)를 기본값에 기대지 않고 적어야 한다.
+
+  (d)(g)(j)(k)(o) 의 SQL 은 문자열 식 단위로 접어 본다 — 여러 줄·암묵 연결·``+``·``%`` 포맷·``.format()``·스키마 한정·따옴표 식별자.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -136,7 +140,10 @@ def check_no_literal_verdict() -> list[str]:
 # 접어(f-string 의 치환부는 ``{}``) 그 안에서 찾는다. 주석은 원래 안 보이고, 독스트링·맨 문자열 문장은 산문이라 뺀다.
 
 def _fold_str(node: ast.AST) -> "str | None":
-    """문자열 식을 한 문자열로 접는다. 문자열이 아니면 None. f-string 치환·비문자열 피연산자는 ``{}``."""
+    """문자열 식을 한 문자열로 접는다. 문자열이 아니면 None. f-string 치환·비문자열 피연산자는 ``{}``.
+
+    2026-10-13: ``"... %s ..." % x``(``%`` 포맷)와 ``"...".format(...)`` 도 접는다 — 예전엔 ``BinOp(Mod)`` 를 못 접어 그 SQL 이
+    (d)(g)(j)(k)(o) 를 통째로 빠져나갔다(왼쪽 문자열은 BinOp 의 자식이라 따로도 안 보였다)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
@@ -147,11 +154,18 @@ def _fold_str(node: ast.AST) -> "str | None":
         if a is None and b is None:
             return None
         return (a if a is not None else "{}") + (b if b is not None else "{}")
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _fold_str(node.left)                     # 포맷 문자열(왼쪽)만 — 치환 값은 SQL 구조가 아니다
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format"):
+        return _fold_str(node.func.value)
     return None
 
 
 def _sql_strings(text: str) -> "list[tuple[int, str]]":
-    """파일 안의 (시작 줄, 접은 문자열) — 가장 바깥 문자열 식만, 독스트링·맨 문자열 문장 제외. 파싱 실패면 ValueError."""
+    """파일 안의 (시작 줄, 접은 문자열) — 가장 바깥 문자열 식만, 독스트링·맨 문자열 문장 제외. 파싱 실패면 ValueError.
+
+    안쪽 표시는 **접히는** 식의 자식에만 건다 — 접히지 않는 식(``fmt % "… FROM daily_bars"`` 처럼 왼쪽이 문자열이 아닌 ``%``)의
+    문자열 자식은 따로 본다."""
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
@@ -161,22 +175,31 @@ def _sql_strings(text: str) -> "list[tuple[int, str]]":
     for n in ast.walk(tree):
         if isinstance(n, ast.Expr) and isinstance(n.value, (ast.Constant, ast.JoinedStr)):
             prose.add(id(n.value))                      # 독스트링·맨 문자열 문장 = 산문
-        if isinstance(n, (ast.BinOp, ast.JoinedStr)):
+        if isinstance(n, ast.JoinedStr):
+            for c in ast.walk(n):
+                if c is not n:
+                    inner.add(id(c))
+        elif isinstance(n, ast.BinOp) and _fold_str(n) is not None:
             for c in ast.iter_child_nodes(n):
                 inner.add(id(c))
-            if isinstance(n, ast.JoinedStr):
-                for c in ast.walk(n):
-                    if c is not n:
-                        inner.add(id(c))
+        elif isinstance(n, ast.Call) and _fold_str(n) is not None:   # "...".format(...) — 받는 문자열만 안쪽
+            inner.add(id(n.func))
+            inner.add(id(n.func.value))
     out = []
     for n in ast.walk(tree):
         if id(n) in inner or id(n) in prose:
             continue
-        if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp)):
+        if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp, ast.Call)):
             s = _fold_str(n)
             if s is not None:
                 out.append((n.lineno, s))
     return out
+
+
+#: 표 이름 앞의 스키마 한정(``public.``·``"public".``)과 따옴표 식별자(``"daily_bars"``) — 2026-10-13: ``FROM public.daily_bars`` 와
+#: ``FROM "daily_bars"`` 가 (g) 등을 빠져나갔다. 표 이름 정규식은 ``_Q + 이름 + 경계 + _QE`` 로 쓴다.
+_Q = r'(?:(?:\w+|"\w+")\.)?"?'
+_QE = r'"?'
 
 
 def _sql_hits(text: str, pattern: "re.Pattern[str]") -> "list[tuple[int, str]]":
@@ -193,7 +216,7 @@ def _sql_hits(text: str, pattern: "re.Pattern[str]") -> "list[tuple[int, str]]":
 # storage.read_earnings() 가 as-of 로 한 버전만 고르는 유일한 정문이다.
 # **문자열 리터럴 안의** SELECT … FROM earnings 를 잡는다(여러 줄 SQL 포함, 위 수집기) — 주석·독스트링의
 # "from earnings drift" 같은 산문은 대상이 아니다. 규칙이 소음이 되면 아무도 안 본다.
-_RAW_EARNINGS = re.compile(r"\bSELECT\b[\s\S]*?\bFROM\s+earnings\b", re.IGNORECASE)
+_RAW_EARNINGS = re.compile(r"\bSELECT\b[\s\S]*?\bFROM\s+" + _Q + r"earnings\b" + _QE, re.IGNORECASE)
 _EARNINGS_READ_EXEMPT = {
     "src/swing_it/storage.py",          # 정문 자신 + 스키마 문자열
     "tests/test_earnings_asof.py",      # 정문의 테스트 — 버전이 실제로 쌓이는지 직접 확인해야 한다
@@ -307,7 +330,9 @@ def check_gates_use_shared_harness() -> list[str]:
 # 음성대조·fragility 는 전부 넘겨받은 트레이드만 보기 때문이다(GUARDRAILS §4 공백 2).
 # 2026-10-12: 여러 줄 SQL 도(위 수집기), ``JOIN daily_bars`` 도 잡는다.
 # daily_bars_raw·daily_bars_adj_v2(재구성 원·수정 일봉)도 같은 가격표다 — 이름으로 박혀 있으면 잡는다(변수로 넘긴 표 이름은 못 본다).
-_RAW_PRICES = re.compile(r"\bSELECT\b[\s\S]*?\b(?:FROM|JOIN)\s+(daily_bars(?:_adjusted|_raw|_adj_v2)?)\b", re.I)
+_RAW_PRICES = re.compile(r"\bSELECT\b[\s\S]*?\b(?:FROM|JOIN)\s+" + _Q + r"(daily_bars(?:_adjusted|_raw|_adj_v2)?)\b" + _QE, re.I)
+#: SQL 없이 표를 통째로 읽는 판다스 호출(``pd.read_sql_table("daily_bars", con)``) — 문자열 정규식으로는 안 보인다.
+_PRICE_TABLE_NAMES = re.compile(r"^(?:\w+\.)?(daily_bars(?:_adjusted|_raw|_adj_v2)?)$")
 _PRICE_READ_EXEMPT = {
     "src/swing_it/storage.py",        # 정문 자신 + 스키마 문자열
     "src/swing_it/price_adjust.py",   # 조정가 테이블을 *만드는* 쪽 — 정문의 상류
@@ -352,17 +377,37 @@ _JOIN_RULE_EXEMPT = {
 
 
 def check_no_raw_price_select() -> list[str]:
-    """(g) storage/price_adjust 밖에서 가격 테이블을 직접 SELECT 하면 위반."""
-    return _scan_sql(_PRICE_READ_EXEMPT, _RAW_PRICES, "universe",
-                     "가격 테이블을 직접 SELECT 했다. swing_it.storage.read_prices() 를 쓸 것 "
-                     "(상장폐지 종목 포함을 로딩 시점에 검사한다)")
+    """(g) storage/price_adjust 밖에서 가격 테이블을 직접 SELECT(또는 ``read_sql_table``)하면 위반."""
+    msg = ("가격 테이블을 직접 SELECT 했다. swing_it.storage.read_prices() 를 쓸 것 "
+           "(상장폐지 종목 포함을 로딩 시점에 검사한다)")
+    out = _scan_sql(_PRICE_READ_EXEMPT, _RAW_PRICES, "universe", msg)
+    for p in _iter_py(REPO):                           # pd.read_sql_table("daily_bars", con) — SQL 문자열이 없어 위 스캔이 못 본다
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _PRICE_READ_EXEMPT or rel.startswith(".venv/"):
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue                                    # 파싱 실패는 위 _scan_sql 이 이미 보고했다
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call) and _called_name(n) == "read_sql_table"):
+                continue
+            args = list(n.args[:1]) + [k.value for k in n.keywords if k.arg == "table_name"]
+            for a in args:
+                if isinstance(a, ast.Constant) and isinstance(a.value, str) and _PRICE_TABLE_NAMES.match(a.value):
+                    out.append(f"[universe] {rel}:{n.lineno} — {msg} (read_sql_table {a.value})")
+    return out
 
 
 # (j) 2026-09-14 부터 supply_demand 의 close·flu_rt·acc_trde_qty 에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다. 정문
 # storage.read_supply_demand 가 기본으로 정규장 값으로 고치고(원값은 session="raw" 명시), 원 종가 정문은 krx_session.read_raw_close 다.
 # 직접 SELECT 는 그 보정을 조용히 건너뛴다 — 가격표 (g) 와 같은 이유로 막는다. 순매매 수량 열만 읽는 SELECT 는 대상이 아니다.
-_SD_SELECT = re.compile(r"\bSELECT\b(?P<sel>(?:(?!\bSELECT\b)[\s\S])*?)\bFROM\s+supply_demand\b", re.I)
-_SD_TAINTED = re.compile(r"(?<![\w.])(?:\w+\.)?(close|flu_rt|acc_trde_qty)\b|\*", re.I)
+_SD_SELECT = re.compile(r"\bSELECT\b(?P<sel>(?:(?!\bSELECT\b)[\s\S])*?)\bFROM\s+" + _Q + r"supply_demand\b" + _QE, re.I)
+#: ``*`` 는 열 목록의 별표(``*``·``s.*``)만 — ``count(*)`` 의 별표는 오염 열을 읽지 않는다(2026-10-13 거짓 양성).
+_SD_TAINTED = re.compile(r"(?<![\w.])(?:\w+\.)?(close|flu_rt|acc_trde_qty)\b|(?<![(\w])(?:\w+\.)?\*", re.I)
+#: ``… JOIN supply_demand [AS] s`` — 열은 바깥 SELECT 목록·WHERE 어디서든 별칭(또는 표 이름)으로 읽힌다(2026-10-13 거짓 음성).
+_SD_JOIN = re.compile(r"\bJOIN\s+" + _Q + r"supply_demand\b" + _QE + r"(?:\s+(?:AS\s+)?(?P<alias>(?!ON\b|USING\b|WHERE\b|JOIN\b|LEFT\b"
+                      r"|RIGHT\b|INNER\b|FULL\b|CROSS\b|NATURAL\b|GROUP\b|ORDER\b|LIMIT\b)\w+))?", re.I)
 _SD_COLS_EXEMPT = {
     "src/swing_it/storage.py",            # 정문 자신
     "src/swing_it/krx_session.py",        # 원 종가·항등식 정문(정규장 종가를 여기서 만든다)
@@ -387,13 +432,20 @@ def check_no_raw_supply_close() -> list[str]:
             out.append(f"[aftermarket] {rel} — 파싱 실패: {exc}")
             continue
         for line, sql in strings:
+            found = []
             for m in _SD_SELECT.finditer(sql):
                 bad = _SD_TAINTED.search(m.group("sel"))
-                if bad is None:
-                    continue
+                if bad is not None:
+                    found.append((m, bad.group(0)))
+            for m in _SD_JOIN.finditer(sql):
+                alias = re.escape(m.group("alias") or "supply_demand")
+                bad = re.search(rf"(?<![\w.])(?:{alias}|supply_demand)\.(close|flu_rt|acc_trde_qty|\*)", sql, re.I)
+                if bad is not None:
+                    found.append((m, bad.group(0)))
+            for m, what in found:
                 out.append(
                     f"[aftermarket] {rel}:{line + sql[: m.start()].count(chr(10))} — supply_demand 의 "
-                    f"{bad.group(0)} 를 직접 SELECT 했다. 2026-09-14~ 값에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다 — "
+                    f"{what} 를 직접 SELECT 했다. 2026-09-14~ 값에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다 — "
                     f"swing_it.storage.read_supply_demand(...) 정문을 쓸 것(원값이 필요하면 session=\"raw\" 명시), "
                     f"원 종가는 swing_it.krx_session.read_raw_close."
                 )
@@ -403,7 +455,7 @@ def check_no_raw_supply_close() -> list[str]:
 # (k) 상장주식수는 정문 storage.read_shares 로만 읽는다. dart 행은 기준일(date)보다 중앙값 82일 늦게 알려지는데(knowledge_date),
 # 직접 SELECT 하는 코드는 date 로 as-of 를 걸어 석 달 미래 정보를 썼다(21~26세대 시총). 정문은 asof = coalesce(knowledge_date, date)
 # 열을 주고 0 이하 주식수를 뺀다.
-_RAW_SHARES = re.compile(r"\b(?:FROM|JOIN)\s+shares_outstanding_history\b", re.I)
+_RAW_SHARES = re.compile(r"\b(?:FROM|JOIN)\s+" + _Q + r"shares_outstanding_history\b" + _QE, re.I)
 _SHARES_READ_EXEMPT = {
     "src/swing_it/storage.py",            # 정문 자신 + 스키마 + shares_backfill_pending(존재 여부만 센다)
     "scripts/check_guardrails.py",        # 규칙 자신
@@ -437,6 +489,13 @@ def _is_str(node, value: str) -> bool:
     return isinstance(node, ast.Constant) and node.value == value
 
 
+def _is_avail(node) -> bool:
+    """``"avail_date"`` 또는 그것을 담은 리스트·튜플(``right_on=["avail_date"]``)."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return any(_is_str(e, "avail_date") for e in node.elts)
+    return _is_str(node, "avail_date")
+
+
 def check_avail_date_asof() -> list[str]:
     """(l) avail_date as-of 키 사용엔 # legacy-asof: 표시, avail_col 기본값 금지."""
     out = []
@@ -451,6 +510,9 @@ def check_avail_date_asof() -> list[str]:
             out.append(f"[asof] {rel} — 파싱 실패: {exc}")
             continue
         lines = text.splitlines()
+        # 변수로 넘긴 키(``key = "avail_date"`` … ``on=key``)도 잡는다 — 파일 안 어디서든 그 이름에 avail_date(또는 그 리스트)를 대입했으면.
+        avail_vars = {t.id for a in ast.walk(tree) if isinstance(a, (ast.Assign, ast.AnnAssign)) and _is_avail(a.value)
+                      for t in (a.targets if isinstance(a, ast.Assign) else [a.target]) if isinstance(t, ast.Name)}
         for n in ast.walk(tree):
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 a = n.args
@@ -465,12 +527,13 @@ def check_avail_date_asof() -> list[str]:
             kw = {k.arg: k.value for k in n.keywords if k.arg}
             f = n.func
             name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
-            hit = _is_str(kw.get("avail_col"), "avail_date") or (
-                name == "merge_asof" and any(_is_str(kw.get(k), "avail_date") for k in ("on", "left_on", "right_on")))
+            keys = [kw.get("avail_col")] + ([kw.get(k) for k in ("on", "left_on", "right_on")] if name == "merge_asof" else [])
+            hit = [k for k in keys if k is not None and (_is_avail(k) or isinstance(k, ast.Name) and k.id in avail_vars)]
             if not hit:
                 continue
-            span = lines[max(n.lineno - 2, 0): n.end_lineno]
-            if any(_LEGACY_ASOF in ln for ln in span):
+            # 표시는 **같은 줄 또는 바로 윗줄**만 — 호출 시작 줄과 키가 있는 줄 기준(2026-10-13: 예전엔 여러 줄 호출 범위 아무 데나).
+            near = {n.lineno - 1, n.lineno} | {x for k in hit for x in (k.lineno - 1, k.lineno)}
+            if any(1 <= i <= len(lines) and _LEGACY_ASOF in lines[i - 1] for i in near):
                 continue
             out.append(f"[asof] {rel}:{n.lineno} — avail_date 를 as-of 키로 썼다(제출 마감일 고정값 — 정기보고서 17.7% 가 더 늦게 "
                        f"공시). read_earnings(with_known=True) 의 known_date 를 쓰거나, 옛 숫자 재현이면 "
@@ -493,7 +556,8 @@ def check_minute_bars_naive_kst() -> list[str]:
         if rel in _TZ_EXEMPT or rel.startswith(".venv/"):
             continue
         text = p.read_text(encoding="utf-8")
-        if "minute_bars" not in text:
+        # 분봉 정문(krx_session.read_session_bars·_agg·_any)만 부르는 파일도 분봉 시각을 다룬다(2026-10-13 거짓 음성).
+        if "minute_bars" not in text and "read_session_bars" not in text:
             continue
         try:
             tree = ast.parse(text)
@@ -522,7 +586,8 @@ def check_minute_bars_naive_kst() -> list[str]:
 # window·days·rank 처럼 돈이 아닌 이름은 뺀다. tests/ 는 작은 가짜 단위를 쓰므로 대상이 아니다.
 _TV_TOKENS = {"adv", "tv"}
 _TV_NOT_MONEY = {"window", "win", "days", "day", "n", "rank", "frac", "pct", "q", "ratio", "mult", "rel", "z", "lag", "len",
-                 "periods", "min_periods", "col", "cols", "key", "name", "band", "sample", "unit", "units"}
+                 "periods", "min_periods", "col", "cols", "key", "name", "band", "sample", "unit", "units",
+                 "lookback", "lb", "rows", "row", "horizon", "span", "halflife", "count", "share", "weight", "w", "pctl", "quantile"}
 #: dict 키는 문턱 낱말(floor·min·max·lo·hi·cap·cut)이 함께 있을 때만 본다 — {"tv": 500.0} 같은 데이터 행(검증기 합성 표)은 문턱이 아니다.
 _TV_THRESHOLD = {"floor", "min", "max", "lo", "hi", "cap", "cut", "thr", "threshold"}
 _TV_EXEMPT = {
@@ -533,8 +598,22 @@ _TV_EXEMPT = {
 
 
 def _is_money_name(name: str) -> bool:
-    toks = [t for t in re.split(r"[_\d]+", name.lower()) if t]
-    return bool(_TV_TOKENS & set(toks)) and not (_TV_NOT_MONEY & set(toks))
+    """거래대금 이름인가 — 토큰 adv·tv, 또는 이어진 ``trade_value``(``MIN_TRADE_VALUE``·``min_trade_value``; 2026-10-13 거짓 음성)."""
+    low = name.lower()
+    toks = [t for t in re.split(r"[_\d]+", low) if t]
+    money = bool(_TV_TOKENS & set(toks)) or "trade_value" in low or "tradevalue" in low
+    return money and not (_TV_NOT_MONEY & set(toks))
+
+
+def _expr_name(node) -> "str | None":
+    """비교식 피연산자의 이름 — ``x``·``obj.x``·``df["x"]``(문자열 첨자)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+        return node.slice.value
+    return None
 
 
 def _bare_number(node) -> bool:
@@ -580,13 +659,20 @@ def check_trade_value_units() -> list[str]:
                 pairs += [(x, d) for x, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
             elif isinstance(n, ast.Call):
                 pairs += [(k, k.value) for k in n.keywords if k.arg]
+            elif isinstance(n, ast.Compare):           # trade_value >= 1000 · df["adv"] > 5_000 (2026-10-13 거짓 음성)
+                ops = [n.left, *n.comparators]
+                named = [x for x in ops if _expr_name(x) is not None]
+                for x in named:
+                    for y in ops:
+                        if y is not x and _bare_number(y):
+                            pairs.append((x, y))
             elif isinstance(n, ast.Dict):
                 pairs += [(k, v) for k, v in zip(n.keys, n.values) if isinstance(k, ast.Constant) and isinstance(k.value, str)
                           and _TV_THRESHOLD & set(re.split(r"[_\d]+", k.value.lower()))]
             for tgt, val in pairs:
                 name = (tgt.id if isinstance(tgt, ast.Name) else tgt.attr if isinstance(tgt, ast.Attribute)
                         else tgt.arg if isinstance(tgt, (ast.arg, ast.keyword)) else tgt.value if isinstance(tgt, ast.Constant)
-                        else None)
+                        else _expr_name(tgt))
                 if isinstance(name, str) and _is_money_name(name) and _bare_number(val):
                     hits.append((getattr(val, "lineno", getattr(n, "lineno", 0)), name))
         out += [f"[units] {rel}:{ln} — 거래대금 문턱 {name} 에 맨 숫자를 넣었다. trade_value 는 백만원 단위다 — "
@@ -597,7 +683,7 @@ def check_trade_value_units() -> list[str]:
 
 # (o) sector_index 는 2024-01-26 부터만 있고 값은 ×100 정수다. 직접 읽는 코드는 그 전 구간을 조용히 비우거나 대용으로 채웠다
 # (재구축 대용이 −4%/년 어긋나 거짓 통과). 정문 storage.read_index 는 그 전 요청에 대용(proxy) 명시를 요구하고 level(=close/100)을 준다.
-_RAW_INDEX = re.compile(r"\b(?:FROM|JOIN)\s+sector_index\b", re.I)
+_RAW_INDEX = re.compile(r"\b(?:FROM|JOIN)\s+" + _Q + r"sector_index\b" + _QE, re.I)
 _INDEX_READ_EXEMPT = {"src/swing_it/storage.py", "scripts/check_guardrails.py", "tests/test_check_guardrails.py"}
 
 
@@ -606,6 +692,52 @@ def check_no_raw_index_select() -> list[str]:
     return _scan_sql(_INDEX_READ_EXEMPT, _RAW_INDEX, "index",
                      "sector_index 를 직접 읽었다. swing_it.storage.read_index(con, codes, ...) 를 쓸 것 — 공식 지수는 "
                      "2024-01-26 부터라 그 전 구간은 proxy= 로 대용을 명시해야 하고, 값은 ×100 정수(level = close/100)")
+
+
+# (p) 모의매매·재현(원장 경로) 파일은 정문의 **동작을 바꾸는 인자**를 명시해야 한다. 정문 기본값은 바뀐다 — 2026-10 에 read_prices 의
+# 기본 session 이 "raw" → "regular" 로 바뀌었다. 기본값에 기대는 장부 경로는 그런 변경에서 조용히 다른 숫자를 쓴다(도중 규칙 변경과 같다).
+# 값은 무엇이든(변수 포함) 좋다 — 고르는 자리가 코드에 보이면 된다. 정문에 이런 인자가 늘면 아래 표에 더한다.
+PAPER_PATHS = (
+    "research/paper/*.py",
+    "research/experiments/leader21.py",
+    "research/experiments/recheck29.py",
+    "research/experiments/index27.py",
+    "research/experiments/index28.py",
+)
+EXPLICIT_KWARGS: dict[str, tuple[str, ...]] = {
+    "read_prices": ("session",),
+    "read_prices_wide": ("session",),
+    "read_supply_demand": ("session",),
+    "read_raw_close": ("aftermarket_fix",),
+    "market_cap_asof": ("legacy",),
+    "market_cap_asof_bulk": ("legacy",),
+}
+
+
+def check_paper_explicit_kwargs() -> list[str]:
+    """(p) 모의매매·재현 파일의 정문 호출이 동작 인자(session·aftermarket_fix·legacy …)를 명시하지 않으면 위반."""
+    out = []
+    files = sorted({p for pat in PAPER_PATHS for p in REPO.glob(pat) if p.is_file()})
+    for p in files:
+        rel = p.relative_to(REPO).as_posix()
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            out.append(f"[explicit] {rel} — 파싱 실패: {exc}")
+            continue
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            need = EXPLICIT_KWARGS.get(_called_name(n) or "")
+            if not need:
+                continue
+            given = {k.arg for k in n.keywords if k.arg}
+            miss = [k for k in need if k not in given]
+            if miss:
+                out.append(f"[explicit] {rel}:{n.lineno} — {_called_name(n)}() 에 {', '.join(m + '=' for m in miss)} 를 명시하지 "
+                           f"않았다. 모의매매·재현 경로는 정문 기본값에 기대지 않는다(기본값이 바뀌면 장부가 조용히 다른 숫자를 쓴다) — "
+                           f"지금 기본값과 같은 값이라도 적어라.")
+    return out
 
 
 def check_no_survivor_only_join() -> list[str]:
@@ -748,6 +880,7 @@ def main() -> int:
     violations += check_minute_bars_naive_kst()
     violations += check_trade_value_units()
     violations += check_no_raw_index_select()
+    violations += check_paper_explicit_kwargs()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

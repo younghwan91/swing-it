@@ -576,3 +576,345 @@ def b(cur):
 def test_rule_o_ignores_prose(lint, tmp_path, monkeypatch):
     src = '"""공식 지수는 sector_index(2024-01-26~). FROM sector_index 직접 읽기 금지."""\nx = 1\n'
     assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_index_select") == []
+
+
+# --- 2026-10-13 리뷰 MAJOR 2: % 포맷·.format() SQL ------------------------------------------------------------
+#
+# 예전 _fold_str 는 BinOp(Mod) 를 접지 못해 ``"SELECT … FROM daily_bars WHERE date >= '%s'" % d`` 가 (d)(g)(j)(k)(o) 를
+# 통째로 빠져나갔다(왼쪽 문자열은 BinOp 의 자식이라 따로도 안 보였다). 규칙마다 % 포맷·.format() 위반을 주입한다.
+
+_PCT_CASES = {
+    "check_no_raw_earnings_select": ('''
+def f(con, d):
+    return con.execute("SELECT code, period, netinc FROM earnings WHERE avail_date >= '%s'" % d)
+def g(con, d):
+    return con.execute("SELECT code FROM earnings WHERE period = '{}'".format(d))
+''', "[earnings]"),
+    "check_no_raw_price_select": ('''
+def f(con, d, cols):
+    a = con.execute("""SELECT %s
+                       FROM daily_bars_adjusted WHERE date >= '%s'""" % (cols, d))
+    b = con.execute("SELECT code, close FROM daily_bars WHERE date >= '{d}'".format(d=d))
+    return a, b
+''', "[universe]"),
+    "check_no_raw_supply_close": ('''
+def f(con, d):
+    a = con.execute("SELECT code, date, close FROM supply_demand WHERE date >= '%s'" % d)
+    b = con.execute("SELECT code, {} , flu_rt FROM supply_demand".format(d))
+    return a, b
+''', "[aftermarket]"),
+    "check_no_raw_shares_select": ('''
+def f(con, d):
+    a = con.execute("select code, shares_outstanding from shares_outstanding_history where date <= '%s'" % d)
+    b = con.execute("select code from shares_outstanding_history where code = '{}'".format(d))
+    return a, b
+''', "[shares]"),
+    "check_no_raw_index_select": ('''
+def f(con, code):
+    a = con.execute("select date, close from sector_index where code = '%s'" % code)
+    b = con.execute("select date, close from sector_index where code = '{}'".format(code))
+    return a, b
+''', "[index]"),
+}
+
+
+@pytest.mark.parametrize("fn", sorted(_PCT_CASES))
+def test_sql_rules_catch_percent_and_format_sql(lint, tmp_path, monkeypatch, fn):
+    src, tag = _PCT_CASES[fn]
+    out = _scan(lint, tmp_path, monkeypatch, src, fn)
+    assert len(out) == 2 and all(tag in o for o in out), out
+
+
+def test_sql_rules_see_string_operand_of_unfoldable_mod(lint, tmp_path, monkeypatch):
+    """왼쪽이 문자열이 아닌 ``%``(``fmt % "… FROM daily_bars"``)는 접지 못하지만, 오른쪽 문자열은 따로 본다."""
+    src = 'def f(fmt):\n    return fmt % "SELECT code FROM daily_bars"\n'
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_price_select")
+    assert len(out) == 1, out
+
+
+def test_percent_arithmetic_is_not_sql(lint, tmp_path, monkeypatch):
+    """숫자 % 연산·산문 % 포맷은 위반이 아니다."""
+    src = 'x = 7 % 3\nmsg = "%d rows from daily_bars cache" % 5\n'
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_price_select") == []
+
+
+# --- 2026-10-13 리뷰 MINOR: 거짓 음성·거짓 양성 ---------------------------------------------------------------------
+
+def test_rule_g_catches_schema_quoted_and_read_sql_table(lint, tmp_path, monkeypatch):
+    src = '''
+import pandas as pd
+def f(con):
+    a = pd.read_sql("SELECT code, close FROM public.daily_bars", con)
+    b = pd.read_sql('SELECT code, close FROM "daily_bars_adjusted" WHERE code = 1', con)
+    c = pd.read_sql_table("daily_bars_raw", con)
+    d = pd.read_sql_table(table_name="daily_bars", con=con)
+    return a, b, c, d
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_price_select")
+    assert len(out) == 4, out
+
+
+def test_rule_g_ignores_other_tables_and_read_sql_table_of_others(lint, tmp_path, monkeypatch):
+    src = '''
+import pandas as pd
+def f(con):
+    a = pd.read_sql("SELECT code FROM daily_bars_x", con)
+    b = pd.read_sql_table("stocks", con)
+    return a, b
+'''
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_price_select") == []
+
+
+def test_rule_j_catches_join_supply_demand(lint, tmp_path, monkeypatch):
+    """``JOIN supply_demand s`` 로 붙여 s.close·s.flu_rt 를 읽는 모양(별칭·AS·별칭 없음·WHERE 에서 읽기)."""
+    src = '''
+def f(con):
+    con.execute("""SELECT b.code, s.close FROM daily_bars_x b
+                   JOIN supply_demand s ON s.code = b.code AND s.date = b.date""")
+    con.execute("SELECT b.code FROM daily_x b LEFT JOIN supply_demand AS q USING (code, date) WHERE q.flu_rt > 0")
+    con.execute("SELECT b.code, supply_demand.acc_trde_qty FROM daily_x b JOIN supply_demand ON supply_demand.code = b.code")
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_supply_close")
+    assert len(out) == 3 and all("aftermarket" in o for o in out), out
+
+
+def test_rule_j_allows_count_star_and_flow_only_join(lint, tmp_path, monkeypatch):
+    src = '''
+def f(con):
+    con.execute("SELECT count(*) FROM supply_demand WHERE date >= ?")
+    con.execute("SELECT COUNT(*), max(date) FROM supply_demand")
+    con.execute("SELECT b.close, s.institution FROM daily_x b JOIN supply_demand s ON s.code = b.code")
+'''
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_supply_close") == []
+
+
+def test_rule_l_catches_list_and_variable_keys(lint, tmp_path, monkeypatch):
+    src = '''
+import pandas as pd
+KEY = "avail_date"
+
+def a(ev, ea):
+    return pd.merge_asof(ev, ea, left_on="date", right_on=["avail_date"], by="code")
+
+def b(ev, ea):
+    return pd.merge_asof(ev, ea, left_on="date", right_on=KEY, by="code")
+
+def c(ea, dates):
+    col = "avail_date"
+    return earnings_yoy_panel(ea, dates, avail_col=col)
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_avail_date_asof")
+    assert len(out) == 3 and all("[asof]" in o for o in out), out
+
+
+def test_rule_l_marker_must_be_on_same_or_previous_line(lint, tmp_path, monkeypatch):
+    """표시가 호출에서 멀리(몇 줄 위·여러 줄 호출 중간의 다른 인자 줄) 있으면 면제가 아니다."""
+    src = '''
+# legacy-asof: 이 표시는 너무 멀다
+
+def a(ea, dates):
+    return earnings_yoy_panel(ea, dates, avail_col="avail_date")
+
+def b(ea, dates):
+    return earnings_leg_panel(
+        ea,  # legacy-asof: 키와 떨어진 다른 인자 줄
+        dates,
+        horizon=20,
+        avail_col="avail_date",
+    )
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_avail_date_asof")
+    assert len(out) == 2, out
+
+
+def test_rule_l_marker_on_key_line_inside_multiline_call_is_ok(lint, tmp_path, monkeypatch):
+    src = '''
+def b(ea, dates):
+    return earnings_leg_panel(
+        ea, dates,
+        avail_col="avail_date",  # legacy-asof: 사전등록 재현
+    )
+'''
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_avail_date_asof") == []
+
+
+def test_rule_m_covers_files_using_session_bar_gateway(lint, tmp_path, monkeypatch):
+    """문자열 minute_bars 없이 분봉 정문(read_session_bars*)만 부르는 파일도 대상이다."""
+    src = '''
+import pandas as pd
+from swing_it.krx_session import read_session_bars_agg
+def f(con):
+    s = read_session_bars_agg(con, start="2026-09-14")
+    s["date"] = pd.to_datetime(s["date"]).dt.tz_localize("Asia/Seoul")
+    return s
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_minute_bars_naive_kst")
+    assert len(out) == 1 and "tz_localize" in out[0], out
+
+
+def test_rule_n_catches_trade_value_names_and_comparisons(lint, tmp_path, monkeypatch):
+    src = '''
+MIN_TRADE_VALUE = 1000.0
+
+def f(df, trade_value, x):
+    g(df, min_trade_value=5_000)
+    a = df[df["trade_value"] >= 1000]
+    b = trade_value > 2_000.0
+    c = 500 < x.adv20
+    return a, b, c
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_trade_value_units")
+    names = sorted(o.split("문턱 ")[1].split(" ")[0] for o in out)
+    assert names == ["MIN_TRADE_VALUE", "adv20", "min_trade_value", "trade_value", "trade_value"], out
+
+
+def test_rule_n_ignores_lookback_zero_and_unit_helpers(lint, tmp_path, monkeypatch):
+    src = '''
+from swing_it.units import eok
+TV_LOOKBACK = 60
+ADV_LOOKBACK_DAYS = 20
+_TV_MIN_ROWS = 20
+MIN_TRADE_VALUE = eok(10)
+
+def f(df):
+    a = df[df["trade_value"] > 0]
+    b = df["adv20"] >= eok(50)
+    c = df["n_trades"] >= 30
+    return a, b, c
+'''
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_trade_value_units") == []
+
+
+# --- (p) 모의매매·재현 경로의 정문 인자 명시 -------------------------------------------------------------------------
+
+_PAPER_BAD = '''
+from swing_it.storage import read_prices, read_supply_demand, market_cap_asof_bulk
+from swing_it.krx_session import read_raw_close
+
+def load(con, s):
+    a = read_prices(con, cols=("code", "date", "close"), start="2016-08-01")
+    b = read_supply_demand(con, cols=("code", "date", "institution"))
+    c = read_raw_close(con, start="2016-08-01")
+    d = market_cap_asof_bulk(con, a)
+    e = read_prices(con, session=s["session"], start="2016-08-01")      # 변수도 명시다
+    f = read_raw_close(con, start="2016-08-01", aftermarket_fix=False)
+    return a, b, c, d, e, f
+'''
+
+
+def _paper_tree(lint, tmp_path, monkeypatch, rel: str, src: str) -> list[str]:
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(src, encoding="utf-8")
+    monkeypatch.setattr(lint, "REPO", tmp_path)
+    return lint.check_paper_explicit_kwargs()
+
+
+@pytest.mark.parametrize("rel", ["research/paper/leader_paper.py", "research/paper/new_arm.py",
+                                 "research/experiments/leader21.py", "research/experiments/recheck29.py",
+                                 "research/experiments/index27.py", "research/experiments/index28.py"])
+def test_rule_p_requires_explicit_gateway_args_in_paper_paths(lint, tmp_path, monkeypatch, rel):
+    out = _paper_tree(lint, tmp_path, monkeypatch, rel, _PAPER_BAD)
+    assert len(out) == 4 and all("[explicit]" in o for o in out), out
+    assert sorted(o.split("() 에 ")[1].split(" ")[0] for o in out) == ["aftermarket_fix=", "legacy=", "session=", "session="]
+
+
+def test_rule_p_ignores_files_outside_paper_paths(lint, tmp_path, monkeypatch):
+    """원장 경로가 아닌 연구 파일은 대상이 아니다(정문 기본값을 쓰는 것이 새 코드의 정석)."""
+    assert _paper_tree(lint, tmp_path, monkeypatch, "research/experiments/other.py", _PAPER_BAD) == []
+
+
+def test_rule_p_table_covers_gateway_behaviour_args(lint):
+    """표에서 정문 인자가 빠지면(규칙이 조용히 약해지면) 실패한다."""
+    for fn in ("read_prices", "read_prices_wide", "read_supply_demand"):
+        assert "session" in lint.EXPLICIT_KWARGS[fn]
+    assert "aftermarket_fix" in lint.EXPLICIT_KWARGS["read_raw_close"]
+    for pat in ("research/paper/*.py", "research/experiments/leader21.py", "research/experiments/recheck29.py"):
+        assert pat in lint.PAPER_PATHS
+
+
+# --- 2026-10-13 리뷰 MAJOR 3: 규칙이 main() 에 배선됐는가 --------------------------------------------------------------
+#
+# 규칙 함수의 단위 테스트는 ``main()`` 에서 ``violations += check_x()`` 한 줄이 빠져도 초록이다(GUARDRAILS §4.5 실패 모드).
+# 그래서 (1) ast 로 모든 최상위 check_* 가 main() 에서 불리는지 보고, (2) 규칙마다 위반 하나만 넣은 임시 레포 트리에서
+# main() 이 실패하고 그 규칙의 표지가 출력에 나오는지 끝단으로 본다.
+
+def test_every_check_function_is_called_from_main():
+    import ast
+
+    tree = ast.parse((REPO / "scripts" / "check_guardrails.py").read_text(encoding="utf-8"))
+    checks = {n.name for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("check_")}
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    called = {c.func.id for c in ast.walk(main) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+    assert len(checks) >= 17, checks
+    assert checks - called == set(), f"main() 에 배선되지 않은 규칙: {sorted(checks - called)}"
+
+
+_E2E = {
+    # 규칙: ({상대경로: 내용}, 출력에 나와야 할 표지)
+    "a": ({"src/swing_it/leaky.py": "from research.signals import contrarian_retail\n"}, "[boundary]"),
+    "b": ({"research/experiments/orphan_gate.py": "from prop_gate import prop_gate\nprop_gate(1, config={})\n"}, "[verdict]"),
+    "c": ({"research/experiments/judgey.py": 'verdict = "PASS"\n'}, "[reporter]"),
+    "d": ({"loader.py": 'q = "SELECT code FROM earnings WHERE period = \'%s\'" % 1\n'}, "[earnings]"),
+    "e": ({"research/experiments/sweep.py": "from prop_gate import prop_gate\nprop_gate(1, 2)\n"}, "[trials]"),
+    "f": ({"research/experiments/lonely_gate.py": "x = 1\n",
+           "research/logs/lonely/VERDICT.md": "재현 불가 고지 — 테스트\n"}, "[harness]"),
+    "g": ({"loader.py": 'q = "SELECT code, close FROM daily_bars"\n'}, "가격 테이블을 직접"),
+    "g2": ({"loader.py": 'q = """SELECT sd.code FROM supply_demand sd\n JOIN stocks s ON s.code = sd.code"""\n'}, "INNER JOIN"),
+    "h": ({"research/logs/ghost/VERDICT.md": "판정만 있다\n"}, "[orphan-verdict]"),
+    "j": ({"loader.py": 'q = "SELECT code, close FROM supply_demand"\n'}, "[aftermarket]"),
+    "k": ({"loader.py": 'q = "SELECT code FROM shares_outstanding_history"\n'}, "[shares]"),
+    "l": ({"loader.py": 'def f(ea, d):\n    return panel(ea, d, avail_col="avail_date")\n'}, "[asof]"),
+    "m": ({"loader.py": 'q = "SELECT ts AT TIME ZONE \'UTC\' FROM minute_bars"\n'}, "[tz]"),
+    "n": ({"loader.py": "ADV_FLOOR = 20000.0\n"}, "[units]"),
+    "o": ({"loader.py": 'q = "SELECT close FROM sector_index"\n'}, "[index]"),
+    "p": ({"research/paper/arm.py": "def f(con):\n    return read_prices(con)\n"}, "[explicit]"),
+}
+
+
+def _e2e_tree(lint, tmp_path, monkeypatch, files: dict) -> Path:
+    root = tmp_path / "repo"
+    for rel, text in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    root.mkdir(exist_ok=True)
+    monkeypatch.setattr(lint, "REPO", root)
+    monkeypatch.setattr(lint, "SRC", root / "src" / "swing_it")
+    monkeypatch.setattr(lint, "EXPERIMENTS", root / "research" / "experiments")
+    monkeypatch.setattr(lint, "LOGS", root / "research" / "logs")
+    return root
+
+
+def test_main_passes_on_an_empty_tree(lint, tmp_path, monkeypatch, capsys):
+    """끝단 기준선 — 빈 트리는 통과(아래 실패가 환경 탓이 아니라 주입한 위반 탓임을 보장)."""
+    _e2e_tree(lint, tmp_path, monkeypatch, {})
+    assert lint.main() == 0, capsys.readouterr().out
+
+
+@pytest.mark.parametrize("rule", sorted(_E2E))
+def test_main_fails_on_each_injected_violation(lint, tmp_path, monkeypatch, capsys, rule):
+    files, mark = _E2E[rule]
+    _e2e_tree(lint, tmp_path, monkeypatch, files)
+    rc = lint.main()
+    out = capsys.readouterr().out
+    assert rc != 0 and mark in out, f"({rule}) 위반을 넣었는데 main() 이 못 잡았다 — 배선 누락? rc={rc}\n{out}"
+
+
+def test_main_fails_on_foreign_commit_identity(lint, tmp_path, monkeypatch, capsys):
+    """(i) 도 main() 경로로 — 다른 이메일 커밋이 있는 임시 레포."""
+    import subprocess
+
+    root = _e2e_tree(lint, tmp_path, monkeypatch, {"f.txt": "x"})
+
+    def git(*a):
+        return subprocess.run(("git", *a), cwd=root, capture_output=True, text=True, check=False)
+
+    git("init", "-q")
+    git("config", "core.hooksPath", "")
+    git("config", "user.name", "T")
+    git("config", "user.email", "me@example.com")
+    git("add", "-A")
+    git("-c", "user.email=work@corp.com", "commit", "-q", "-m", "bad")
+    assert lint.main() != 0
+    assert "[identity]" in capsys.readouterr().out

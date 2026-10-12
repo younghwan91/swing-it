@@ -242,6 +242,10 @@
    `check_guardrails` (f) 가 `*_gate.py` 의 하버스 사용을 강제한다(부탁 → 규칙).
 5. **경계 린트** → `src/swing_it`가 `research/`를 import하면 실패하는 간단한 검사, 모든
    `research/experiments/*_gate.py`에 대응 `VERDICT.md`가 있는지 grep 검사(pre-commit/CI).
+   **정문 인자 명시**(2026-10-13) — `check_guardrails` (p) 가 모의매매·재현 경로(`research/paper/*.py`·`leader21`·`recheck29`·`index27/28`)의
+   정문 호출에 `session=`·`aftermarket_fix=`·`legacy=` 명시를 요구한다(정문 기본값이 바뀌어도 장부 경로가 조용히 따라가지 않게).
+   규칙이 `main()` 에 배선됐는지는 테스트가 ast 와 끝단(규칙마다 위반 하나 넣은 임시 트리 → `main()` 실패)으로 본다 — 단위 테스트만으로는
+   배선 한 줄이 빠져도 초록이다.
 
 > CI(`.github/workflows/ci.yml`)는 **가드레일 기계의 정합성**(누출 없는 폴드 분할, 판정 필드 없음)을
 > 검증하지, 특정 연구가 가드레일을 **썼는지**는 못 막는다 — 이건 연구 코드의 본질적 한계다. 그래서

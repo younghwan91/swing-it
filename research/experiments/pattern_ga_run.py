@@ -1656,12 +1656,13 @@ def minute_coverage(E: Engine, args) -> dict:
     from prop_swing_common import load_env_db  # noqa: PLC0415
 
     from swing_it.storage import connect, db_default  # noqa: PLC0415
+    from swing_it.units import eok  # noqa: PLC0415
     F, I_ = np.asarray(E.F), np.asarray(E.I)
     d = I_[:, PE.II["d"]]
     lo = E.row(MINUTE_LO)
     m = d >= lo
     u = pd.DataFrame({"ci": I_[m, PE.II["ci"]], "d": d[m], "adv": F[m, PE.FI["adv20"]]}).drop_duplicates(["ci", "d"]).reset_index(drop=True)
-    u["band"] = np.where(u["adv"] >= 5_000, "≥50억", "10억~50억")
+    u["band"] = np.where(u["adv"] >= eok(50), "≥50억", "10억~50억")
     load_env_db()
     con = connect(db_default())
     has = np.zeros(len(u), bool)

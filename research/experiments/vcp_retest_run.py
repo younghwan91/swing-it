@@ -640,7 +640,7 @@ def funnel_counts(ctx: Ctx, floor: float, lo_all: str, hi: str, lo_of: dict) -> 
            "V0_base_len": {q: float(t0["base_len"].quantile(q)) for q in (0.0, 0.25, 0.5, 0.75, 1.0)} if len(t0) else {},
            "V0_h0_wick": int(t0["h0_wick_flag"].sum()) if len(t0) else 0,
            "V0_pivot_inprogress": int(t0["pivot_inprogress"].sum()) if len(t0) else 0,
-           "V0_liquid_1pct": int((t0["adv20"] > 1_000.0).sum()) if len(t0) else 0,
+           "V0_liquid_1pct": int((t0["adv20"] > eok(10)).sum()) if len(t0) else 0,
            "V0_adv_median": float(t0["adv20"].median()) if len(t0) else np.nan,
            "V0_amb_overlap": amb_overlap_count(t0, trades.get("_V0_skips"))}
     return out

@@ -297,7 +297,7 @@ def funnel_counts(ctx: WCtx, floor: float, lo_all: str, hi: str, lo_of: dict) ->
            "W_e_inprogress": int((t["e_confirmed"] == 0).sum()) if len(t) else 0,
            "W_gap_fill": int(t["gap_fill"].sum()) if len(t) else 0,
            "W_rs_q": {q: float(t["rs_s"].quantile(q)) for q in (0.1, 0.5, 0.9)} if len(t) else {},
-           "W_liquid_1pct": int((t["adv20"] > 1_000.0).sum()) if len(t) else 0,
+           "W_liquid_1pct": int((t["adv20"] > eok(10)).sum()) if len(t) else 0,
            "chart": chart_points(ctx, t) if len(t) else []}
     return out
 
