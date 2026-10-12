@@ -37,8 +37,8 @@ ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl"}
 def load_db(con) -> tuple:
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     from swing_it.storage import read_prices
-    px = read_prices(con, cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True)
-    # 2026-09-14+ 일봉에 NXT 야간 체결이 섞였다(종가 85~88% 오염) → 분봉 정규장(09:00~15:32)으로 다시 만든다(조정계수 = 시가 비율)
+    px = read_prices(con, session="raw", cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True)
+    # 2026-09-14+ 일봉에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다(종가 85~88% 오염) → 분봉 정규장(09:00~15:32)으로 다시 만든다(조정계수 = 시가 비율)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
     stk = pd.read_sql("select code, market from stocks", con)
     days = pd.DatetimeIndex(sorted(px["date"].unique()))

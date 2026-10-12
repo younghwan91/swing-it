@@ -1,18 +1,23 @@
-"""KRX 정규장 일봉 — 2026-09-14 부터 ``daily_bars`` 에 섞인 NXT 야간 체결을 걷어낸다.
+"""KRX 정규장 일봉 — 2026-09-14 부터 ``daily_bars`` 에 섞인 **KRX 애프터마켓**(16:00~20:00 연속매매) 체결을 걷어낸다.
 
-**결함(2026-10-10 확인):** 2026-09-14 부터 키움 일봉 수집이 KRX+NXT 통합 시세를 받아 ``daily_bars.close`` 가 그날 마지막 체결
-(NXT 19:59~20:00)이 됐다. 예: 005930 2026-09-17 일봉 종가 256,000 = 분봉 19:59, KRX 종가(15:30 단일가) 252,500.
-분봉이 있는 종목 기준 10-08 하루에 1,351 중 1,182 종목의 종가가 KRX 종가와 다르다. ``daily_bars_adjusted`` 도 같은 값을 물려받는다.
-고가·저가·거래량·거래대금도 NXT 시간대를 포함한다. 시가(09:00)는 정상이다.
+**결함(2026-10-10 확인, 2026-10-12 정체 정정):** 2026-09-14 부터 키움 일봉·분봉(ka10081/ka10080)이 KRX 애프터마켓
+(16:00~20:00 연속매매, ETF·ETN 제외) 체결을 포함해 준다. 그래서 ``daily_bars.close`` 가 그날 마지막 체결(~19:59)이 됐다.
+예: 005930 2026-09-17 일봉 종가 256,000 = 분봉 19:59, KRX 정규장 종가(15:30 단일가) 252,500. 처음엔 NXT 야간 체결로 잘못
+알았다(이름 ``NXT_START`` 는 그 흔적 — 호환용 별칭으로 남긴다). ``daily_bars_adjusted``·``daily_bars_raw``·``supply_demand.close``·
+``acc_trde_qty`` 도 같은 피드라 함께 오염됐다. 고가·저가·거래량·거래대금도 애프터마켓을 포함한다. 시가(09:00)는 정상이다.
 
 (2026-10-08~09 에 "오진" 이라 적었던 진단 둘 — 분봉 15:30 봉이 공식 종가와 다르다는 설명, 일봉 = 수급 테이블 종가 일치 — 은 틀렸다.
 수급 테이블도 같은 키움 피드라 일치가 아무것도 증명하지 않고, 분봉 ``ts`` 는 시간대 없는 KST 라 변환을 한 번 더 걸면 비교가 어긋난다.)
 
-**고치는 법:** ``minute_bars``(KST naive) 의 09:00~15:30 봉으로 정규장 OHLCV 를 다시 만들고, 조정 테이블에는 같은 날 조정계수
-(조정 종가 / 원 종가 — 두 값 모두 같은 오염을 담아 비율은 유효)를 곱해 넣는다. 분봉이 없는 종목·날짜는 원값을 두고 ``krx_patched=False`` 로 표시한다
-(분봉은 하루 ~1,400~1,800 종목 — 유동 종목 위주라 NXT 거래 종목 대부분을 덮는다).
+**고치는 법 1 — 분봉:** ``minute_bars``(KST naive) 의 09:00~15:32 봉으로 정규장 OHLCV 를 다시 만들고, 조정 테이블에는 같은 날 조정계수
+(행 시가 / 정규장 시가 — 시가는 오염되지 않았다)를 곱해 넣는다. 분봉이 없는 종목·날짜는 원값을 두고 ``krx_patched=False`` 로 표시한다
+(분봉은 하루 ~1,400 종목뿐이다 — 나머지 ~1,200 종목은 아래 항등식으로만 종가를 되살린다).
 
-정본 수정은 수집기(quant-airflow, KRX 전용 시세 요청)에서 해야 한다 — 이 모듈은 그 전까지 swing-it 의 읽는 쪽 보정이다.
+**고치는 법 2 — 정규장 종가 항등식:** ``supply_demand`` 의 ``flu_rt``(등락률 ×100)는 그날 **기준가**(= 전 거래일 정규장 종가) 대비다.
+그래서 정규장 종가(t) = 호가 반올림(|close(t+1)| / (1 + flu_rt(t+1)/1e4)). 2026-09-14~10-08 분봉 있는 25,303건 중 99.98% 정확
+(어긋나는 것은 권리락·배당락처럼 기준가가 전일 종가와 다른 날). 마지막 거래일은 t+1 이 없어 쓸 수 없다. :func:`regular_close_from_supply_demand`.
+
+정본 수정은 수집기(quant-airflow, 정규장 전용 시세 요청)에서 해야 한다 — 이 모듈은 그 전까지 swing-it 의 읽는 쪽 보정이다.
 """
 
 from __future__ import annotations
@@ -22,10 +27,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-#: 일봉에 NXT 가 섞이기 시작한 첫 거래일.
-NXT_START = "2026-09-14"
+#: 일봉에 KRX 애프터마켓(16:00~20:00)이 섞이기 시작한 첫 거래일.
+AFTERMARKET_START = "2026-09-14"
+#: 옛 이름(처음에 NXT 로 잘못 알았다). 기존 호출부 호환용 별칭 — 값은 같다.
+NXT_START = AFTERMARKET_START
 #: 정규장 분봉 구간(KST, 양 끝 포함). 종가 단일가는 보통 15:30 봉이지만 **변동성 완화장치로 종가 단일가가 연장되면 15:32 에 찍힌다**
-#: (리뷰 `REVIEW_META_GEN2.md` N1 — 15:30 컷이면 그날 종가가 15:19 연속매매가가 됐다). NXT 애프터마켓 첫 봉은 15:35 라 15:32 컷은 그것을 넣지 않는다.
+#: (리뷰 `REVIEW_META_GEN2.md` N1 — 15:30 컷이면 그날 종가가 15:19 연속매매가가 됐다). 분봉의 15:35 봉은 09-14 전에도 있던 봉이고
+#: (애프터마켓 첫 봉이 아니다 — 옛 주석의 오류), 애프터마켓 봉은 16:00~19:59 다. 15:32 컷은 둘 다 넣지 않는다.
 SESSION_OPEN = "09:00:00"
 SESSION_CLOSE = "15:32:00"
 
@@ -48,7 +56,7 @@ def session_bars_from_minutes(minutes: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def read_session_bars(con: Any, *, start: str = NXT_START, end: "str | None" = None) -> pd.DataFrame:
+def read_session_bars(con: Any, *, start: str = AFTERMARKET_START, end: "str | None" = None) -> pd.DataFrame:
     """DB 분봉 → 정규장 일봉. ``start``~``end``(포함) 날짜."""
     q = ("SELECT code, ts, open, high, low, close, volume, trade_value FROM minute_bars "
          "WHERE ts >= %(lo)s AND ts < %(hi)s AND ts::time BETWEEN %(o)s AND %(c)s")
@@ -57,7 +65,7 @@ def read_session_bars(con: Any, *, start: str = NXT_START, end: "str | None" = N
     return session_bars_from_minutes(m)
 
 
-def read_session_bars_agg(con: Any, *, start: str = NXT_START, end: "str | None" = None) -> pd.DataFrame:
+def read_session_bars_agg(con: Any, *, start: str = AFTERMARKET_START, end: "str | None" = None) -> pd.DataFrame:
     """:func:`read_session_bars` 와 같은 결과를 **DB 에서 집계**해 받는다(Postgres). 분봉을 pandas 로 끌어오면 하루 ~1,800 종목 ×
     391 분 = 70만 행, 한 달이면 1,300만 행이라 RSS 가 수 GB 로 뛴다(2026-10-10 실측) — 긴 구간·메모리 상한이 있는 작업은 이쪽.
     시가 = 첫 봉 open, 종가 = 15:32 이하 마지막 봉 close, 고저 = max/min, 거래량·거래대금 = 합(거래대금은 백만원)."""
@@ -73,13 +81,16 @@ def read_session_bars_agg(con: Any, *, start: str = NXT_START, end: "str | None"
     return out
 
 
-def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NXT_START,
+def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = AFTERMARKET_START,
                  adjusted: bool = True) -> pd.DataFrame:
     """롱 가격표(code, date, open, high, low, close, volume, trade_value …)의 ``since`` 이후 행을 정규장 값으로 바꾼다.
 
     ``adjusted=True`` 면 그 행의 조정계수 = 행의 close / 원 일봉 close 를 알 수 없으므로 **행 자신의 open 비율**을 쓴다:
     시가는 오염되지 않았으므로 factor = 행 open / 정규장 open. 가격 4개에 factor 를 곱하고 거래량·거래대금은 정규장 값 그대로.
     정규장 값이 없는 행은 그대로 두고 ``krx_patched=False``. 반환은 사본, 열 ``krx_patched`` 추가.
+
+    **멱등:** 입력에 이미 ``krx_patched`` 열이 있으면(정문 :func:`swing_it.storage.read_prices` 의 정규장 모드 출력 등) True 행은
+    건드리지 않는다 — 조정계수를 다시 구하면 (so·fac)/so ≠ fac 로 끝자리가 흔들리기 때문이다. 없으면 예전과 같다.
     """
     df = prices.copy()
     df["date"] = pd.to_datetime(df["date"])
@@ -87,13 +98,16 @@ def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NX
     for col in ("open", "high", "low", "close", "volume", "trade_value"):
         if col in df.columns:
             df[col] = df[col].astype(float)
-    df["krx_patched"] = False
+    prior = df["krx_patched"].fillna(False).to_numpy(bool) if "krx_patched" in df.columns else None
+    df["krx_patched"] = False if prior is None else prior
     if session.empty:
         return df
     s = session.copy()
     s["date"] = pd.to_datetime(s["date"])
     s = s.set_index(["code", "date"])
     late = df["date"] >= pd.Timestamp(since)
+    if prior is not None:
+        late &= ~prior
     key = pd.MultiIndex.from_arrays([df.loc[late, "code"], df.loc[late, "date"]])
     hit = key.isin(s.index)
     idx = df.index[late][hit]
@@ -115,19 +129,113 @@ def patch_prices(prices: pd.DataFrame, session: pd.DataFrame, *, since: str = NX
     return df
 
 
+def read_session_bars_any(con: Any, *, start: str, end: "str | None" = None) -> "pd.DataFrame | None":
+    """정규장 일봉(분봉 집계) — Postgres 는 :func:`read_session_bars_agg`, sqlite 는 ``minute_bars`` 표가 있으면 그것으로,
+    없으면 ``None``(보정할 원천이 없다 — 부르는 쪽이 에러로 바꾼다)."""
+    import sqlite3  # noqa: PLC0415
+
+    if not isinstance(con, sqlite3.Connection):
+        return read_session_bars_agg(con, start=start, end=end)
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='minute_bars'").fetchone() is None:
+        return None
+    hi = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d") if end else "2100-01-01"
+    m = pd.read_sql_query("SELECT code, ts, open, high, low, close, volume, trade_value FROM minute_bars WHERE ts >= ? AND ts < ?",
+                          con, params=(start, hi))
+    return session_bars_from_minutes(m)
+
+
+def patch_wide(panels: "dict[str, pd.DataFrame]", session: pd.DataFrame, *, since: str = AFTERMARKET_START,
+               adjusted: bool = True) -> dict:
+    """와이드 패널(날짜 × 종목) 묶음의 ``since`` 이후 행을 :func:`patch_prices` 로 정규장 값으로 바꿔 **제자리에** 꽂는다.
+
+    ``adjusted=True`` 면 ``panels["open"]`` 이 있어야 한다(조정계수 = 행 시가 / 정규장 시가). 반환 = {rows, patched, unpatched}
+    (``since`` 이후 값이 하나라도 있는 (날짜, 종목) 수 기준).
+    """
+    cols = [c for c in ("open", "high", "low", "close", "volume", "trade_value") if c in panels]
+    if not cols:
+        return {"rows": 0, "patched": 0, "unpatched": 0}
+    days = panels[cols[0]].index
+    late = days >= pd.Timestamp(since)
+    if not late.any():
+        return {"rows": 0, "patched": 0, "unpatched": 0}
+    if adjusted and "open" not in panels:
+        raise ValueError("조정 가격 패널을 보정하려면 open 패널이 필요하다(조정계수 = 행 시가 / 정규장 시가)")
+    long = pd.concat({c: panels[c].loc[late].stack(future_stack=True) for c in cols}, axis=1)
+    long = long.dropna(how="all").rename_axis(["date", "code"]).reset_index()
+    patched = patch_prices(long, session, since=since, adjusted=adjusted)
+    for c in cols:
+        w = patched.pivot(index="date", columns="code", values=c)
+        panels[c].loc[w.index, w.columns] = w.to_numpy()
+    n, k = int(len(patched)), int(patched["krx_patched"].sum())
+    return {"rows": n, "patched": k, "unpatched": n - k}
+
+
+# ── 정규장 종가 항등식(supply_demand) ──────────────────────────────────────────────────────────────────────────────
+#: 항등식 값이 같은 날 원 종가(애프터마켓 포함)와 이만큼 넘게 어긋나면 버린다 — 분할·병합으로 기준가가 조정된 날(t+1)이다.
+IDENTITY_MAX_JUMP = 1.35
+
+
+def regular_close_from_supply_demand(sd: pd.DataFrame, *, max_jump: float = IDENTITY_MAX_JUMP) -> pd.DataFrame:
+    """``supply_demand``(code, date, close, flu_rt) → 정규장 종가(t) = 호가 반올림(|close(t+1)| / (1 + flu_rt(t+1)/1e4)).
+
+    ``flu_rt``(등락률 ×100)는 그날 기준가(= 전 거래일 정규장 종가) 대비라, 다음 행이 전 행의 정규장 종가를 알려 준다. 종목의 **마지막 행**
+    (t+1 없음)은 값이 없다. 기준가가 전일 종가와 다른 날(권리락·배당락)은 틀리고(2026-09-14~ 0.02%), 분할·병합은 원 종가 대비
+    ``max_jump`` 배 밖이라 버린다. 호가표는 2023-01-25 통합 표(:func:`swing_it.features.korea.tick_size_vec`) — 그 전 날짜에 쓰면 안 된다.
+    반환 열 code, date(datetime64), close.
+    """
+    from swing_it.features.korea import tick_size_vec  # noqa: PLC0415
+
+    x = sd[["code", "date", "close", "flu_rt"]].copy()
+    x["date"] = pd.to_datetime(x["date"])
+    x = x.sort_values(["code", "date"], kind="mergesort").reset_index(drop=True)
+    c = x["close"].astype(float).abs()
+    g = x["code"]
+    c1 = c.groupby(g).shift(-1)
+    f1 = x["flu_rt"].astype(float).groupby(g).shift(-1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        base = (c1 / (1.0 + f1 / 1e4)).to_numpy(float)
+        t = tick_size_vec(base)
+        reg = np.round(base / t) * t
+        ratio = reg / c.to_numpy(float)
+    ok = np.isfinite(reg) & (reg > 0) & np.isfinite(ratio) & (ratio <= max_jump) & (ratio >= 1.0 / max_jump)
+    return pd.DataFrame({"code": x["code"].to_numpy()[ok], "date": x["date"].to_numpy()[ok], "close": reg[ok]})
+
+
+def read_regular_close(con: Any, *, start: str, end: "str | None" = None) -> pd.DataFrame:
+    """``start``~``end`` 의 항등식 정규장 종가(:func:`regular_close_from_supply_demand`). t+1 행을 얻으려 ``end`` 뒤 한 달을 더 읽는다."""
+    import sqlite3  # noqa: PLC0415
+
+    ph = "?" if isinstance(con, sqlite3.Connection) else "%s"
+    hi = (pd.Timestamp(end) + pd.Timedelta(days=31)).strftime("%Y-%m-%d") if end else "2100-01-01"
+    sd = pd.read_sql_query(f"SELECT code, date, close, flu_rt FROM supply_demand WHERE date >= {ph} AND date <= {ph} "
+                           "AND close IS NOT NULL AND flu_rt IS NOT NULL", con, params=(start, hi))
+    out = regular_close_from_supply_demand(sd)
+    out = out[out["date"] >= pd.Timestamp(start)]
+    if end:
+        out = out[out["date"] <= pd.Timestamp(end)]
+    return out.reset_index(drop=True)
+
+
 # ── 원(미수정) 종가 ───────────────────────────────────────────────────────────────────────────────────────────────
 # **결함(2026-10-12 검증 29차):** ``daily_bars.close`` 는 이름과 달리 원 종가가 아니다 — 이후 액면분할·병합을 소급 반영한다
 # (005930 2017-03-31 41,200 원 vs 실제 2,060,000 원, 000670 2024-07-31 29,626 vs 314,500, 병합 종목은 5·10 배 위로).
 # 이것에 그 시점 주식수를 곱한 시총은 분할 전 대형주를 수십 분의 1 로, 병합 전 소형주를 수 배로 만든다(28세대 VOID, leader21 시총 상위 200).
 # 원 종가 = ``supply_demand.close``(키움·네이버, 2017~ 거의 전 종목; 키움은 부호가 붙을 수 있어 절댓값). 없을 때만 일봉으로 돌아가고
-# NXT 이후(``NXT_START``~)는 분봉 정규장 종가(원 가격)가 이긴다. 정본 수정은 quant-airflow(원 일봉 테이블) 소관.
+# 애프터마켓 이후(``AFTERMARKET_START``~)는 분봉 정규장 종가(원 가격)가 이긴다(``aftermarket_fix=True`` 면 항등식이 그다음). 정본 수정은 quant-airflow(원 일봉 테이블) 소관.
 RAW_CLOSE_CANARY = ("005930", "2017-03-31", 1_000_000.0)   # 50:1 분할 전 — 원 종가는 200만 원대
 
 
-def combine_raw_close(sd: pd.DataFrame, bars: pd.DataFrame, session: "pd.DataFrame | None" = None) -> pd.DataFrame:
-    """(code, date, close) 세 원천을 우선순위(분봉 정규장 > 수급 종가 > 일봉)로 합친다. 반환 열 code, date, close, raw_src."""
+def combine_raw_close(sd: pd.DataFrame, bars: pd.DataFrame, session: "pd.DataFrame | None" = None, *,
+                      identity: "pd.DataFrame | None" = None, sd_until: "str | None" = None) -> pd.DataFrame:
+    """(code, date, close) 원천을 우선순위로 합친다. 반환 열 code, date, close, raw_src.
+
+    기본(옛 동작, 모의매매 팔이 쓴다): 분봉 정규장 > 수급 종가 > 일봉. ``identity``(:func:`read_regular_close`)·``sd_until`` 을 주면
+    분봉 정규장 > **항등식** > 수급 종가(``sd_until`` **전** 날짜만 — 그 뒤 수급 종가는 애프터마켓이 섞였다) > 일봉.
+    """
     parts = []
-    for df, src in ((session, "session"), (sd, "supply_demand"), (bars, "daily_bars")):
+    if sd is not None and sd_until is not None and not sd.empty:
+        sd = sd[pd.to_datetime(sd["date"]) < pd.Timestamp(sd_until)]
+    for df, src in ((session, "session"), (identity, "identity"), (sd, "supply_demand"), (bars, "daily_bars")):
         if df is None or df.empty:
             continue
         x = df[["code", "date", "close"]].copy()
@@ -150,17 +258,27 @@ def check_raw_close_canary(df: pd.DataFrame) -> None:
         raise AssertionError(f"원 종가 카나리아 실패: {code} {day} close={hit['close'].iloc[0]} < {floor} — 소급 수정 가격을 읽었다")
 
 
-def read_raw_close(con: Any, *, start: str, end: "str | None" = None) -> pd.DataFrame:
-    """원(미수정) 종가 정문 — 시총(원 종가 × 그 시점 주식수)은 반드시 이것으로 만든다. Postgres."""
+def read_raw_close(con: Any, *, start: str, end: "str | None" = None, aftermarket_fix: bool = False) -> pd.DataFrame:
+    """원(미수정) 종가 정문 — 시총(원 종가 × 그 시점 주식수)은 반드시 이것으로 만든다. Postgres.
+
+    ``aftermarket_fix=False``(기본, 옛 동작 — 모의매매 팔 leader21 이 쓴다, 바꾸지 않는다): 분봉 정규장 > 수급 종가 > 일봉. 분봉이 없는
+    ~1,200 종목은 2026-09-14 이후 애프터마켓이 섞인 수급 종가를 쓴다. ``True``: 분봉 > 항등식(:func:`read_regular_close`) >
+    수급 종가(09-14 전만) > 일봉 — 새 코드는 이쪽. 마지막 거래일처럼 항등식이 없는 분봉 없는 종목은 일봉(오염)으로 떨어지고
+    ``raw_src='daily_bars'`` 로 남는다.
+    """
     hi = end or "2100-01-01"
     p = {"lo": start, "hi": hi}
     sd = pd.read_sql_query("SELECT code, date, close FROM supply_demand WHERE date >= %(lo)s AND date <= %(hi)s "
                            "AND close IS NOT NULL", con, params=p)
     from swing_it.storage import read_prices  # noqa: PLC0415 — storage 가 이 모듈을 쓰므로 순환을 피한다
     # 정문(가드레일 (g)). combine_raw_close 가 (code, date) 로 중복 제거·정렬하므로 행 순서는 결과에 영향이 없다.
-    bars = read_prices(con, cols=("code", "date", "close"), table="daily_bars", start=start, end=end)
-    sess = read_session_bars_agg(con, start=max(start, NXT_START), end=end) if hi >= NXT_START else None
-    out = combine_raw_close(sd, bars, sess)
+    bars = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars", start=start, end=end)
+    sess = read_session_bars_agg(con, start=max(start, AFTERMARKET_START), end=end) if hi >= AFTERMARKET_START else None
+    if aftermarket_fix:
+        ident = read_regular_close(con, start=max(start, AFTERMARKET_START), end=end) if hi >= AFTERMARKET_START else None
+        out = combine_raw_close(sd, bars, sess, identity=ident, sd_until=AFTERMARKET_START)
+    else:
+        out = combine_raw_close(sd, bars, sess)
     check_raw_close_canary(out)
     return out
 

@@ -34,9 +34,9 @@ def load(con):
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     q = lambda s, **k: pd.read_sql(s, con, **k)  # noqa: E731
     from swing_it.storage import read_prices
-    px = read_prices(con, cols=("code", "date", "open", "close"), start="2016-05-01", parse_dates=True)
+    px = read_prices(con, session="raw", cols=("code", "date", "open", "close"), start="2016-05-01", parse_dates=True)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
-    raw = read_prices(con, cols=("code", "date", "close", "trade_value"), table="daily_bars", start="2016-05-01", parse_dates=True)
+    raw = read_prices(con, session="raw", cols=("code", "date", "close", "trade_value"), table="daily_bars", start="2016-05-01", parse_dates=True)
     sh = q("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", parse_dates=["date", "knowledge_date"])
     stk = q("select code, name, market from stocks")
     dl = q("select code, name, market from delisted_stocks")

@@ -42,7 +42,7 @@ def load(cache: str):
     # 정문(가드레일 (d)(g)) — 예전 직접 SELECT 와 같은 SQL·같은 행 순서(정정공시 버전 포함 전부; as-of 는 아래 known 규칙이 고른다)
     earn = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"), all_versions=True,
                          avail_from="2018-01-01", parse_dates=True)
-    tv = read_prices(con, cols=("code", "date", "trade_value"), start="2018-10-01", end="2024-01-31", parse_dates=True)
+    tv = read_prices(con, session="raw", cols=("code", "date", "trade_value"), start="2018-10-01", end="2024-01-31", parse_dates=True)
     return days, codes, disc, earn, tv
 
 

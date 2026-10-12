@@ -37,7 +37,10 @@ def fam_hash() -> str:
 
 def flows(ctx, days, codes) -> dict:
     """(기관+외국인) 순매수 수량 N일 합 / 거래량(acc_trde_qty) N일 합 — :func:`pattern_ga_run._fill_flows` 와 같은 정의(날짜×종목)."""
-    q = pd.read_sql("SELECT code, date, foreign_, institution, acc_trde_qty FROM supply_demand", ctx.con, parse_dates=["date"])
+    from swing_it.storage import read_supply_demand
+    # 정문(가드레일 (j)) — 예전 직접 SELECT 와 같은 SQL. 캐시 재현 경로라 원값 고정(2026-09-14~ acc_trde_qty 는 애프터마켓 포함).
+    q = read_supply_demand(ctx.con, cols=("code", "date", "foreign_", "institution", "acc_trde_qty"), session="raw",
+                           require_delisted=False, parse_dates=True)
     q["code"] = q["code"].astype(str)
     q = q[q["code"].isin(set(map(str, codes)))]
 

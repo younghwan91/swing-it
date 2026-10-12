@@ -57,7 +57,7 @@ class Panels:
 
 def load_panels(con, *, start: str = "2023-06-01") -> Panels:
     """가격·수급 패널. 가격은 전 기간을 읽되(정문의 폐지 검사) ``start`` 이후로 자른다."""
-    prices = read_prices(con)
+    prices = read_prices(con, session="raw")
     prices["date"] = pd.to_datetime(prices["date"])
     prices = prices[prices["date"] >= pd.Timestamp(start)]
     # engine.panels 의 pivot 은 종목×날짜(전치) 모양이라 여기선 날짜×종목으로 직접 편다((code,date) 는 PK).

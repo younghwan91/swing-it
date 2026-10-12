@@ -50,10 +50,10 @@ MASS_LAG = 40         # v2: 질량을 두 유량 창보다 앞선 [t−59..t−4
 
 def load(db: str):
     con = connect(db)
-    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
+    prices = read_prices(con, session="raw", cols=("code", "date", "close", "trade_value"))
     prices["date"] = prices["date"].astype(str)
     # 기관만 읽는다 — individual 을 섞으면 폐지 종목이 NULL 로 빠진다(정문이 막는다).
-    sd = read_supply_demand(con, cols=("code", "date", "close", "institution"))
+    sd = read_supply_demand(con, session="raw", cols=("code", "date", "close", "institution"))
     sd["date"] = sd["date"].astype(str)
     return con, prices, sd
 

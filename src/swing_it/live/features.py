@@ -27,7 +27,7 @@
 분모(t−270 행)·RS(252일 수익률)·52주 고저(252행)·MA200 기울기(220행)다 — 300행이면 그날 값이 전 기간 패널과 같다.
 상장일 수(``listing_age``)는 창 시작에서 좌측 절단되지만 창이 252행보다 길어 "≥ 252" 판정은 같다.
 
-**NXT 보정(2026-09-14~):** 일봉 OHLCV 에 NXT 야간 체결이 섞였다(:mod:`swing_it.krx_session`). ``patch_nxt=True``
+**애프터마켓 보정(2026-09-14~, 옛 이름 NXT 보정):** 일봉 OHLCV 에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다(:mod:`swing_it.krx_session`). ``patch_nxt=True``
 (기본)면 분봉으로 만든 정규장 값으로 바꾼다 — 조정 패널은 시가 비율, 원자료 종가(1,000원 규칙)는 그대로 덮어쓴다.
 분봉이 없는 (종목, 날짜) 는 원값이 남고 ``patch_info`` 에 센다. 연구 경로는 보정하지 않으므로 대조는 보정 전 날짜에서 한다.
 """
@@ -355,7 +355,7 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
         q_lo, q_hi = win
     else:
         q_lo, q_hi = start, end
-    wide = read_prices_wide(con, cols=PRICE_COLS, start=q_lo, end=q_hi)
+    wide = read_prices_wide(con, session="raw", cols=PRICE_COLS, start=q_lo, end=q_hi)
     days_all = wide["close"].index
     hi = pd.Timestamp(end) if end is not None else days_all.max()
     upto = days_all[days_all <= hi]
@@ -364,7 +364,7 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
     else:
         lo = pd.Timestamp(start) if start is not None else upto.min()
     prices = _long_window(wide, PRICE_COLS, lo, hi)
-    raw = _long_window(read_prices_wide(con, cols=("open", "close"), table="daily_bars",
+    raw = _long_window(read_prices_wide(con, session="raw", cols=("open", "close"), table="daily_bars",
                                         start=str(lo.date()), end=str(hi.date())), ("open", "close"), lo, hi)
 
     # 정수 열(거래량·거래대금)에 정규장 float 를 덮어쓰면 pandas 가 거부한다 — 먼저 float 로.
@@ -389,7 +389,7 @@ def load_inputs(con: Any, *, start: "str | None" = PANEL_START, end: "str | None
     stocks = pd.read_sql_query("SELECT code, market FROM stocks", con)
     delisted = pd.read_sql_query("SELECT code, market FROM delisted_stocks", con)
     meta = load_listing_meta(con)
-    sd = read_supply_demand(con, cols=SUPPLY_COLS, start=lo.strftime("%Y-%m-%d"), end=hi.strftime("%Y-%m-%d"))
+    sd = read_supply_demand(con, session="raw", cols=SUPPLY_COLS, start=lo.strftime("%Y-%m-%d"), end=hi.strftime("%Y-%m-%d"))
     ea = read_earnings(con, all_versions=True, cols=EARN_COLS)
     shares = pd.read_sql_query("SELECT code, date, shares_outstanding, knowledge_date FROM shares_outstanding_history",
                                con)
@@ -401,7 +401,7 @@ def signal_panels_for(con: Any, d: "str | pd.Timestamp | None" = None, cfg: Stra
                       lookback: int = LOOKBACK_ROWS, patch_nxt: bool = True) -> "tuple[dict, pd.Timestamp]":
     """그날치(라이브 ``signal`` 작업): 신호일 ``d`` (None = DB 최신 거래일)까지 ``lookback`` 거래일 패널.
 
-    Returns: ``(panels, d)`` — ``scan(panels, d, cfg)`` 로 후보를 얻는다. ``panels["patch_info"]`` 에 NXT 보정 건수.
+    Returns: ``(panels, d)`` — ``scan(panels, d, cfg)`` 로 후보를 얻는다. ``panels["patch_info"]`` 에 애프터마켓(옛 이름 NXT) 보정 건수.
 
     Raises:
         ValueError: ``lookback`` < :func:`min_lookback_rows` (rel 이 조용히 달라진다) 또는 신호일이 가격 테이블에 없음.

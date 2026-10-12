@@ -1469,8 +1469,10 @@ def build_cache(cache: str, t0: float, *, with_p: bool) -> dict:
 def _fill_flows(F, ctx, days, codes, ci, s) -> None:
     """9세대: supply_demand → d−1(행 s)까지 N일(5·20) (기관+외국인)·개인 순매수 수량 합 / 거래량 합. 그날 수급은 장 마감 뒤 확정 → d 주문에 쓴다.
     N일 중 80% 이상 자료가 있을 때만 값(아니면 NaN — 거르기는 '모르면 통과')."""
-    q = pd.read_sql("SELECT code, date, individual, foreign_, institution, acc_trde_qty, source FROM supply_demand", ctx.con,
-                    parse_dates=["date"])                       # (code, date) 는 기본키 — 중복 없음
+    from swing_it.storage import read_supply_demand
+    # 정문(가드레일 (j)) — 예전 직접 SELECT 와 같은 SQL(전 소스·필터 없음, 그래서 폐지 검사 대상이 아니다). 캐시 재현 경로라 원값 고정.
+    q = read_supply_demand(ctx.con, cols=("code", "date", "individual", "foreign_", "institution", "acc_trde_qty", "source"),
+                           session="raw", require_delisted=False, parse_dates=True)   # (code, date) 는 기본키 — 중복 없음
     q["code"] = q["code"].astype(str)
     q = q[q["code"].isin(set(map(str, codes)))]
     def wide(col):

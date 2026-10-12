@@ -27,9 +27,9 @@ def load(con):
     ev = pd.read_sql("select index_name, effective_date, action, code, announce_date from index_changes", con,
                      parse_dates=["effective_date", "announce_date"])
     from swing_it.storage import read_prices
-    px = read_prices(con, cols=("code", "date", "open", "close"), start="2015-10-01", parse_dates=True)
+    px = read_prices(con, session="raw", cols=("code", "date", "open", "close"), start="2015-10-01", parse_dates=True)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
-    raw = read_prices(con, cols=("code", "date", "close"), table="daily_bars", start="2015-10-01", parse_dates=True)
+    raw = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars", start="2015-10-01", parse_dates=True)
     sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
                      parse_dates=["date", "knowledge_date"])
     stk = pd.read_sql("select code, market from stocks", con)

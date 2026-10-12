@@ -108,8 +108,8 @@ class PositionRec:
     entered_qty: int = 0            # 진입 체결 누계
     last_day: str | None = None     # 전략 day_no 를 마지막으로 올린 거래일(하루 한 번만 올린다)
     last_eod: str | None = None
-    #: MA50 추적용 KRX 정규장 종가(오래된 것 → 최신, 최대 trail_ma − 1 개). signal 작업이 DB(NXT 보정본)에서
-    #: 새로 채우고 eod 가 그날 KRX 종가를 덧붙인다. 키움 일봉(ka10081)은 2026-09-14 부터 NXT 가 섞여 쓰지 않는다.
+    #: MA50 추적용 KRX 정규장 종가(오래된 것 → 최신, 최대 trail_ma − 1 개). signal 작업이 DB(애프터마켓 보정본)에서
+    #: 새로 채우고 eod 가 그날 KRX 종가를 덧붙인다. 키움 일봉(ka10081)은 2026-09-14 부터 KRX 애프터마켓(16:00~20:00)이 섞여 쓰지 않는다.
     trail_closes: list[float] = field(default_factory=list)
     strat: dict[str, Any] | None = None   # 직렬화된 PositionState
     stop: float | None = None       # 관측용 사본(전략 상태가 정본)

@@ -70,7 +70,7 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     load_env_db()
     con = connect(db_default())
-    prices = read_prices(con, cols=("code", "date", "open", "high", "low", "close", "trade_value"))
+    prices = read_prices(con, session="raw", cols=("code", "date", "open", "high", "low", "close", "trade_value"))
     # 정정공시 버전을 **전부** 받아 earnings_yoy_panel 이 날짜별로 고르게 한다.
     # 여기서 한 버전으로 접으면(read_earnings 기본값) 최신 정정본이 과거 날짜 셀에
     # 들어가 조용한 룩어헤드가 된다.

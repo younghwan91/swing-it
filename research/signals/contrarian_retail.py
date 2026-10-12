@@ -62,17 +62,20 @@ def load_data(db: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
       - ``prices``: long ``code``/``date``/``close``/``trade_value`` (분할조정)
       - ``flow``:   long ``code``/``date``/``individual``/``volume``
     """
-    from swing_it.storage import connect, db_default, read_prices
+    from swing_it.storage import connect, db_default, read_prices, read_supply_demand
     con = connect(db or db_default())
-    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
+    prices = read_prices(con, session="raw", cols=("code", "date", "close", "trade_value"))
     # individual IS NOT NULL 을 명시하는 이유: 폐지 종목 수급은 네이버에서 부분만
     # 받아(기관·외국인) individual 이 NULL 이다. 필터가 없어도 NaN 전파로 결국
     # 빠지지만, 그러면 "왜 폐지 종목이 이 연구에 없는가"가 코드에 안 드러난다.
     # 이 전략은 개인 순매매가 신호 자체라 부분 데이터로는 재현할 수 없다.
-    flow = pd.read_sql_query(
-        "SELECT code, date, individual, acc_trde_qty AS volume FROM supply_demand "
-        "WHERE individual IS NOT NULL", con
-    )
+    # 정문(가드레일 (j)) — 원값 고정(사전등록 재현 경로). 예전 SQL 의 WHERE individual IS NOT NULL 을 pandas 로 옮겼다:
+    # 같은 행·같은 순서이고, NULL 이 빠진 열은 예전처럼 정수 dtype 으로 되돌린다(결측이 섞여 float 가 된 것뿐이다).
+    flow = read_supply_demand(con, cols=("code", "date", "individual", "acc_trde_qty"), session="raw", require_delisted=False)
+    flow = flow[flow["individual"].notna()].reset_index(drop=True).rename(columns={"acc_trde_qty": "volume"})
+    for c in ("individual", "volume"):
+        if flow[c].notna().all() and flow[c].dtype.kind == "f" and (flow[c] % 1 == 0).all():
+            flow[c] = flow[c].astype("int64")
     con.close()
     for df in (prices, flow):
         df["code"] = df["code"].astype(str)

@@ -84,7 +84,7 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     ea = read_earnings(con, all_versions=True, cols=(
         "code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"))
     # read_prices: 로딩 시점에 상장폐지 종목 포함을 검사한다(생존편향은 게이트가 못 잡는다).
-    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
+    prices = read_prices(con, session="raw", cols=("code", "date", "close", "trade_value"))
     con.close()
 
     ea["code"] = ea["code"].astype(str)

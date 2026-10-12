@@ -424,7 +424,7 @@ def add_eps(cache_dir: str) -> dict:
     patch = KrxPatch(con)
 
     def panel(table):
-        df = patch.apply(read_prices(con, cols=("code", "date", "open", "close"), table=table), table)
+        df = patch.apply(read_prices(con, session="raw", cols=("code", "date", "open", "close"), table=table), table)
         df["date"] = pd.to_datetime(df["date"])
         return df.pivot(index="date", columns="code", values="close").astype(float).reindex(index=days, columns=codes)
 

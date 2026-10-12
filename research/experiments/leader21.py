@@ -55,9 +55,9 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
     from research.signals.eps_asof import eps_ok
     from swing_it.storage import read_prices
-    tv = read_prices(con, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
+    tv = read_prices(con, session="raw", cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
     sess = None
-    if krx_patch:                                   # 모의매매: 2026-09-14+ NXT 섞인 일봉 → 분봉 정규장 값(krx_session)
+    if krx_patch:                                   # 모의매매: 2026-09-14+ KRX 애프터마켓 섞인 일봉 → 분봉 정규장 값(krx_session)
         from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
         sess = read_session_bars_agg(con, start=NXT_START)
         tv = patch_prices(tv, sess, adjusted=False)
@@ -87,7 +87,7 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
         capw, n_bad = split_consistent_cap(rcw, adw, sh, asof="knowledge_date" if pit_shares else "date", raw_src=src)
         cap = capw.to_numpy().T
     else:                                           # 21~26세대 기록 재현용(결함: 소급 수정 가격 × 그 시점 주식수)
-        px = read_prices(con, cols=("code", "date", "close"), table="daily_bars", start="2016-08-01", parse_dates=True)
+        px = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars", start="2016-08-01", parse_dates=True)
         if sess is not None:
             px = patch_prices(px, sess, adjusted=False)
         pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)

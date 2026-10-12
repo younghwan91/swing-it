@@ -17,13 +17,13 @@
 * 종가 동시호가(15:20~15:30) 매도는 eod 작업이 그날 종가를 ``Quote(ts=15:30, bid=종가, ask=종가)`` 로 먹인다.
 * 장중 시세는 호가(bid/ask)가 있으면 그것을, 없으면 ``bid = ask = 현재가`` 로 먹인다(근사 — 스프레드 1틱 무시).
 
-KRX 정규장만(2026-09-14~ 키움 일봉에 NXT 야간 체결이 섞였다 — :mod:`swing_it.krx_session`):
+KRX 정규장만(2026-09-14~ 키움 일봉에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다 — :mod:`swing_it.krx_session`):
 
 * 키움 REST 의 종목코드 규약(키움 REST 문서): ``"005930"`` = KRX, ``"005930_NX"`` = NXT, ``"005930_AL"`` = SOR(통합).
   :class:`RestQuoteProvider` 는 **6자리 숫자 코드만** 받는다(접미 붙은 코드는 ``ValueError``) — 시세는 항상 KRX 다.
   이 규약은 문서 기준이고 이 레포에서 실호출로 확인하지 않았다(scalp-it 이 6자리로 ``ka10001`` 을 쓰고 있다).
 * 주문 거래소는 코어 ``OrderIntent`` 기본 ``dmst_stex_tp="KRX"`` (실주문으로 확인된 값). 런타임은 바꾸지 않는다.
-* ``ka10081`` 일봉은 **가격에 쓰지 않는다**(전일까지의 종가가 NXT 19:59 체결일 수 있다). 날짜(``dt``)만 휴장 판정에
+* ``ka10081`` 일봉은 **가격에 쓰지 않는다**(전일까지의 종가가 애프터마켓 19:59 체결일 수 있다). 날짜(``dt``)만 휴장 판정에
   쓴다 — quant-airflow 일봉 수집기의 실측("장중에도 오늘 봉을 첫 행으로 준다", 2026-08-24)에 기댄다.
 * 장 마감 판단 가격(eod)은 15:31~16:00 사이 ``ka10001`` ``cur_prc`` = KRX 15:30 단일가. 16:00 부터는 KRX 시간외
   단일가가 시작되므로 eod 시간창이 16:00 에 닫힌다.
@@ -210,7 +210,7 @@ class RestQuoteProvider:
         )
 
     def daily_bars(self, code: str, n: int = 60) -> list[DailyBar]:
-        """``ka10081`` 일봉. **가격은 NXT 가 섞일 수 있다** — 런타임은 날짜(휴장 판정)에만 쓴다."""
+        """``ka10081`` 일봉. **가격은 KRX 애프터마켓 체결이 섞일 수 있다** — 런타임은 날짜(휴장 판정)에만 쓴다."""
         code = self._krx_code(code)
         today = self._clock().astimezone(KST).strftime("%Y%m%d")
         raw = self._api.chart.stock_daily_chart(stk_cd=code, base_dt=today, upd_stkpc_tp="1")

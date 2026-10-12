@@ -16,6 +16,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (g) raw 가격 SELECT — 유니버스에서 폐지 종목이 조용히 빠지는 걸 막는다.
   (g2) 생존자 전용 조인 — ``supply_demand JOIN stocks`` 는 WHERE 없이도 폐지분을 떨군다.
   (h) 코드 없는 판정 — (b)의 역방향. VERDICT 에 러너가 등록·실재하거나 재현불가 선언 필요.
+  (j) 애프터마켓 오염 열 — ``supply_demand`` 의 close·flu_rt·acc_trde_qty 를 정문 밖에서 직접 SELECT 하면 실패.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -351,6 +352,48 @@ def check_no_raw_price_select() -> list[str]:
                      "(상장폐지 종목 포함을 로딩 시점에 검사한다)")
 
 
+# (j) 2026-09-14 부터 supply_demand 의 close·flu_rt·acc_trde_qty 에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다. 정문
+# storage.read_supply_demand 가 기본으로 정규장 값으로 고치고(원값은 session="raw" 명시), 원 종가 정문은 krx_session.read_raw_close 다.
+# 직접 SELECT 는 그 보정을 조용히 건너뛴다 — 가격표 (g) 와 같은 이유로 막는다. 순매매 수량 열만 읽는 SELECT 는 대상이 아니다.
+_SD_SELECT = re.compile(r"\bSELECT\b(?P<sel>(?:(?!\bSELECT\b)[\s\S])*?)\bFROM\s+supply_demand\b", re.I)
+_SD_TAINTED = re.compile(r"(?<![\w.])(?:\w+\.)?(close|flu_rt|acc_trde_qty)\b|\*", re.I)
+_SD_COLS_EXEMPT = {
+    "src/swing_it/storage.py",            # 정문 자신
+    "src/swing_it/krx_session.py",        # 원 종가·항등식 정문(정규장 종가를 여기서 만든다)
+    "scripts/check_guardrails.py",        # 규칙 자신
+    "tests/test_check_guardrails.py",     # 규칙의 회귀 테스트 — 위반 모양을 픽스처로 담는다
+    # 리포트 검증기 — sector_flow 가 만든 값(원값 고정, session="raw")을 같은 원천으로 재계산해 대조한다.
+    # 보정본으로 재계산하면 전 칸이 불일치로 뜬다(위 (g2) 면제와 같은 이유).
+    "scripts/verify_report.py",
+}
+
+
+def check_no_raw_supply_close() -> list[str]:
+    """(j) 정문 밖에서 supply_demand 의 close·flu_rt·acc_trde_qty 를 직접 SELECT 하면 위반."""
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _SD_COLS_EXEMPT or rel.startswith(".venv/"):
+            continue
+        try:
+            strings = _sql_strings(p.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            out.append(f"[aftermarket] {rel} — 파싱 실패: {exc}")
+            continue
+        for line, sql in strings:
+            for m in _SD_SELECT.finditer(sql):
+                bad = _SD_TAINTED.search(m.group("sel"))
+                if bad is None:
+                    continue
+                out.append(
+                    f"[aftermarket] {rel}:{line + sql[: m.start()].count(chr(10))} — supply_demand 의 "
+                    f"{bad.group(0)} 를 직접 SELECT 했다. 2026-09-14~ 값에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다 — "
+                    f"swing_it.storage.read_supply_demand(...) 정문을 쓸 것(원값이 필요하면 session=\"raw\" 명시), "
+                    f"원 종가는 swing_it.krx_session.read_raw_close."
+                )
+    return out
+
+
 def check_no_survivor_only_join() -> list[str]:
     """(g2) supply_demand 를 상장 마스터(stocks)와 INNER JOIN 하면 위반."""
     out = []
@@ -485,6 +528,7 @@ def main() -> int:
     violations += check_gates_use_shared_harness()
     violations += check_no_raw_price_select()
     violations += check_no_survivor_only_join()
+    violations += check_no_raw_supply_close()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

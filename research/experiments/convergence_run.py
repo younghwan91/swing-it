@@ -238,7 +238,7 @@ def per_year_counts(days: pd.Series) -> dict:
 
 def raw_close_panel(con, p) -> pd.DataFrame:
     """1,000원 규칙용 원자료 종가(``Data`` 와 같은 방식 — ``daily_bars``)를 가격 패널 모양으로."""
-    raw = read_prices(con, cols=("code", "date", "close"), table="daily_bars")
+    raw = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars")
     raw["date"] = pd.to_datetime(raw["date"])
     raw = raw[raw["date"] >= pd.Timestamp(PANEL_START)]
     out = raw.pivot(index="date", columns="code", values="close").astype(float)

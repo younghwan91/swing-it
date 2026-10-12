@@ -62,7 +62,7 @@ def load(con, days: int) -> tuple[pd.DataFrame, list[str]]:
     dates = sorted(str(r[0]) for r in cur.fetchall())
 
     sd = read_supply_demand(
-        con,
+        con, session="raw",   # 리포트·verify_report 대조 경로 — 원값 고정(2026-09-14~ close·flu_rt·acc_trde_qty 는 애프터마켓 포함)
         cols=("code", "date", "close", "flu_rt", "acc_trde_qty",
               "individual", "foreign_", "institution", "etc_corp")
              + tuple(c for c, _ in INST_DETAIL),

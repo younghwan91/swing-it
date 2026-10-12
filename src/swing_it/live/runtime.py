@@ -12,7 +12,7 @@
 =============  =========  ====================================================================================
 작업            시각        하는 일
 =============  =========  ====================================================================================
-signal         07:35      DB(NXT 보정 일봉)로 신호일 d 후보 → 계획(``planned``). 최신일 = 직전 거래일·KRX 보정 확인.
+signal         07:35      DB(애프터마켓 보정 일봉)로 신호일 d 후보 → 계획(``planned``). 최신일 = 직전 거래일·KRX 보정 확인.
                           보유 종목은 d 의 KRX 종가로 돌파 실패(종가 < 피벗, 익절 전)·MA50 추적·최대 보유 상한(→ 오늘 시가
                           매도)·d 장 마감 자산·다일 낙폭 킬. 시간 손절은 없다(설계 §6).
 preopen        08:35      휴장·킬 확인 → 계좌 기준선 → 전일 결정 매도(장전 동시호가) → 지정가 매수(장전 동시호가).
@@ -35,7 +35,7 @@ reconcile      아무 때     장부 vs 계좌(기준선 감안) — **보고만
 * **시간창 밖이면 주문하지 않는다.** 장전 매수를 10시에 내면 추격 매수가 된다 — dry-run·live 는 작업별 시간창을 강제하고,
   페이퍼만 ``ignore_clock`` 으로 리허설할 수 있다.
 * **KRX 정규장만 본다.** 시세는 6자리 코드(``ka10001``) = KRX, 주문 거래소 ``KRX``(코어 ``OrderIntent`` 기본).
-  2026-09-14 부터 키움 일봉에 NXT 야간 체결이 섞여, 일봉(``ka10081``)은 **날짜(휴장 판정)에만** 쓰고 가격에는 쓰지 않는다.
+  2026-09-14 부터 키움 일봉에 KRX 애프터마켓(16:00~20:00) 체결이 섞여, 일봉(``ka10081``)은 **날짜(휴장 판정)에만** 쓰고 가격에는 쓰지 않는다.
   MA50 은 signal 이 DB 보정본(``swing_it.krx_session``)에서 가져온 KRX 종가 + eod 의 KRX 종가로만 잰다.
 * 체결 판정: 페이퍼는 모의 브로커 체결 그대로, 키움은 ``ka10076`` 미검증이라 **잔고 차이**로 판정한다(가격은 추정 —
   동시호가는 단일가, 장중 매도는 max(지정가, 현재가)). 설명 안 되는 잔고 차이는 고치지 않고 경보만 한다.
@@ -186,7 +186,7 @@ class SignalBatch:
     - ``candidates``: :func:`swing_it.live.strategy.scan` 결과(순위 순).
     - ``trail_closes``: 코드 → KRX 정규장 종가(오래된 것 → 최신, d 포함, 최소 ``trail_ma`` 개) — 후보와 **보유 중** 종목 둘 다.
       보유 종목의 MA50 추적 결정·장 마감 자산은 **여기 d 종가**로 한다(감사 L5 — 장후 키움 시세는 KRX 종가로 검증되지 않았다).
-    - ``krx_patched``: 신호일 ``d`` 의 NXT 보정(``swing_it.krx_session.patch_prices``)이 돌았나. ``patched_codes`` 는 d 행이
+    - ``krx_patched``: 신호일 ``d`` 의 애프터마켓 보정(``swing_it.krx_session.patch_prices``)이 돌았나. ``patched_codes`` 는 d 행이
       실제로 보정된 종목(보정 대상 기간 전이면 ``None`` = 검사 안 함).
     """
 
@@ -232,7 +232,7 @@ class SignalSource(Protocol):
 
 
 class FeaturesSignalSource:
-    """기본 신호 원천 — :func:`swing_it.live.features.signal_panels_for` (NXT 보정 포함) + :func:`strategy.scan`.
+    """기본 신호 원천 — :func:`swing_it.live.features.signal_panels_for` (애프터마켓 보정 포함) + :func:`strategy.scan`.
 
     DB 의존은 이 작업에만 둔다(지연 import). ``patch_info`` 로 신호일 ``d`` 의 KRX 정규장 보정 범위를 확인해
     :class:`SignalBatch` 에 싣는다 — 보정이 안 돈 날짜로는 신호를 내지 않는다(:meth:`SwingRuntime._job_signal`).
@@ -661,7 +661,7 @@ class SwingRuntime:
     def run(self, job: str, asof: date | None = None, *, force: bool = False, once: bool = False,
             oid: str | None = None) -> int:
         """작업 하나. 종료 코드: 0 정상(휴장 건너뜀 포함), 1 오류, 2 시간창 밖·잠금 경합, 3 상태 손상,
-        4 signal 이 **신규 진입을 중단**했다(입력 신선도·DB·최신일·NXT 보정 실패 — 보유 결정·자산은 수행됨)."""
+        4 signal 이 **신규 진입을 중단**했다(입력 신선도·DB·최신일·애프터마켓 보정 실패 — 보유 결정·자산은 수행됨)."""
         if job not in JOBS:
             raise ValueError(f"알 수 없는 작업: {job!r}")
         asof = asof or self._now().date()
@@ -1450,7 +1450,7 @@ class SwingRuntime:
                 self._settle_equity(ctx, batch)      # 검토 M5: 있는 날짜까지의 보유 종목 결정·자산은 수행한다
             self._abort_signal(ctx, f"DB 최신일 {batch.data_date} ≠ 직전 거래일 {prev} (daily_finalize 미완?)", batch)
             return
-        # 2) NXT 보정 확인(2026-09-14 이후 일봉은 보정본이 아니면 쓰지 않는다)
+        # 2) 애프터마켓(옛 이름 NXT) 보정 확인(2026-09-14 이후 일봉은 보정본이 아니면 쓰지 않는다)
         for msg in batch.alerts:
             self.alert("warn", "신호 원천 경고", msg)
         if not batch.krx_patched:
@@ -1827,7 +1827,7 @@ class SwingRuntime:
     def _job_eod(self, ctx: _Ctx, *, force: bool = False) -> None:
         """장 마감 **장부 정리·보고만**. MA50 추적·자산·낙폭 킬 결정은 다음날 07:35 ``signal`` 이 DB 보정(KRX) 종가로 한다.
 
-        감사 L5: 15:31 이후 ``ka10001 cur_prc`` 가 KRX 15:30 단일가라는 근거가 없다(같은 6자리 코드의 일봉이 NXT 통합값을
+        감사 L5: 15:31 이후 ``ka10001 cur_prc`` 가 KRX 15:30 단일가라는 근거가 없다(같은 6자리 코드의 일봉이 애프터마켓 포함값을
         준 것이 C1). 그래서 여기서 읽는 가격은 종가 동시호가 체결가 **추정**(``price_estimated``)과 보고용 잠정 평가에만 쓰고,
         결정에는 쓰지 않는다. 자산 이력(``equity_history``)도 여기서 쓰지 않는다.
         """
@@ -1879,7 +1879,7 @@ class SwingRuntime:
         for pos in list(st.open_positions()):
             n = self._cfg_of(pos).trail_ma
             if batch.patched_codes is not None and pos.code not in batch.patched_codes:
-                # 통합 검토 M4: 보유 종목의 d 행이 NXT 미보정(분봉 없음)이면 그 종가로 결정하지 않는다 — 보류 + 경보.
+                # 통합 검토 M4: 보유 종목의 d 행이 애프터마켓 미보정(분봉 없음)이면 그 종가로 결정하지 않는다 — 보류 + 경보.
                 self.alert("warn", "보유 종목 종가 미보정 — 결정 보류", f"{pos.code}: {d} KRX 보정 없음(분봉 결손). 직전 종가로만 평가")
                 if pos.trail_closes:
                     by_date.setdefault(d, {})[pos.code] = pos.trail_closes[-1]

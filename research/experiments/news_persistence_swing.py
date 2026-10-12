@@ -112,7 +112,7 @@ def n_judged() -> int:
 
 class Px:
     def __init__(self, con):
-        pr = read_prices(con, cols=("code", "date", "open", "close", "trade_value"))
+        pr = read_prices(con, session="raw", cols=("code", "date", "open", "close", "trade_value"))
         pr["date"] = pd.to_datetime(pr["date"])
         pr = pr[pr["date"] >= pd.Timestamp("2022-12-01")]
         late = int((pr["date"] >= pd.Timestamp(NXT_START)).sum())

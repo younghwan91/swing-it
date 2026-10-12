@@ -84,7 +84,7 @@ def load_prices() -> pd.DataFrame:
     """split-adjusted OHLC + trade_value 를 long 으로 로드."""
     load_env_db()
     con = connect(db_default())
-    prices = read_prices(con, cols=("code", "date", "open", "high", "low", "close", "trade_value"))
+    prices = read_prices(con, session="raw", cols=("code", "date", "open", "high", "low", "close", "trade_value"))
     con.close()
     prices["code"] = prices["code"].astype(str)
     prices["date"] = prices["date"].astype(str)

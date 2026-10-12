@@ -51,7 +51,7 @@ SENSITIVITY_WINDOWS = (100, 150, 200, 250, 300)
 
 def load_frames(db: str):
     con = connect(db)
-    prices = read_prices(con, cols=("code", "date", "close", "trade_value"))
+    prices = read_prices(con, session="raw", cols=("code", "date", "close", "trade_value"))
     prices["date"] = prices["date"].astype(str)
     ea = read_earnings(con, cols=("code", "period", "avail_date", "netinc",
                                   "netinc_prior", "knowledge_date"))

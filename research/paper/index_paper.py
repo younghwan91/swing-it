@@ -45,9 +45,9 @@ def main() -> None:
         print(f"{a.since} 이후 발표된 KOSPI200·KOSDAQ150 정기변경 없음 — 기록할 것 없음")
         return
     start = str((ch["announce_date"].min() - pd.Timedelta(days=10)).date())
-    px = read_prices(con, cols=("code", "date", "open", "close"), start=start, parse_dates=True)
+    px = read_prices(con, session="raw", cols=("code", "date", "open", "close"), start=start, parse_dates=True)
     px = patch_prices(px, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=True)
-    raw = read_prices(con, cols=("code", "date", "open", "close"), table="daily_bars", start=start, parse_dates=True)
+    raw = read_prices(con, session="raw", cols=("code", "date", "open", "close"), table="daily_bars", start=start, parse_dates=True)
     raw = patch_prices(raw, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=False)
     sh = q("select code, coalesce(knowledge_date, date) d, shares_outstanding from shares_outstanding_history", parse_dates=["d"])
     stk = q("select code, market, name from stocks")

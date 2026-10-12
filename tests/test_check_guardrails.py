@@ -372,3 +372,44 @@ def test_rule_g_reports_unparseable_file(lint, tmp_path, monkeypatch):
     """파싱 실패를 침묵하면 그 파일의 위반이 통째로 사라진다."""
     out = _scan(lint, tmp_path, monkeypatch, "def broken(:\n", "check_no_raw_price_select")
     assert len(out) == 1 and "파싱 실패" in out[0]
+
+
+# --- (j) supply_demand 애프터마켓 오염 열 ------------------------------------------------------------------
+
+_SD_TAINTED_READS = '''
+import pandas as pd
+
+def a(con):
+    return pd.read_sql("SELECT code, date, close FROM supply_demand WHERE date >= '2026-09-01'", con)
+
+def b(con):
+    return pd.read_sql("""
+        SELECT s.code, s.date, s.flu_rt
+        FROM supply_demand s
+    """, con)
+
+def c(con):
+    return pd.read_sql("select code, date, acc_trde_qty as v " "from supply_demand", con)
+
+def d(con):
+    return pd.read_sql("SELECT * FROM supply_demand", con)
+'''
+
+_SD_CLEAN_READS = '''
+def ok(con):
+    con.execute("SELECT code, date, foreign_, institution FROM supply_demand WHERE date >= ?")
+    con.execute("SELECT MAX(date) FROM supply_demand")
+    con.execute("SELECT b.close FROM daily_bars_x b WHERE b.code IN (SELECT code FROM supply_demand)")
+'''
+
+
+def test_rule_j_catches_tainted_supply_columns(lint, tmp_path, monkeypatch):
+    """close·flu_rt·acc_trde_qty·* 를 직접 SELECT 하면(여러 줄·별칭·연결 포함) 잡는다."""
+    out = _scan(lint, tmp_path, monkeypatch, _SD_TAINTED_READS, "check_no_raw_supply_close")
+    assert len(out) == 4, out
+    assert all("aftermarket" in o and "read_supply_demand" in o for o in out)
+
+
+def test_rule_j_allows_flow_only_and_date_reads(lint, tmp_path, monkeypatch):
+    """순매매 열·날짜만 읽는 SELECT 와, 바깥 SELECT 의 close(다른 표)는 대상이 아니다 — 거짓 양성 방지."""
+    assert _scan(lint, tmp_path, monkeypatch, _SD_CLEAN_READS, "check_no_raw_supply_close") == []

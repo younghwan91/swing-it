@@ -1687,10 +1687,10 @@ def test_window_bounded_wide_read_sqlite_keeps_delisted_check(tmp_path):
     con.executemany("INSERT INTO daily_bars_adjusted VALUES (?,?,?,?,?,?,?,?,?)", rows)
     assert trading_window(con, end=None, rows=3) == ("2026-10-07", "2026-10-09")
     assert trading_window(con, end="2026-10-08", rows=2) == ("2026-10-07", "2026-10-08")
-    w = read_prices_wide(con, cols=("close",), start="2026-10-07", end="2026-10-09")
+    w = read_prices_wide(con, cols=("close",), start="2026-10-07", end="2026-10-09", session="raw")   # 분봉 표 없는 sqlite
     assert list(w["close"].index.strftime("%m-%d")) == ["10-07", "10-08", "10-09"]
     assert set(w["close"].columns) == {"AAAAAA", "DDDDDD"}                      # 폐지 종목도 창 안이면 그대로
     con.execute("UPDATE daily_bars_adjusted SET source='kiwoom' WHERE code='DDDDDD'")
     con.execute("INSERT INTO daily_bars_adjusted VALUES ('ZZZZZZ','2026-10-01',1,1,1,1,1,1,'naver')")
-    w2 = read_prices_wide(con, cols=("close",), start="2026-10-07", end="2026-10-09")   # 창 밖 폐지 종목은 요구하지 않는다
+    w2 = read_prices_wide(con, cols=("close",), start="2026-10-07", end="2026-10-09", session="raw")   # 창 밖 폐지 종목은 요구하지 않는다
     assert "ZZZZZZ" not in w2["close"].columns

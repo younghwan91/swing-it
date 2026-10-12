@@ -412,11 +412,69 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
 PRICE_TABLE = "daily_bars_adjusted"   # 분할조정. 백테스트는 원자료(daily_bars) 금지.
 _PRICE_READ_COLS = ("code", "date", "open", "high", "low", "close", "volume", "trade_value")
 
+#: 가격 정문의 세션 모드. ``"regular"``(기본) = 2026-09-14~ 행을 KRX 정규장 값으로 보정(:mod:`swing_it.krx_session`, 분봉 09:00~15:32),
+#: ``"raw"`` = 테이블 값 그대로(애프터마켓 16:00~20:00 체결 포함). 사전등록 재현·자체 보정 경로는 ``"raw"`` 를 **명시**한다.
+SESSIONS = ("regular", "raw")
+#: 보정 대상 가격 테이블 → 조정 테이블인가(조정계수 = 행 시가 / 정규장 시가).
+_SESSION_TABLES = {"daily_bars": False, "daily_bars_adjusted": True}
+_SESSION_COLS = ("open", "high", "low", "close", "volume", "trade_value")
+
+
+class SessionUnavailable(RuntimeError):
+    """정규장 보정이 필요한데 할 수 없다(sqlite 에 분봉 표 없음, strict 모드의 미보정 행)."""
+
+
+def _check_session(session: str) -> None:
+    if session not in SESSIONS:
+        raise ValueError(f"session 은 {SESSIONS} 중 하나 — {session!r}")
+
+
+def _session_needs_open(table: str, use: "tuple[str, ...]", session: str, end: "str | None") -> bool:
+    """조정 테이블을 정규장으로 보정하려면 조정계수용 open 이 필요하다 — 요청에 없으면 안에서 더 읽고 버린다."""
+    from swing_it.krx_session import AFTERMARKET_START  # noqa: PLC0415
+
+    return (session == "regular" and _SESSION_TABLES.get(table, False) and "open" not in use
+            and any(c in _SESSION_COLS for c in use) and (end is None or end >= AFTERMARKET_START))
+
+
+def _apply_regular_session(con: Any, df, *, table: str, strict: bool):
+    """긴 가격표의 2026-09-14~ 행을 정규장 값으로(:func:`swing_it.krx_session.patch_prices`). 결과 ``attrs["krx_session"]`` 에
+    {rows, patched, unpatched}. 그 날짜 행이 없으면 **입력을 그대로**(dtype 도) 돌려준다 — 그래서 09-14 전 창은 ``"raw"`` 와 바이트 같다.
+    보정한 경우 ``krx_patched`` 열이 붙고 가격 열은 float 가 된다(``date`` 열은 입력 그대로)."""
+    import pandas as pd  # noqa: PLC0415
+
+    from swing_it.krx_session import AFTERMARKET_START, patch_prices, read_session_bars_any  # noqa: PLC0415
+
+    info = {"session": "regular", "since": AFTERMARKET_START, "rows": 0, "patched": 0, "unpatched": 0}
+    if (table not in _SESSION_TABLES or not {"code", "date"} <= set(df.columns)
+            or not any(c in df.columns for c in _SESSION_COLS)):
+        df.attrs["krx_session"] = info
+        return df
+    d = pd.to_datetime(df["date"])
+    late = (d >= pd.Timestamp(AFTERMARKET_START)).to_numpy()
+    if not late.any():
+        df.attrs["krx_session"] = info
+        return df
+    lo, hi = d[late].min().strftime("%Y-%m-%d"), d[late].max().strftime("%Y-%m-%d")
+    sess = read_session_bars_any(con, start=lo, end=hi)
+    if sess is None:
+        raise SessionUnavailable(
+            f"{table} 에 {AFTERMARKET_START} 이후 행 {int(late.sum())}개가 있는데 이 DB 에 minute_bars 가 없어 정규장으로 보정할 수 "
+            "없다(그 날짜 일봉에는 KRX 애프터마켓 16:00~20:00 체결이 섞였다). 원값이 필요하면 session='raw' 로 명시하라.")
+    out = patch_prices(df, sess, since=AFTERMARKET_START, adjusted=_SESSION_TABLES[table])
+    out["date"] = df["date"].to_numpy()                    # patch_prices 가 datetime 으로 바꾼 날짜 열을 입력 모양으로 되돌린다
+    n, k = int(late.sum()), int(out.loc[late, "krx_patched"].sum())
+    info.update(rows=n, patched=k, unpatched=n - k)
+    out.attrs["krx_session"] = info
+    if strict and n > k:
+        raise SessionUnavailable(f"{table} {AFTERMARKET_START} 이후 {n}행 중 {n - k}행은 분봉이 없어 정규장으로 보정하지 못했다(strict)")
+    return out
+
 
 def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
                 table: str = PRICE_TABLE, require_delisted: bool = True,
                 start: "str | None" = None, end: "str | None" = None,
-                parse_dates: bool = False):
+                parse_dates: bool = False, session: str = "regular", strict: bool = False):
     """백테스트용 가격 패널 — **상장폐지 종목 포함**을 로딩 시점에 검사한다.
 
     생존편향은 "가장 큰 숨은 인플레이터"인데(GUARDRAILS §3), 검증 스택은 넘겨받은
@@ -435,13 +493,20 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
         start, end: ``YYYY-MM-DD``(양 끝 포함) — **날짜로만** 자른다(종목은 자르지 않는다). 주면 폐지 검사도 그 창 기준
             (:func:`_assert_window_has_delisted`).
         parse_dates: ``date`` 열을 datetime64 로(``pd.read_sql(parse_dates=["date"])`` 와 같은 경로).
+        session: ``"regular"``(기본) — 2026-09-14~ 행(KRX 애프터마켓 16:00~20:00 체결이 섞였다)을 분봉 정규장 값으로 보정한다
+            (:func:`_apply_regular_session`; 보정 행 수는 ``df.attrs["krx_session"]``, 보정했으면 ``krx_patched`` 열). 그 날짜가 없는 창은
+            ``"raw"`` 와 바이트 같다. sqlite 에 분봉 표가 없는데 그 날짜가 있으면 :class:`SessionUnavailable`.
+            ``"raw"`` — 테이블 값 그대로(사전등록 재현·자체 보정 경로가 명시).
+        strict: 정규장 모드에서 분봉이 없어 보정 못 한 행이 하나라도 있으면 :class:`SessionUnavailable`.
 
     Returns: pandas DataFrame.
     """
     import pandas as pd
 
+    _check_session(session)
     use = tuple(cols or _PRICE_READ_COLS)
-    sel = ", ".join(use)
+    extra_open = _session_needs_open(table, use, session, end)
+    sel = ", ".join(use + (("open",) if extra_open else ()))
     ph = _ph(con)
     where, params = [], []
     if start is not None:
@@ -460,6 +525,12 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
                                         start=start or "0000-01-01", end=end or "9999-12-31")
         elif not where:
             _assert_universe_has_delisted(con, df, table=table)
+    if session == "regular":
+        df = _apply_regular_session(con, df, table=table, strict=strict)
+        if extra_open:
+            attrs = dict(df.attrs)
+            df = df.drop(columns="open")
+            df.attrs.update(attrs)
     return df
 
 
@@ -510,10 +581,54 @@ def _assert_window_has_delisted(con: Any, codes: "set[str]", *, table: str, star
                              "생존편향. 유니버스를 좁히는 조건을 걷어낼 것")
 
 
+class PricePanels(dict):
+    """:func:`read_prices_wide` 의 정규장 모드 반환 — ``{col: 와이드 패널}`` dict 그대로에 보정 통계 ``krx_session`` 속성."""
+
+    krx_session: dict
+
+
 def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, table: str = PRICE_TABLE,
                      require_delisted: bool = True, batch: int = 250_000,
-                     start: "str | None" = None, end: "str | None" = None):
+                     start: "str | None" = None, end: "str | None" = None,
+                     session: str = "regular", strict: bool = False):
     """:func:`read_prices` 의 **메모리 절약판** — 긴 프레임을 만들지 않고 날짜×종목 와이드 패널을 바로 채운다.
+
+    ``session``·``strict`` 는 :func:`read_prices` 와 같다. ``"regular"``(기본)면 2026-09-14~ 행을 분봉 정규장 값으로 제자리 보정하고
+    :class:`PricePanels`(``.krx_session`` = {rows, patched, unpatched})를 돌려준다. ``"raw"`` 는 예전처럼 dict.
+    """
+    import pandas as pd  # noqa: PLC0415
+
+    from swing_it.krx_session import AFTERMARKET_START, patch_wide, read_session_bars_any  # noqa: PLC0415
+
+    _check_session(session)
+    use = tuple(cols)
+    extra_open = _session_needs_open(table, use, session, end)
+    panels = _read_prices_wide_raw(con, cols=use + (("open",) if extra_open else ()), table=table,
+                                   require_delisted=require_delisted, batch=batch, start=start, end=end)
+    if session == "raw":
+        return panels
+    out = PricePanels(panels)
+    info = {"session": "regular", "since": AFTERMARKET_START, "rows": 0, "patched": 0, "unpatched": 0}
+    days = next(iter(panels.values())).index if panels else pd.DatetimeIndex([])
+    late = days >= pd.Timestamp(AFTERMARKET_START)
+    if table in _SESSION_TABLES and late.any() and any(c in _SESSION_COLS for c in panels):
+        sess = read_session_bars_any(con, start=days[late].min().strftime("%Y-%m-%d"), end=days[late].max().strftime("%Y-%m-%d"))
+        if sess is None:
+            raise SessionUnavailable(
+                f"{table} 에 {AFTERMARKET_START} 이후 {int(late.sum())}거래일이 있는데 이 DB 에 minute_bars 가 없어 정규장으로 보정할 수 "
+                "없다(KRX 애프터마켓 16:00~20:00 체결이 섞였다). 원값이 필요하면 session='raw' 로 명시하라.")
+        info.update(patch_wide(out, sess, since=AFTERMARKET_START, adjusted=_SESSION_TABLES[table]))
+        if strict and info["unpatched"]:
+            raise SessionUnavailable(f"{table} {AFTERMARKET_START} 이후 {info['unpatched']}행은 분봉이 없어 보정하지 못했다(strict)")
+    if extra_open:
+        del out["open"]
+    out.krx_session = info
+    return out
+
+
+def _read_prices_wide_raw(con: Any, *, cols: "tuple[str, ...]", table: str, require_delisted: bool, batch: int,
+                          start: "str | None", end: "str | None"):
+    """:func:`read_prices_wide` 의 원값 본체(세션 보정 전).
 
     같은 정문 규칙이다: WHERE 없이 전 종목·전 기간을 읽고 폐지 종목 포함을 검사한다(``require_delisted``). 다른 점은
     모양뿐 — Postgres 서버측 커서로 ``batch`` 행씩 받아 미리 잡아 둔 ``(거래일 × 종목)`` float 배열에 꽂는다. 580만 행
@@ -539,7 +654,7 @@ def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, ta
             if require_delisted:
                 _assert_window_has_delisted(con, set(df["code"].astype(str)), table=table, start=lo, end=hi)
         else:
-            df = read_prices(con, cols=("code", "date", *cols), table=table, require_delisted=require_delisted)
+            df = read_prices(con, cols=("code", "date", *cols), table=table, require_delisted=require_delisted, session="raw")
         df["date"] = pd.to_datetime(df["date"])
         return {c: df.pivot(index="date", columns="code", values=c).astype(float) for c in cols}
     where = " WHERE date >= %s AND date <= %s" if bounded else ""
@@ -591,7 +706,8 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
                        start: "str | None" = None, end: "str | None" = None,
                        sources: "tuple[str, ...] | None" = None,
                        require_delisted: bool = True,
-                       allow_individual_survivorship: bool = False):
+                       allow_individual_survivorship: bool = False,
+                       session: str = "regular", strict: bool = False, parse_dates: bool = False):
     """수급 패널 정문 — 가격의 :func:`read_prices` 에 대응하는 자리.
 
     이 테이블에는 오랫동안 정문이 없었다. 그래서 소비자들이 ``supply_demand JOIN
@@ -618,11 +734,18 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
         allow_individual_survivorship: ``individual`` 을 요청하면서 폐지 종목 커버리지를
             포기한다고 **명시**할 때 ``True``. 명시 없이 둘을 함께 요구하면
             ``AssertionError`` 로 막는다 — 조용한 생존편향보다 시끄러운 실패가 낫다.
+        session: ``"regular"``(기본) — ``close``·``flu_rt``·``acc_trde_qty`` 를 요청했고 2026-09-14~ 행이 있으면 그 행을 KRX 정규장 값으로
+            바꾼다(:func:`_apply_regular_supply`): 종가 = 분봉 정규장 > 항등식(:func:`swing_it.krx_session.regular_close_from_supply_demand`),
+            등락률 = 그 종가 / 그날 기준가, 거래량 = 분봉 정규장 합. 못 고친 값은 **NaN**(오염값을 남기지 않는다)이고 수는
+            ``df.attrs["krx_session"]``. ``"raw"`` — 테이블 값 그대로(사전등록 재현·자체 보정 경로가 명시). 순매매 수량 열은 손대지 않는다.
+        strict: 정규장 모드에서 못 고친 행이 있으면 :class:`SessionUnavailable`.
+        parse_dates: ``date`` 를 datetime64 로(``pd.read_sql(parse_dates=["date"])`` 와 같은 경로).
 
     Returns: pandas DataFrame.
     """
     import pandas as pd
 
+    _check_session(session)
     use = tuple(cols or _SUPPLY_READ_COLS)
     kiwoom_only = tuple(c for c in use if c in KIWOOM_ONLY_SUPPLY_COLS)
     if kiwoom_only and require_delisted and not allow_individual_survivorship:
@@ -648,12 +771,86 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
         where.append(f"source IN ({', '.join([ph] * len(sources))})")
         params.extend(sources)
     clause = (" WHERE " + " AND ".join(where)) if where else ""
-    sel = ", ".join(use)
+    affected = session == "regular" and any(c in use for c in _SUPPLY_SESSION_COLS) and (end is None or end >= _aftermarket_start())
+    extra = tuple(c for c in ("code", "date", "close", "flu_rt") if affected and c not in use)
+    sel = ", ".join(use + extra)
     df = pd.read_sql_query(  # noqa: S608 — 컬럼은 모듈 상수, 날짜는 파라미터 바인딩
-        f"SELECT {sel} FROM {SUPPLY_TABLE}{clause}", con, params=tuple(params) or None)
+        f"SELECT {sel} FROM {SUPPLY_TABLE}{clause}", con, params=tuple(params) or None,
+        parse_dates=["date"] if parse_dates and "date" in use else None)
     if require_delisted:
         _assert_supply_has_delisted(con, df, start=start, end=end)
+    if affected:
+        df = _apply_regular_supply(con, df, use=use, strict=strict)
+        if extra:
+            attrs = dict(df.attrs)
+            df = df.drop(columns=list(extra))
+            df.attrs.update(attrs)
     return df
+
+
+#: 2026-09-14~ KRX 애프터마켓이 섞인 수급 열(순매매 수량 열은 정규장 밖 체결을 따로 싣지 않아 대상이 아니다 — 확인 필요 시 별도 조사).
+_SUPPLY_SESSION_COLS = ("close", "flu_rt", "acc_trde_qty")
+
+
+def _aftermarket_start() -> str:
+    from swing_it.krx_session import AFTERMARKET_START  # noqa: PLC0415
+
+    return AFTERMARKET_START
+
+
+def _apply_regular_supply(con: Any, df, *, use: "tuple[str, ...]", strict: bool):
+    """수급표의 2026-09-14~ 행 close·flu_rt·acc_trde_qty 를 정규장 값으로(못 고치면 NaN). 그 날짜가 없으면 입력 그대로."""
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    from swing_it.krx_session import AFTERMARKET_START, read_regular_close, read_session_bars_any  # noqa: PLC0415
+
+    info = {"session": "regular", "since": AFTERMARKET_START, "rows": 0, "patched": 0, "unpatched": 0}
+    d = pd.to_datetime(df["date"])
+    late = (d >= pd.Timestamp(AFTERMARKET_START)).to_numpy()
+    if not late.any():
+        df.attrs["krx_session"] = info
+        return df
+    lo, hi = d[late].min().strftime("%Y-%m-%d"), d[late].max().strftime("%Y-%m-%d")
+    sess = read_session_bars_any(con, start=lo, end=hi)
+    if sess is None:
+        raise SessionUnavailable(
+            f"{SUPPLY_TABLE} 에 {AFTERMARKET_START} 이후 행 {int(late.sum())}개가 있는데 이 DB 에 minute_bars 가 없어 close·flu_rt·"
+            "acc_trde_qty 를 정규장으로 보정할 수 없다(KRX 애프터마켓 16:00~20:00 체결이 섞였다). 원값이 필요하면 session='raw'.")
+    ident = read_regular_close(con, start=lo, end=hi)
+    out = df.copy()
+    key = pd.MultiIndex.from_arrays([out.loc[late, "code"].astype(str).to_numpy(), d[late].to_numpy()])
+    s = sess.assign(code=sess["code"].astype(str), date=pd.to_datetime(sess["date"])).set_index(["code", "date"])
+    i = ident.assign(code=ident["code"].astype(str)).set_index(["code", "date"])
+    s_close = s["close"].reindex(key).to_numpy(float) if len(s) else np.full(len(key), np.nan)
+    i_close = i["close"].reindex(key).to_numpy(float) if len(i) else np.full(len(key), np.nan)
+    rc = np.where(np.isfinite(s_close), s_close, i_close)
+    ok = np.ones(len(key), bool)
+    for c in ("close", "flu_rt", "acc_trde_qty"):
+        if c in out.columns:
+            out[c] = out[c].astype(float)
+    if "close" in use:
+        out.loc[late, "close"] = rc
+        ok &= np.isfinite(rc)
+    if "flu_rt" in use:
+        raw_c = np.abs(df.loc[late, "close"].to_numpy(float))
+        base = raw_c / (1.0 + df.loc[late, "flu_rt"].to_numpy(float) / 1e4)           # 그날 기준가(= 전 거래일 정규장 종가)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            fr = (rc / base - 1.0) * 1e4
+        out.loc[late, "flu_rt"] = fr
+        ok &= np.isfinite(fr)
+    if "acc_trde_qty" in use:
+        q = s["volume"].reindex(key).to_numpy(float) if len(s) else np.full(len(key), np.nan)
+        out.loc[late, "acc_trde_qty"] = q
+        ok &= np.isfinite(q)
+    out["krx_patched"] = False
+    out.loc[late, "krx_patched"] = ok
+    n, k = int(late.sum()), int(ok.sum())
+    info.update(rows=n, patched=k, unpatched=n - k)
+    out.attrs["krx_session"] = info
+    if strict and n > k:
+        raise SessionUnavailable(f"{SUPPLY_TABLE} {AFTERMARKET_START} 이후 {n}행 중 {n - k}행을 정규장으로 고치지 못했다(strict)")
+    return out
 
 
 def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
@@ -754,7 +951,7 @@ def last_trading_date_before(con: Any, before: str) -> Any:
 def reference_daily_bars(con: Any, code: str, *, end: str, limit: int = 60) -> list[tuple]:
     """한 종목의 일봉 ``(date, open, high, low, close)`` 최신순 ``limit`` 개(``date ≤ end``) — 기준 종목·재생 시세용.
 
-    유니버스 로더가 아니다(종목 하나, 날짜·보조 가격). 2026-09-14 이후 ``daily_bars`` 종가는 NXT 가 섞일 수 있으므로 호출부는
+    유니버스 로더가 아니다(종목 하나, 날짜·보조 가격). 2026-09-14 이후 ``daily_bars`` 종가는 KRX 애프터마켓(16:00~20:00) 체결이 섞였으므로 호출부는
     **날짜**에만 기대고 가격은 보조로만 쓴다(:class:`swing_it.live.brokers.DBQuoteProvider`).
     """
     cur = con.cursor()

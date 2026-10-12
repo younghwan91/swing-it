@@ -497,7 +497,7 @@ class Ctx:
                                                              "netinc_prior", "revenue", "revenue_prior"))
         self.est = V.standalone_quarter_states(ea)
         del ea
-        sd = read_supply_demand(self.con, cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
+        sd = read_supply_demand(self.con, session="raw", cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
                                 start="2016-09-01")
         fw = flow_wide(sd, index=self.days, columns=self.codes)
         del sd

@@ -275,7 +275,7 @@ class Data:
         p = load_panels(con, start=PANEL_START)
         self.p = p
         _log(f"가격 패널 {p.close.shape} {p.days[0].date()}~{p.days[-1].date()}", t0)
-        raw = read_prices(con, cols=("code", "date", "close"), table="daily_bars")
+        raw = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars")
         raw["date"] = pd.to_datetime(raw["date"])
         raw = raw[raw["date"] >= pd.Timestamp(PANEL_START)]
         raw_close = raw.pivot(index="date", columns="code", values="close").astype(float)
@@ -308,7 +308,7 @@ class Data:
         self.sector_rank = sk
         _log("섹터 K·순위", t0)
 
-        sd = read_supply_demand(con, cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
+        sd = read_supply_demand(con, session="raw", cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
                                 start=PANEL_START)
         self.flow = flow_leg(sd, index=p.days, columns=p.close.columns, weight=p.trade_value)
         del sd

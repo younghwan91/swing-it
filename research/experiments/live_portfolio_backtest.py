@@ -141,7 +141,7 @@ def research_events(con, cfg: StrategyConfig, t0: float) -> "tuple[pd.DataFrame,
     ms = build_skeleton_events(p, {"event_lo": EVENT_LO}, universe=h5, feats=feats)
     di, ci = ms["day_idx"].to_numpy(), ms["col_idx"].to_numpy()
     _log(f"연구 경로 뼈대 S {len(ms):,}", t0)
-    sd = read_supply_demand(con, cols=SUPPLY_COLS, start=PANEL_START)
+    sd = read_supply_demand(con, session="raw", cols=SUPPLY_COLS, start=PANEL_START)
     fl = flow_leg(sd, index=p.days, columns=p.close.columns, weight=p.trade_value)
     ms["F"] = fl["F"].to_numpy()[di, ci]
     del sd, fl

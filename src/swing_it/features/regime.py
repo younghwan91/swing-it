@@ -549,7 +549,7 @@ def load_regime_inputs(con: Any, *, start: "str | None" = None, end: "str | None
     from swing_it.krx_session import NXT_START, read_session_bars_agg  # noqa: PLC0415
     from swing_it.storage import read_prices_wide, read_supply_demand  # noqa: PLC0415
 
-    panels = read_prices_wide(con, cols=PRICE_COLS)
+    panels = read_prices_wide(con, session="raw", cols=PRICE_COLS)
     all_days = panels["close"].index
     lo = pd.Timestamp(start) if start else all_days.min()
     hi = pd.Timestamp(end) if end else all_days.max()
@@ -574,7 +574,7 @@ def load_regime_inputs(con: Any, *, start: "str | None" = None, end: "str | None
             y_hi = min(hi, pd.Timestamp(f"{y}-12-31"))
             if y_lo > y_hi:
                 continue
-            sd = read_supply_demand(con, cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
+            sd = read_supply_demand(con, session="raw", cols=("code", "date", "foreign_", "institution", "acc_trde_qty"),
                                     start=y_lo.strftime("%Y-%m-%d"), end=y_hi.strftime("%Y-%m-%d"))
             sd["date"] = pd.to_datetime(sd["date"])
             sd["code"] = sd["code"].astype(str)

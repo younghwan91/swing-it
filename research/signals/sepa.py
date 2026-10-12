@@ -80,7 +80,7 @@ def _market_of(con, codes: pd.Index) -> pd.Series:
 def load_panels(con, *, start: "str | None" = None) -> SepaPanels:
     """가격 패널(정문 — 폐지 포함 검사). ``start`` 는 **창 워밍업을 포함한** 자르기 시점이다 —
     뼈대 S 는 252일 이력이 필요하므로 판정 구간 시작보다 1년 이상 앞이어야 한다."""
-    prices = read_prices(con)
+    prices = read_prices(con, session="raw")
     prices["date"] = pd.to_datetime(prices["date"])
     if start is not None:
         prices = prices[prices["date"] >= pd.Timestamp(start)]
