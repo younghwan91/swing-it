@@ -36,7 +36,6 @@ def prepare(cache: str) -> dict:
     import psycopg2
 
     from research.signals import pattern_events as PE
-    from research.signals.eps_asof import eps_ok
     days = pd.DatetimeIndex(np.load(f"{cache}/days_ns.npy"))
     codes = [str(c) for c in np.load(f"{cache}/codes.npy", allow_pickle=True)]
     O, H, L, C = (np.load(f"{cache}/{k}.npy").astype(float) for k in ("O", "H", "L", "C"))
@@ -48,6 +47,12 @@ def prepare(cache: str) -> dict:
     mkt = np.array([mk_of.get(i, 0) for i in range(len(codes))], np.int64)
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
+    return build(days, codes, O, H, L, C, TR, cost, mkt, con)
+
+
+def build(days, codes, O, H, L, C, TR, cost, mkt, con) -> dict:
+    """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
+    from research.signals.eps_asof import eps_ok
     tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2016-08-01'", con, parse_dates=["date"])
     tvw = tv.pivot_table(index="date", columns="code", values="trade_value", aggfunc="last").reindex(index=days, columns=codes)
     adv = tvw.rolling(20, min_periods=15).mean().to_numpy().T
@@ -92,9 +97,9 @@ def prepare(cache: str) -> dict:
             "regime_on": regime_on}
 
 
-def simulate(D: dict, cfg: dict, cost_mult: float) -> "tuple[pd.Series, pd.DataFrame]":
+def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None) -> "tuple[pd.Series, pd.DataFrame]":
     days, O, H, L, C = D["days"], D["O"], D["H"], D["L"], D["C"]
-    t0, t1 = int(days.searchsorted(pd.Timestamp(START))), int(days.searchsorted(pd.Timestamp(END), side="right"))
+    t0, t1 = int(days.searchsorted(pd.Timestamp(START))), int(days.searchsorted(pd.Timestamp(end), side="right"))
     unit = min(POS_CAP, RISK / cfg["hard"])
     max_units = max(1, int(round(POS_CAP / unit)))
     mae = D["ma"][cfg["ma_exit"]]
@@ -184,6 +189,11 @@ def simulate(D: dict, cfg: dict, cost_mult: float) -> "tuple[pd.Series, pd.DataF
             cs.sort(key=lambda c: -D["rs"][c, t])
             p_buy = cs[:free]
         eq_prev = e
+    if state is not None:                          # 모의매매: 마지막 날 보유·다음날 주문을 넘긴다(청산하지 않음)
+        state.update(pos={D["codes"][c]: {**p, "w": p["qty"] * p["last_px"] / eq_prev} for c, p in pos.items()}, cash=cash,
+                     equity=eq_prev, buy=[D["codes"][c] for c in p_buy], sell=[D["codes"][c] for c in p_sell],
+                     add=[D["codes"][c] for c in p_add], regime_on=bool(D["regime_on"][t1 - 1]), last_day=str(days[t1 - 1].date()))
+        return pd.Series(eq, index=days[t0:t1]), pd.DataFrame(trades)
     for ci in list(pos):
         close_pos(ci, pos[ci]["last_px"], t1 - 1, "end")
     return pd.Series(eq, index=days[t0:t1]), pd.DataFrame(trades)
