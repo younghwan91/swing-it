@@ -169,8 +169,8 @@ def main() -> None:
             t.at[i, "news_n"], t.at[i, "news_neg"], t.at[i, "news_pos"] = len(dirs), float(any(x < 0 for x in dirs)), float(any(x > 0 for x in dirs))
 
     def vol(code, d0, d1):
-        cur.execute("SELECT date, volume FROM daily_bars WHERE code=%s AND date BETWEEN %s AND %s", (code, d0, d1))
-        return {str(x): float(v) for x, v in cur.fetchall()}
+        from swing_it.storage import read_code_bars
+        return {str(x): float(v) for x, v in read_code_bars(con, code, start=d0, end=d1, cols=("date", "volume"))}
 
     f = lambda x: None if x is None or (isinstance(x, float) and not np.isfinite(x)) else x  # noqa: E731
     cards = []

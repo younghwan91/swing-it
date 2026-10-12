@@ -304,3 +304,71 @@ def test_identity_allows_github_merge_commits_but_not_other_addresses(lint, tmp_
                    "GIT_COMMITTER_EMAIL": "someone@corp.example.com"})
     out = lint.check_commit_identity()
     assert out and "corp.example.com" in out[0], f"사내 메일을 못 잡는다: {out}"
+
+
+# --- (d)(g) 여러 줄 SQL — 2026-10-12 강화 ------------------------------------------------
+#
+# 예전 (d)(g)는 한 줄 정규식이라 SELECT 와 FROM 이 다른 줄이면 통과했다. 아래 모양들을 주입해 실제로
+# 잡히는지, 주석·독스트링 산문은 안 잡는지 본다.
+
+_MULTILINE_PRICE_SQL = '''
+import pandas as pd
+
+def load(con):
+    q = """
+        SELECT code, date, close
+        FROM daily_bars_adjusted
+        WHERE date >= '2020-01-01'
+    """
+    a = pd.read_sql(q, con)
+    b = pd.read_sql("select code, date, close "
+                    "from daily_bars where date >= '2020-01-01'", con)
+    c = pd.read_sql("select code, close " + "from daily_bars_raw", con)
+    return a, b, c
+'''
+
+_MULTILINE_EARNINGS_SQL = '''
+def load(con):
+    return con.execute("""SELECT code, period, netinc
+                          FROM earnings
+                          WHERE avail_date >= '2018-01-01'""")
+'''
+
+_PROSE_ONLY = '''
+"""모듈 독스트링: SELECT 는 정문으로 — FROM daily_bars 직접 읽기 금지, select * from earnings 도 금지."""
+# SELECT code FROM daily_bars  ← 주석
+def f():
+    """함수 독스트링 SELECT x FROM earnings"""
+    return 1
+'''
+
+
+def _scan(lint, tmp_path, monkeypatch, src: str, fn: str) -> list[str]:
+    (tmp_path / "loader.py").write_text(src, encoding="utf-8")
+    monkeypatch.setattr(lint, "REPO", tmp_path)
+    return getattr(lint, fn)()
+
+
+def test_rule_g_catches_multiline_and_concatenated_sql(lint, tmp_path, monkeypatch):
+    """삼중따옴표·암묵 연결·``+`` 연결 SQL 셋 다 잡는다(한 줄 정규식이 놓치던 모양)."""
+    out = _scan(lint, tmp_path, monkeypatch, _MULTILINE_PRICE_SQL, "check_no_raw_price_select")
+    assert len(out) == 3, out
+    assert all("universe" in o for o in out)
+    assert any(":6" in o for o in out), out           # 삼중따옴표 SQL 은 SELECT 가 있는 줄을 가리킨다
+
+
+def test_rule_d_catches_multiline_earnings_select(lint, tmp_path, monkeypatch):
+    out = _scan(lint, tmp_path, monkeypatch, _MULTILINE_EARNINGS_SQL, "check_no_raw_earnings_select")
+    assert len(out) == 1 and "earnings" in out[0], out
+
+
+def test_rules_d_g_ignore_comments_and_docstrings(lint, tmp_path, monkeypatch):
+    """산문은 위반이 아니다 — 거짓 양성이 많으면 규칙이 소음이 되어 꺼진다."""
+    assert _scan(lint, tmp_path, monkeypatch, _PROSE_ONLY, "check_no_raw_price_select") == []
+    assert _scan(lint, tmp_path, monkeypatch, _PROSE_ONLY, "check_no_raw_earnings_select") == []
+
+
+def test_rule_g_reports_unparseable_file(lint, tmp_path, monkeypatch):
+    """파싱 실패를 침묵하면 그 파일의 위반이 통째로 사라진다."""
+    out = _scan(lint, tmp_path, monkeypatch, "def broken(:\n", "check_no_raw_price_select")
+    assert len(out) == 1 and "파싱 실패" in out[0]

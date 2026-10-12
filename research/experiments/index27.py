@@ -26,9 +26,10 @@ def load(con):
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     ev = pd.read_sql("select index_name, effective_date, action, code, announce_date from index_changes", con,
                      parse_dates=["effective_date", "announce_date"])
-    px = pd.read_sql("select code, date, open, close from daily_bars_adjusted where date >= '2015-10-01'", con, parse_dates=["date"])
+    from swing_it.storage import read_prices
+    px = read_prices(con, cols=("code", "date", "open", "close"), start="2015-10-01", parse_dates=True)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
-    raw = pd.read_sql("select code, date, close from daily_bars where date >= '2015-10-01'", con, parse_dates=["date"])
+    raw = read_prices(con, cols=("code", "date", "close"), table="daily_bars", start="2015-10-01", parse_dates=True)
     sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
                      parse_dates=["date", "knowledge_date"])
     stk = pd.read_sql("select code, market from stocks", con)

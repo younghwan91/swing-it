@@ -36,8 +36,8 @@ ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl"}
 
 def load_db(con) -> tuple:
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
-    px = pd.read_sql("select code, date, open, high, low, close, volume from daily_bars_adjusted where date >= '2016-08-01'", con,
-                     parse_dates=["date"])
+    from swing_it.storage import read_prices
+    px = read_prices(con, cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True)
     # 2026-09-14+ 일봉에 NXT 야간 체결이 섞였다(종가 85~88% 오염) → 분봉 정규장(09:00~15:32)으로 다시 만든다(조정계수 = 시가 비율)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
     stk = pd.read_sql("select code, market from stocks", con)
@@ -45,7 +45,7 @@ def load_db(con) -> tuple:
     codes = sorted(px["code"].astype(str).unique())
     def wide(col):
         return px.pivot_table(index="date", columns="code", values=col, aggfunc="last").reindex(index=days, columns=codes).to_numpy(float).T
-    O, H, L_, C, V = (wide(k) for k in ("open", "high", "low", "close", "volume"))
+    O, H, L_, C, V = (wide(k) for k in ("open", "high", "low", "close", "volume"))  # noqa: E741
     TR = np.isfinite(C) & (np.nan_to_num(V) > 0)
     mk = stk.set_index("code")["market"].reindex(codes).fillna("거래소").to_numpy()
     mkt = np.where(mk == "코스닥", 1, 0).astype(np.int64)
@@ -62,7 +62,7 @@ def main() -> None:
     a = ap.parse_args()
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
-    days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)
+    days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)  # noqa: E741
     D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close)
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
     kx = pd.read_sql("select date, close from sector_index where code='001' order by date", con, parse_dates=["date"]).set_index("date")["close"]

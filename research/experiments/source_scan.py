@@ -98,7 +98,6 @@ def boot(x, cl, rng):
 
 def summarize(tr, n_cfg: int) -> "tuple[dict, object]":
     import numpy as np
-    import pandas as pd
     rng = np.random.default_rng(SEED)
     ev = tr.groupby(["src", "code", "order_day"], as_index=False).agg(n2s=("n2s", "mean"), n1s=("n1s", "mean"), k=("i", "nunique"))
     ev["month"] = ev["order_day"].str[:7]

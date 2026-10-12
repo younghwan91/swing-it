@@ -38,7 +38,7 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
     from research.signals import pattern_events as PE
     days = pd.DatetimeIndex(np.load(f"{cache}/days_ns.npy"))
     codes = [str(c) for c in np.load(f"{cache}/codes.npy", allow_pickle=True)]
-    O, H, L, C = (np.load(f"{cache}/{k}.npy").astype(float) for k in ("O", "H", "L", "C"))
+    O, H, L, C = (np.load(f"{cache}/{k}.npy").astype(float) for k in ("O", "H", "L", "C"))  # noqa: E741
     TR = np.load(f"{cache}/TR.npy").astype(bool)
     cost = np.load(f"{cache}/cost_tab.npy")
     F = np.load(f"{cache}/F.npy", mmap_mode="r")
@@ -50,11 +50,12 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
     return build(days, codes, O, H, L, C, TR, cost, mkt, con, extras=extras, raw_close=raw_close)
 
 
-def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,
+def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,  # noqa: E741
           raw_close: bool = False) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
     from research.signals.eps_asof import eps_ok
-    tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2016-08-01'", con, parse_dates=["date"])
+    from swing_it.storage import read_prices
+    tv = read_prices(con, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
     sess = None
     if krx_patch:                                   # 모의매매: 2026-09-14+ NXT 섞인 일봉 → 분봉 정규장 값(krx_session)
         from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
@@ -86,7 +87,7 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
         capw, n_bad = split_consistent_cap(rcw, adw, sh, asof="knowledge_date" if pit_shares else "date", raw_src=src)
         cap = capw.to_numpy().T
     else:                                           # 21~26세대 기록 재현용(결함: 소급 수정 가격 × 그 시점 주식수)
-        px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
+        px = read_prices(con, cols=("code", "date", "close"), table="daily_bars", start="2016-08-01", parse_dates=True)
         if sess is not None:
             px = patch_prices(px, sess, adjusted=False)
         pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
@@ -162,7 +163,7 @@ def _extras(days, codes, C, ma, uni, rs, cwi, regime_on, cand, con) -> dict:
 def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None,
              paper: bool = False, start: str = START) -> "tuple[pd.Series, pd.DataFrame]":
     """``paper`` = 모의매매 보정(검증 24차): 거래정지일 매도 미룸 · 손절 비교 허용오차 · 국면 청산 사유 표시. 백테스트 기본은 끔(재현)."""
-    days, O, H, L, C = D["days"], D["O"], D["H"], D["L"], D["C"]
+    days, O, H, L, C = D["days"], D["O"], D["H"], D["L"], D["C"]  # noqa: E741, F841
     t0, t1 = int(days.searchsorted(pd.Timestamp(start))), int(days.searchsorted(pd.Timestamp(end), side="right"))
     pos_cap = cfg.get("pos_cap", POS_CAP)             # 전진 팔 leader_C20: 비중 절반(pos_cap·risk) — 기본값 = 기존 상수
     unit = min(pos_cap, cfg.get("risk", RISK) / cfg["hard"])

@@ -10,7 +10,9 @@ import pandas as pd
 
 
 def known_table(con, days: pd.DatetimeIndex) -> pd.DataFrame:
-    earn = pd.read_sql("select code, period, avail_date, netinc, netinc_prior from earnings", con, parse_dates=["avail_date"])
+    from swing_it.storage import read_earnings
+    # 모든 정정 버전 그대로(예전 직접 SELECT 와 같은 SQL) — 버전·시점 선택은 아래 known 규칙이 한다
+    earn = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"), all_versions=True, parse_dates=True)
     per = pd.read_sql("select code, period, min(rcept_dt) as per_dt from earnings_disclosures where kind='periodic' group by code, period",
                       con, parse_dates=["per_dt"])
     e = earn.merge(per, on=["code", "period"], how="left")

@@ -39,7 +39,7 @@ P_MIN = {"tvx": 2.0, "ret": 0.02, "clv": 0.5}
 PRELIM_PAT = "(잠정)실적"
 
 
-def price_descriptors(O, H, L, C, TV, s_idx, c_idx, lu_ratio: float) -> dict:
+def price_descriptors(O, H, L, C, TV, s_idx, c_idx, lu_ratio: float) -> dict:  # noqa: E741
     """(종목 c, 행 s) 의 P 서술자 — 배열은 종목×날짜. 종가 1% 낮춘 판정(정정 E-1 4)도 함께."""
     n = len(s_idx)
     out = {k: np.full(n, np.nan) for k in ("tvx", "ret", "clv", "hi60", "hi250", "lu_close", "ret_m1", "clv_m1", "hi60_m1",
@@ -156,7 +156,7 @@ def fills(rows: np.ndarray, I_: np.ndarray, II: dict, Op, H, L, C, TR, entry: st
     else:
         d = s + 1
         d_ = np.minimum(d, nd - 1)
-        op, hi, lo, cl = Op[ci, d_], H[ci, d_], L[ci, d_], C[ci, d_]
+        op, hi, lo, cl = Op[ci, d_], H[ci, d_], L[ci, d_], C[ci, d_]  # noqa: F841
         prev = C[ci, s]
         ok = (d < nd) & TR[ci, d_].astype(bool) & np.isfinite(op) & (op > 0)
         ok &= ~(op >= prev * lu_ratio)

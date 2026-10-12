@@ -38,15 +38,15 @@ def load(cache: str):
     days = pd.DatetimeIndex(np.load(f"{cache}/days_ns.npy"))
     codes = [str(c) for c in np.load(f"{cache}/codes.npy", allow_pickle=True)]
     disc = pd.read_sql("select code, period, kind, rcept_dt from earnings_disclosures", con, parse_dates=["rcept_dt"])
-    earn = pd.read_sql("select code, period, avail_date, netinc, netinc_prior from earnings where avail_date >= '2018-01-01'", con,
-                       parse_dates=["avail_date"])
-    tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2018-10-01' and date < '2024-02-01'", con,
-                     parse_dates=["date"])
+    from swing_it.storage import read_earnings, read_prices
+    # 정문(가드레일 (d)(g)) — 예전 직접 SELECT 와 같은 SQL·같은 행 순서(정정공시 버전 포함 전부; as-of 는 아래 known 규칙이 고른다)
+    earn = read_earnings(con, cols=("code", "period", "avail_date", "netinc", "netinc_prior"), all_versions=True,
+                         avail_from="2018-01-01", parse_dates=True)
+    tv = read_prices(con, cols=("code", "date", "trade_value"), start="2018-10-01", end="2024-01-31", parse_dates=True)
     return days, codes, disc, earn, tv
 
 
 def build_events(cache: str) -> "tuple[pd.DataFrame, dict]":
-    from research.signals import pattern_events as PE
     days, codes, disc, earn, tv = load(cache)
     cmap = {c: i for i, c in enumerate(codes)}
     nd = len(days)

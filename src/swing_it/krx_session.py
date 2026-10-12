@@ -156,7 +156,9 @@ def read_raw_close(con: Any, *, start: str, end: "str | None" = None) -> pd.Data
     p = {"lo": start, "hi": hi}
     sd = pd.read_sql_query("SELECT code, date, close FROM supply_demand WHERE date >= %(lo)s AND date <= %(hi)s "
                            "AND close IS NOT NULL", con, params=p)
-    bars = pd.read_sql_query("SELECT code, date, close FROM daily_bars WHERE date >= %(lo)s AND date <= %(hi)s", con, params=p)
+    from swing_it.storage import read_prices  # noqa: PLC0415 — storage 가 이 모듈을 쓰므로 순환을 피한다
+    # 정문(가드레일 (g)). combine_raw_close 가 (code, date) 로 중복 제거·정렬하므로 행 순서는 결과에 영향이 없다.
+    bars = read_prices(con, cols=("code", "date", "close"), table="daily_bars", start=start, end=end)
     sess = read_session_bars_agg(con, start=max(start, NXT_START), end=end) if hi >= NXT_START else None
     out = combine_raw_close(sd, bars, sess)
     check_raw_close_canary(out)

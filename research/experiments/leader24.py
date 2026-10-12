@@ -15,7 +15,6 @@ import json
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 
 sys.path[:0] = [".", "src"]

@@ -122,35 +122,98 @@ def check_no_literal_verdict() -> list[str]:
     return out
 
 
+
+# --- SQL 문자열 수집기((d)(g) 공용) ----------------------------------------------------
+# 2026-10-12: (d)(g) 가 **한 줄 정규식**이라 SELECT 와 FROM 이 다른 줄이면 못 잡았다 — 삼중따옴표 SQL,
+# 암묵 연결("select ..."\n "from daily_bars"), ``+`` 연결 모두 통과했다. 이제 ast 로 **문자열 식 하나**를 통째로
+# 접어(f-string 의 치환부는 ``{}``) 그 안에서 찾는다. 주석은 원래 안 보이고, 독스트링·맨 문자열 문장은 산문이라 뺀다.
+
+def _fold_str(node: ast.AST) -> "str | None":
+    """문자열 식을 한 문자열로 접는다. 문자열이 아니면 None. f-string 치환·비문자열 피연산자는 ``{}``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "{}"
+                       for v in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        a, b = _fold_str(node.left), _fold_str(node.right)
+        if a is None and b is None:
+            return None
+        return (a if a is not None else "{}") + (b if b is not None else "{}")
+    return None
+
+
+def _sql_strings(text: str) -> "list[tuple[int, str]]":
+    """파일 안의 (시작 줄, 접은 문자열) — 가장 바깥 문자열 식만, 독스트링·맨 문자열 문장 제외. 파싱 실패면 ValueError."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        raise ValueError(str(exc)) from exc
+    inner: set[int] = set()
+    prose: set[int] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Expr) and isinstance(n.value, (ast.Constant, ast.JoinedStr)):
+            prose.add(id(n.value))                      # 독스트링·맨 문자열 문장 = 산문
+        if isinstance(n, (ast.BinOp, ast.JoinedStr)):
+            for c in ast.iter_child_nodes(n):
+                inner.add(id(c))
+            if isinstance(n, ast.JoinedStr):
+                for c in ast.walk(n):
+                    if c is not n:
+                        inner.add(id(c))
+    out = []
+    for n in ast.walk(tree):
+        if id(n) in inner or id(n) in prose:
+            continue
+        if isinstance(n, (ast.Constant, ast.JoinedStr, ast.BinOp)):
+            s = _fold_str(n)
+            if s is not None:
+                out.append((n.lineno, s))
+    return out
+
+
+def _sql_hits(text: str, pattern: "re.Pattern[str]") -> "list[tuple[int, str]]":
+    """``pattern`` 에 맞는 SQL 문자열의 (줄, 맞은 조각). 줄 = 문자열 시작 줄 + 맞은 곳까지의 줄바꿈 수."""
+    hits = []
+    for line, s in _sql_strings(text):
+        for m in pattern.finditer(s):
+            hits.append((line + s[: m.start()].count("\n"), " ".join(m.group(0).split())[:80]))
+    return hits
+
+
 # (d) earnings 는 정정공시가 새 행으로 쌓이는 버전 테이블이라(PK 에 knowledge_date),
 # 그냥 SELECT 하면 (code, period)당 행이 여럿이 되어 하류 패널이 조용히 중복된다.
 # storage.read_earnings() 가 as-of 로 한 버전만 고르는 유일한 정문이다.
-# SELECT ... FROM earnings 한 줄 형태만 잡는다 — "from earnings drift" 같은 산문이
-# 걸리면 규칙이 소음이 되어 아무도 안 본다.
-_RAW_EARNINGS = re.compile(r"\bSELECT\b.*\bFROM\s+earnings\b", re.IGNORECASE)
+# **문자열 리터럴 안의** SELECT … FROM earnings 를 잡는다(여러 줄 SQL 포함, 위 수집기) — 주석·독스트링의
+# "from earnings drift" 같은 산문은 대상이 아니다. 규칙이 소음이 되면 아무도 안 본다.
+_RAW_EARNINGS = re.compile(r"\bSELECT\b[\s\S]*?\bFROM\s+earnings\b", re.IGNORECASE)
 _EARNINGS_READ_EXEMPT = {
     "src/swing_it/storage.py",          # 정문 자신 + 스키마 문자열
     "tests/test_earnings_asof.py",      # 정문의 테스트 — 버전이 실제로 쌓이는지 직접 확인해야 한다
+    "tests/test_check_guardrails.py",   # 린트의 회귀 테스트 — 위반 모양을 픽스처 문자열로 담는다
 }
+
+
+def _scan_sql(exempt: "set[str]", pattern: "re.Pattern[str]", tag: str, msg: str) -> list[str]:
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in exempt or rel.startswith(".venv/"):
+            continue
+        try:
+            hits = _sql_hits(p.read_text(encoding="utf-8"), pattern)
+        except ValueError as exc:                       # 파싱 실패는 침묵시키지 않는다
+            out.append(f"[{tag}] {rel} — 파싱 실패: {exc}")
+            continue
+        out += [f"[{tag}] {rel}:{i} — {msg} ({frag})" for i, frag in hits]
+    return out
 
 
 def check_no_raw_earnings_select() -> list[str]:
     """(d) storage 밖에서 earnings 를 직접 SELECT 하면 위반."""
-    out = []
-    for p in _iter_py(REPO):
-        rel = p.relative_to(REPO).as_posix()
-        if rel in _EARNINGS_READ_EXEMPT or rel.startswith(".venv/"):
-            continue
-        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            if line.lstrip().startswith("#"):
-                continue
-            if _RAW_EARNINGS.search(line):
-                out.append(
-                    f"[earnings] {rel}:{i} — earnings 를 직접 SELECT 했다. "
-                    f"swing_it.storage.read_earnings(con, asof=...) 를 쓸 것 "
-                    f"(정정공시 버전이 중복 행으로 새어나온다)."
-                )
-    return out
+    return _scan_sql(_EARNINGS_READ_EXEMPT, _RAW_EARNINGS, "earnings",
+                     "earnings 를 직접 SELECT 했다. swing_it.storage.read_earnings(con, asof=...) 를 쓸 것 "
+                     "(정정공시 버전이 중복 행으로 새어나온다)")
 
 
 # (e) 원장을 남기는 진입점(prop_gate·gate_sim)은 **호출 지점마다** config= 를 받아야 한다.
@@ -235,7 +298,9 @@ def check_gates_use_shared_harness() -> list[str]:
 # (g) 가격 테이블도 storage 정문(read_prices)으로만 읽는다. 직접 SELECT 하면 유니버스를
 # 좁히는 WHERE 가 조용히 들어가고, 생존편향은 검증 스택이 못 잡는다 — walk-forward·
 # 음성대조·fragility 는 전부 넘겨받은 트레이드만 보기 때문이다(GUARDRAILS §4 공백 2).
-_RAW_PRICES = re.compile(r"\bSELECT\b.*\bFROM\s+(daily_bars_adjusted|daily_bars)\b", re.I)
+# 2026-10-12: 여러 줄 SQL 도(위 수집기), ``JOIN daily_bars`` 도 잡는다.
+# daily_bars_raw·daily_bars_adj_v2(재구성 원·수정 일봉)도 같은 가격표다 — 이름으로 박혀 있으면 잡는다(변수로 넘긴 표 이름은 못 본다).
+_RAW_PRICES = re.compile(r"\bSELECT\b[\s\S]*?\b(?:FROM|JOIN)\s+(daily_bars(?:_adjusted|_raw|_adj_v2)?)\b", re.I)
 _PRICE_READ_EXEMPT = {
     "src/swing_it/storage.py",        # 정문 자신 + 스키마 문자열
     "src/swing_it/price_adjust.py",   # 조정가 테이블을 *만드는* 쪽 — 정문의 상류
@@ -243,6 +308,7 @@ _PRICE_READ_EXEMPT = {
     # 어떤 픽스처 빌더든 생존자 전용 유니버스를 무검사로 스위트에 들일 수 있게 했고,
     # 규칙 (d)가 테스트 파일을 하나씩 명시하는 것과도 비대칭이었다.
     "tests/test_read_prices_guard.py",  # 정문의 가드 자체를 검사 — 원자료를 봐야 한다
+    "tests/test_check_guardrails.py",   # 린트의 회귀 테스트 — 위반 모양을 픽스처 문자열로 담는다
     "tests/test_price_adjust.py",       # 조정 로직 검사 — 조정 전/후를 직접 비교한다
     # 2026-08-27: 무결성 감사기. 이 규칙이 막으려는 것은 "유니버스를 조용히 좁히는
     # 로더"인데, 이 파일은 유니버스를 **만들지 않는다** — count(*) 로 중복·OHLC
@@ -280,21 +346,9 @@ _JOIN_RULE_EXEMPT = {
 
 def check_no_raw_price_select() -> list[str]:
     """(g) storage/price_adjust 밖에서 가격 테이블을 직접 SELECT 하면 위반."""
-    out = []
-    for p in _iter_py(REPO):
-        rel = p.relative_to(REPO).as_posix()
-        if rel in _PRICE_READ_EXEMPT or rel.startswith(".venv/"):
-            continue
-        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            if line.lstrip().startswith("#"):
-                continue
-            if _RAW_PRICES.search(line):
-                out.append(
-                    f"[universe] {rel}:{i} — 가격 테이블을 직접 SELECT 했다. "
-                    f"swing_it.storage.read_prices() 를 쓸 것 (상장폐지 종목 포함을 "
-                    f"로딩 시점에 검사한다)."
-                )
-    return out
+    return _scan_sql(_PRICE_READ_EXEMPT, _RAW_PRICES, "universe",
+                     "가격 테이블을 직접 SELECT 했다. swing_it.storage.read_prices() 를 쓸 것 "
+                     "(상장폐지 종목 포함을 로딩 시점에 검사한다)")
 
 
 def check_no_survivor_only_join() -> list[str]:

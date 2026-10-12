@@ -33,9 +33,10 @@ MIN_TV = 1000.0    # 평균 거래대금(백만 원) = 10억
 def load(con):
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     q = lambda s, **k: pd.read_sql(s, con, **k)  # noqa: E731
-    px = q("select code, date, open, close from daily_bars_adjusted where date >= '2016-05-01'", parse_dates=["date"])
+    from swing_it.storage import read_prices
+    px = read_prices(con, cols=("code", "date", "open", "close"), start="2016-05-01", parse_dates=True)
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
-    raw = q("select code, date, close, trade_value from daily_bars where date >= '2016-05-01'", parse_dates=["date"])
+    raw = read_prices(con, cols=("code", "date", "close", "trade_value"), table="daily_bars", start="2016-05-01", parse_dates=True)
     sh = q("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", parse_dates=["date", "knowledge_date"])
     stk = q("select code, name, market from stocks")
     dl = q("select code, name, market from delisted_stocks")

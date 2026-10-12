@@ -47,7 +47,7 @@ def main() -> None:
     if not (len(days) == len(E.days) and (days == E.days).all() and list(map(str, codes)) == list(map(str, E.codes))):
         raise SystemExit("기준 캐시와 날짜·종목이 다르다")
     G._log("문맥 적재", t0)
-    nd, nc = len(days), len(codes)
+    nd, nc = len(days), len(codes)  # noqa: F841
     A = ctx.A
     O_, H_, L_, C_ = (np.asarray(x, float) for x in (A.O, A.H, A.L, A.C))          # 종목×날짜
     TR = np.asarray(E.TR)

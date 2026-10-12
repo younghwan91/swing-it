@@ -8,7 +8,7 @@ from research.signals import event_sources as ES
 from research.signals import pattern_events as PE
 
 
-def _fill(entry, lvl, stp, O, H, L, C, smax=0.08):
+def _fill(entry, lvl, stp, O, H, L, C, smax=0.08):  # noqa: E741
     I_ = np.zeros((1, len(PE.I_COLS)), np.int64)
     I_[0, PE.II["ci"]], I_[0, PE.II["i0"]] = 0, 1
     TR = np.ones_like(C, bool)
@@ -17,7 +17,7 @@ def _fill(entry, lvl, stp, O, H, L, C, smax=0.08):
 
 
 def _bars():
-    O = np.array([[100.0, 100.0, 101.0]])
+    O = np.array([[100.0, 100.0, 101.0]])  # noqa: E741
     H = np.array([[101.0, 102.0, 110.0]])
     L = np.array([[99.0, 99.0, 100.0]])
     C = np.array([[100.0, 101.0, 108.0]])
@@ -25,7 +25,7 @@ def _bars():
 
 
 def test_stop_entry_uses_source_level():
-    O, H, L, C = _bars()
+    O, H, L, C = _bars()  # noqa: E741
     fx = _fill("stop", 105.0, 96.0, O, H, L, C, smax=0.12)
     assert len(fx["rows"]) == 1
     assert fx["e"][0] == pytest.approx(105.0 + PE.tick_dated_vec(np.array([105.0]), np.array([2]), np.zeros(1, np.int64), 10**9)[0])
@@ -33,13 +33,13 @@ def test_stop_entry_uses_source_level():
 
 
 def test_default_level_is_signal_bar():
-    O, H, L, C = _bars()
+    O, H, L, C = _bars()  # noqa: E741
     a, b = _fill("stop", None, None, O, H, L, C), _fill("stop", 102.0, 99.0, O, H, L, C)
     assert a["e"][0] == pytest.approx(b["e"][0]) and a["sp"][0] == pytest.approx(b["sp"][0])
 
 
 def test_stop_capped_by_stop_max():
-    O, H, L, C = _bars()
+    O, H, L, C = _bars()  # noqa: E741
     fx = _fill("open", None, 80.0, O, H, L, C, smax=0.05)
     assert fx["sp"][0] == pytest.approx(fx["e"][0] * 0.95)
 
@@ -68,7 +68,7 @@ def _series(n=320):
 
 
 def test_tight_box_detected_with_levels():
-    O, H, L, C, V = _series()
+    O, H, L, C, V = _series()  # noqa: E741
     n = C.shape[1]
     base = np.ones_like(C, bool)
     z = np.zeros_like(C)
@@ -82,7 +82,7 @@ def test_tight_box_detected_with_levels():
 
 def test_earn_reaction_takes_first_qualifying_day():
     n = 60
-    O = np.full((1, n), 100.0)
+    O = np.full((1, n), 100.0)  # noqa: E741
     C = np.full((1, n), 100.0)
     H, L = C * 1.01, C * 0.99
     days = pd.bdate_range("2021-01-01", periods=n)

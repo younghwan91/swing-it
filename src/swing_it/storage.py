@@ -346,7 +346,7 @@ _EARNINGS_READ_COLS = (
 
 
 def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None,
-                  all_versions: bool = False):
+                  all_versions: bool = False, avail_from: "str | None" = None, parse_dates: bool = False):
     """Earnings as a long frame with **one row per (code, period)** — as-of ``asof``.
 
     ``earnings`` is versioned: a DART restatement lands as a new row keyed by
@@ -370,17 +370,26 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
 
             ``asof`` 없이 접어서 쓰면(기본값) 최신 정정본이 과거 날짜 셀에 들어가
             조용한 룩어헤드가 된다 — 터지지 않고 성과만 좋아지는 종류다.
+        avail_from: ``all_versions`` 와 함께 — ``avail_date >= avail_from`` 행만(SQL 에서 자른다).
+        parse_dates: ``avail_date`` 를 datetime64 로(``pd.read_sql(parse_dates=[...])`` 와 같은 경로).
 
     Returns a pandas DataFrame.
     """
     import pandas as pd
 
-    sel = ", ".join(cols or _EARNINGS_READ_COLS)
+    use = tuple(cols or _EARNINGS_READ_COLS)
+    sel = ", ".join(use)
+    pdates = ["avail_date"] if parse_dates and "avail_date" in use else None
     if all_versions:
         if asof is not None:
             raise ValueError("all_versions 와 asof 는 함께 쓸 수 없다 — "
                              "버전 선택을 날짜별로 하려고 전부 넘기는 것이다")
-        return pd.read_sql_query(f"SELECT {sel} FROM earnings", con)  # noqa: S608 — 모듈 상수
+        if avail_from is not None:
+            return pd.read_sql_query(f"SELECT {sel} FROM earnings WHERE avail_date >= {_ph(con)}",  # noqa: S608 — 모듈 상수
+                                     con, params=(avail_from,), parse_dates=pdates)
+        return pd.read_sql_query(f"SELECT {sel} FROM earnings", con, parse_dates=pdates)  # noqa: S608 — 모듈 상수
+    if avail_from is not None:
+        raise ValueError("avail_from 은 all_versions=True 와 함께만 쓴다")
     if _is_pg(con):
         where = "WHERE knowledge_date <= %s " if asof else ""
         sql = (  # noqa: S608 — column names come from a module constant, not user input
@@ -397,7 +406,7 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
             f"WHERE x.code = e.code AND x.period = e.period {cap})"
         )
         params = (asof,) if asof else ()
-    return pd.read_sql_query(sql, con, params=params or None)
+    return pd.read_sql_query(sql, con, params=params or None, parse_dates=pdates)
 
 
 PRICE_TABLE = "daily_bars_adjusted"   # 분할조정. 백테스트는 원자료(daily_bars) 금지.
@@ -405,7 +414,9 @@ _PRICE_READ_COLS = ("code", "date", "open", "high", "low", "close", "volume", "t
 
 
 def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
-                table: str = PRICE_TABLE, require_delisted: bool = True):
+                table: str = PRICE_TABLE, require_delisted: bool = True,
+                start: "str | None" = None, end: "str | None" = None,
+                parse_dates: bool = False):
     """백테스트용 가격 패널 — **상장폐지 종목 포함**을 로딩 시점에 검사한다.
 
     생존편향은 "가장 큰 숨은 인플레이터"인데(GUARDRAILS §3), 검증 스택은 넘겨받은
@@ -421,16 +432,45 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
             ``AssertionError``. 유니버스를 좁히는 WHERE 를 붙였거나 폐지 백필이
             안 돌았다는 뜻이다. 폐지 시세가 DB 에 아예 없으면(신규 DB 등) 통과시킨다 —
             없는 걸 요구할 수는 없고, 그 경우는 백필 자체가 선행 과제다.
+        start, end: ``YYYY-MM-DD``(양 끝 포함) — **날짜로만** 자른다(종목은 자르지 않는다). 주면 폐지 검사도 그 창 기준
+            (:func:`_assert_window_has_delisted`).
+        parse_dates: ``date`` 열을 datetime64 로(``pd.read_sql(parse_dates=["date"])`` 와 같은 경로).
 
     Returns: pandas DataFrame.
     """
     import pandas as pd
 
-    sel = ", ".join(cols or _PRICE_READ_COLS)
-    df = pd.read_sql_query(f"SELECT {sel} FROM {table}", con)  # noqa: S608 — 컬럼·테이블은 모듈 상수
+    use = tuple(cols or _PRICE_READ_COLS)
+    sel = ", ".join(use)
+    ph = _ph(con)
+    where, params = [], []
+    if start is not None:
+        where.append(f"date >= {ph}")
+        params.append(start)
+    if end is not None:
+        where.append(f"date <= {ph}")
+        params.append(end)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    df = pd.read_sql_query(f"SELECT {sel} FROM {table}{clause}", con,  # noqa: S608 — 컬럼·테이블은 모듈 상수, 날짜는 바인딩
+                           params=tuple(params) or None,
+                           parse_dates=["date"] if parse_dates and "date" in use else None)
     if require_delisted:
-        _assert_universe_has_delisted(con, df, table=table)
+        if where and "code" in df.columns:
+            _assert_window_has_delisted(con, set(df["code"].astype(str)), table=table,
+                                        start=start or "0000-01-01", end=end or "9999-12-31")
+        elif not where:
+            _assert_universe_has_delisted(con, df, table=table)
     return df
+
+
+def read_code_bars(con: Any, code: str, *, start: str, end: str,
+                   cols: "tuple[str, ...]" = ("date", "volume"), table: str = "daily_bars") -> list[tuple]:
+    """한 종목의 ``start``~``end``(포함) 일봉 행 튜플 — 차트·카드용. **유니버스 로더가 아니다**(종목 하나)."""
+    ph = _ph(con)
+    cur = con.cursor()
+    cur.execute(f"SELECT {', '.join(cols)} FROM {table} WHERE code={ph} AND date BETWEEN {ph} AND {ph}",  # noqa: S608 — 모듈 상수
+                (code, start, end))
+    return list(cur.fetchall())
 
 
 _PRICE_WIDE_COLS = ("open", "high", "low", "close", "volume")
