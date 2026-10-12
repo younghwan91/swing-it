@@ -538,7 +538,7 @@ TUI 를 고친 뒤에는 [`scripts/verify_merge.py <워크트리>`](scripts/veri
 이고, `sw-pead` 는 게이트를 통과한 유일한 알파의 재현용 백테스트(DB 읽기 전용)다.
 
 ```bash
-uv run --extra dev pytest            # 네트워크·DB 불요 — 530 통과 · 3 skip
+uv run --extra dev pytest            # 네트워크·DB 불요
 uv run --extra dev ruff check .
 uv run python scripts/check_guardrails.py    # 경계·판정·정문·하버스·신원 규율 검사
 ```
