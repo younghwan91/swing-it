@@ -29,8 +29,11 @@ ARMS = {                                              # 사전등록(META_EVOLUT
 
 
 def load_db(con) -> tuple:
+    from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     px = pd.read_sql("select code, date, open, high, low, close, volume from daily_bars_adjusted where date >= '2016-08-01'", con,
                      parse_dates=["date"])
+    # 2026-09-14+ 일봉에 NXT 야간 체결이 섞였다(종가 85~88% 오염) → 분봉 정규장(09:00~15:32)으로 다시 만든다(조정계수 = 시가 비율)
+    px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
     stk = pd.read_sql("select code, market from stocks", con)
     days = pd.DatetimeIndex(sorted(px["date"].unique()))
     codes = sorted(px["code"].astype(str).unique())
@@ -53,7 +56,7 @@ def main() -> None:
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
     days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)
-    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True)
+    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True)
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
     kx = pd.read_sql("select date, close from sector_index where code='001' order by date", con, parse_dates=["date"]).set_index("date")["close"]
     kma = kx.rolling(200, min_periods=200).mean()
@@ -73,7 +76,10 @@ def main() -> None:
         if len(z) >= 2 and z.index[-1] == days[-1]:
             bench[nm] = float(z.iloc[-1] / z.iloc[-2] - 1)
     names = pd.read_sql("select code, name from stocks", con).set_index("code")["name"].to_dict()
-    row = {"date": st["last_day"], "arm": a.arm, "cfg": cfg, "ret_today": ret_today, "equity_sim": float(st["equity"]),
+    import subprocess  # noqa: PLC0415
+    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    row = {"date": st["last_day"], "arm": a.arm, "cfg": cfg, "git": sha, "run_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+           "krx_patched": True, "ret_today": ret_today, "equity_sim": float(st["equity"]),
            "cash_w": float(st["cash"] / st["equity"]), "regime_on": st["regime_on"],
            "positions": {c: {"name": names.get(c, ""), "w": round(float(p["w"]), 4), "units": int(p["units"]),
                              "entry": str(days[p["entry_t"]].date()), "avg": float(p["cost_basis"] / p["qty"]), "last": float(p["last_px"])}

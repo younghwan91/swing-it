@@ -50,10 +50,15 @@ def prepare(cache: str, extras: bool = False) -> dict:
     return build(days, codes, O, H, L, C, TR, cost, mkt, con, extras=extras)
 
 
-def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False) -> dict:
+def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
     from research.signals.eps_asof import eps_ok
     tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2016-08-01'", con, parse_dates=["date"])
+    sess = None
+    if krx_patch:                                   # 모의매매: 2026-09-14+ NXT 섞인 일봉 → 분봉 정규장 값(krx_session)
+        from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
+        sess = read_session_bars_agg(con, start=NXT_START)
+        tv = patch_prices(tv, sess, adjusted=False)
     tvw = tv.pivot_table(index="date", columns="code", values="trade_value", aggfunc="last").reindex(index=days, columns=codes)
     adv = tvw.rolling(20, min_periods=15).mean().to_numpy().T
     Cd = pd.DataFrame(C.T)
@@ -70,6 +75,8 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     brk = {n: C >= _roll(Cd, n, "max") - 1e-9 for n in GRID["N"]}
     # 시가총액(원 종가 × 상장주식수 as-of) → 그날 순위 · 시총 가중 시장(KOSPI 대용) 200일선 국면
     px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
+    if sess is not None:
+        px = patch_prices(px, sess, adjusted=False)
     pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
     sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
                      parse_dates=["date", "knowledge_date"])
