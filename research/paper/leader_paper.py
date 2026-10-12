@@ -27,7 +27,11 @@ ARMS = {                                              # 사전등록(META_EVOLUT
     "leader_A": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1},   # 격자 215(검증 24차 권고)
     # 23세대 C(정정 G23-1): 신호일 KRX 종가(종가 단일가) 매수 — 체결 충실도 팔. 체결가 = krx_session 정규장 종가.
     "leader_C": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1, "entry": "close"},
+    # 전진 팔(META_EVOLUTION.md 'leader_C20 사전등록'): C 와 같고 슬롯 20 · 모든 비중 절반 — 장부 leader_c20_ledger.jsonl
+    "leader_C20": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1, "entry": "close",
+                   "max_pos": 20, "pos_cap": 0.05, "risk": 0.0025},
 }
+ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl"}
 
 
 def load_db(con) -> tuple:
@@ -53,7 +57,7 @@ def main() -> None:
     import psycopg2
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", default="leader_A")
-    ap.add_argument("--ledger", default=LEDGER)
+    ap.add_argument("--ledger", default=None, help="기본: 팔별 장부(ARM_LEDGER), 없으면 leader21_ledger.jsonl")
     ap.add_argument("--legacy-close", action="store_true", help="정정 G28-3 전 결함 가격(daily_bars.close)으로 시총 — 비교용만")
     a = ap.parse_args()
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
@@ -68,6 +72,7 @@ def main() -> None:
         if d_ in days:
             D["regime_on"][days.get_loc(d_)] = bool(v)
     cfg = ARMS[a.arm]
+    a.ledger = a.ledger or ARM_LEDGER.get(a.arm, LEDGER)
     st: dict = {}
     eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st, paper=True)
     ret_today = float(eq.iloc[-1] / eq.iloc[-2] - 1)
