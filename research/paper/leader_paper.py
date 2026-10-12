@@ -24,7 +24,7 @@ import research.experiments.leader21 as L  # noqa: E402
 LEDGER = "research/paper/leader21_ledger.jsonl"
 COST_RT = 0.00415                                     # 캐시 cost_tab 최근 값(왕복, 시장 공통)
 ARMS = {                                              # 사전등록(META_EVOLUTION.md 21세대 모의매매) — 결과 보고 바꾸지 않는다
-    "leader_A": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1},
+    "leader_A": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1},   # 격자 215(검증 24차 권고)
 }
 
 
@@ -53,10 +53,17 @@ def main() -> None:
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
     days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)
-    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con)
+    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True)
+    # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
+    kx = pd.read_sql("select date, close from sector_index where code='001' order by date", con, parse_dates=["date"]).set_index("date")["close"]
+    kma = kx.rolling(200, min_periods=200).mean()
+    kon = (kx >= kma).where(kma.notna())
+    for d_, v in kon.dropna().items():
+        if d_ in days:
+            D["regime_on"][days.get_loc(d_)] = bool(v)
     cfg = ARMS[a.arm]
     st: dict = {}
-    eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st)
+    eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st, paper=True)
     ret_today = float(eq.iloc[-1] / eq.iloc[-2] - 1)
     ix = pd.read_sql("select code, date, close from sector_index where code in ('001','101') and date >= %s order by date", con,
                      params=(str(days[-5].date()),), parse_dates=["date"])

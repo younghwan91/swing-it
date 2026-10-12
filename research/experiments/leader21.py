@@ -50,7 +50,7 @@ def prepare(cache: str) -> dict:
     return build(days, codes, O, H, L, C, TR, cost, mkt, con)
 
 
-def build(days, codes, O, H, L, C, TR, cost, mkt, con) -> dict:
+def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
     from research.signals.eps_asof import eps_ok
     tv = pd.read_sql("select code, date, trade_value from daily_bars_adjusted where date >= '2016-08-01'", con, parse_dates=["date"])
@@ -71,7 +71,10 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con) -> dict:
     # 시가총액(원 종가 × 상장주식수 as-of) → 그날 순위 · 시총 가중 시장(KOSPI 대용) 200일선 국면
     px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
     pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
-    sh = pd.read_sql("select code, date, shares_outstanding from shares_outstanding_history", con, parse_dates=["date"])
+    sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
+                     parse_dates=["date", "knowledge_date"])
+    if pit_shares:                                  # 모의매매(검증 24차 MUST-FIX): 알게 된 날(knowledge_date) 기준, 없으면 date
+        sh["date"] = sh["knowledge_date"].fillna(sh["date"])
     sh = sh[(sh["shares_outstanding"] > 0) & (sh["shares_outstanding"] <= 1e10)]       # 정제(21세대 결과 뒤 발견 — 082640 161조 주 등 오류 행)
     shw = sh.pivot_table(index="date", columns="code", values="shares_outstanding", aggfunc="last")
     shw = shw.reindex(index=shw.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
@@ -97,7 +100,9 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con) -> dict:
             "regime_on": regime_on}
 
 
-def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None) -> "tuple[pd.Series, pd.DataFrame]":
+def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None,
+             paper: bool = False) -> "tuple[pd.Series, pd.DataFrame]":
+    """``paper`` = 모의매매 보정(검증 24차): 거래정지일 매도 미룸 · 손절 비교 허용오차 · 국면 청산 사유 표시. 백테스트 기본은 끔(재현)."""
     days, O, H, L, C = D["days"], D["O"], D["H"], D["L"], D["C"]
     t0, t1 = int(days.searchsorted(pd.Timestamp(START))), int(days.searchsorted(pd.Timestamp(end), side="right"))
     unit = min(POS_CAP, RISK / cfg["hard"])
@@ -109,6 +114,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
     reg = cfg.get("regime", 0)
     cash, pos = 1.0, {}                        # ci → {qty, cost_basis, first_px, units, entry_t, last_px}
     p_buy, p_sell, p_add = [], set(), set()
+    sell_why: dict = {}
     eq, trades = np.zeros(t1 - t0), []
     eq_prev = 1.0
     def close_pos(ci, px, t, why):
@@ -121,11 +127,16 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                        "w_peak": p["w_peak"]})
     for k, t in enumerate(range(t0, t1)):
         # 1) 시가 체결: 매도 → 추가 → 매수
+        keep = set()
         for ci in list(p_sell):
             if ci in pos:
+                if paper and not D["TR"][ci, t]:
+                    keep.add(ci)                           # 거래정지: 다음 거래 가능일로 미룬다
+                    continue
                 px = O[ci, t] if np.isfinite(O[ci, t]) else pos[ci]["last_px"]
-                close_pos(ci, px, t, "ma_exit")
-        p_sell.clear()
+                close_pos(ci, px, t, sell_why.get(ci, "ma_exit"))
+        p_sell = keep
+        sell_why = {c: w for c, w in sell_why.items() if c in keep}
         for ci in list(p_add):
             if ci in pos and np.isfinite(O[ci, t]) and D["TR"][ci, t]:
                 amt = min(unit * eq_prev, cash)
@@ -152,7 +163,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
             p = pos[ci]
             avg = p["cost_basis"] / p["qty"]
             stop = avg * (1 - cfg["hard"])
-            if np.isfinite(L[ci, t]) and L[ci, t] <= stop:
+            if np.isfinite(L[ci, t]) and L[ci, t] <= stop * (1 + (1e-9 if paper else 0.0)):
                 px = min(O[ci, t], stop) if np.isfinite(O[ci, t]) else stop
                 close_pos(ci, px, t, "hard_stop")
         # 3) 종가 평가 · 신호
@@ -178,6 +189,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                 p_add.add(ci)
         if reg and not D["regime_on"][t]:                # 국면 꺼짐: 전부 다음 시가에 팔고 새로 안 산다
             p_sell.update(pos.keys())
+            if paper:
+                sell_why.update({c: "regime" for c in pos})
             p_add.clear()
             p_buy = []
             eq_prev = e
