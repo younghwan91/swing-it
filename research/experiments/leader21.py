@@ -52,11 +52,15 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
 
 
 def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,  # noqa: E741
-          raw_close: bool = False) -> dict:
-    """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통."""
+          raw_close: bool = False, session: str = "raw", aftermarket_fix: bool = False) -> dict:
+    """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통.
+
+    ``session``·``aftermarket_fix`` 는 정문 인자 그대로(기본 = 기존 팔 고정값 ``"raw"``·``False``). 모의매매 쌍 팔 ``*_rs``
+    (META_EVOLUTION.md '전진 팔 *_rs 사전등록')만 ``"regular"``·``True`` — 그 뒤의 ``krx_patch`` 분봉 보정은 멱등이라 그대로 둔다.
+    """
     from swing_it.features.eps_asof import eps_ok
     from swing_it.storage import read_prices
-    tv = read_prices(con, session="raw", cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
+    tv = read_prices(con, session=session, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
     sess = None
     if krx_patch:                                   # 모의매매: 2026-09-14+ KRX 애프터마켓 섞인 일봉 → 분봉 정규장 값(krx_session)
         from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
@@ -81,12 +85,17 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     sh = read_shares(con, parse_dates=True)  # 정문(가드레일 (k)) — 예전 직접 SELECT 와 같은 행(0 이하 주식수 없음 확인)·순서
     if raw_close:                                   # 정정 G28-4: 원 종가 × 분할 일관 주식수(krx_session.split_consistent_cap)
         from swing_it.krx_session import read_raw_close, split_consistent_cap
-        rc = read_raw_close(con, start="2016-08-01")
+        rc = read_raw_close(con, start="2016-08-01", aftermarket_fix=aftermarket_fix)
         rcw = rc.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
         src = rc.pivot_table(index="date", columns="code", values="raw_src", aggfunc="last").reindex(index=days, columns=codes)
         adw = pd.DataFrame(C.T, index=days, columns=codes)                               # 연속 수정 종가(이 build 의 C)
         capw, n_bad = split_consistent_cap(rcw, adw, sh, asof="knowledge_date" if pit_shares else "date", raw_src=src)
         cap = capw.to_numpy().T
+        if aftermarket_fix:                         # 쌍 팔 진단: 애프터마켓 뒤 원 종가 원천별 (종목-일) 수 · 마지막 날 원천별 종목 수
+            from swing_it.krx_session import AFTERMARKET_START
+            late = src.loc[src.index >= pd.Timestamp(AFTERMARKET_START)]
+            raw_src_diag = {"since": {k: int(v) for k, v in late.stack().value_counts().items()},
+                            "last_day": {k: int(v) for k, v in src.iloc[-1].value_counts().items()}}
     else:                                           # 21~26세대 기록 재현용(결함: 소급 수정 가격 × 그 시점 주식수)
         px = read_prices(con, session="raw", cols=("code", "date", "close"), table="daily_bars", start="2016-08-01", parse_dates=True)
         if sess is not None:
@@ -117,7 +126,8 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     eps[ci[ok], s[ok]] = True
     return {"days": days, "codes": codes, "O": O, "H": H, "L": L, "C": C, "TR": TR, "cost": cost, "mkt": mkt, "rs": rs,
             "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cap": cap, "cap_jump_bad": n_bad, "cw": cw,
-            "regime_on": regime_on, **(_extras(days, codes, C, ma, uni, rs, cwi, regime_on, base & eps, con) if extras else {})}
+            "regime_on": regime_on, **({"raw_src_diag": raw_src_diag} if raw_close and aftermarket_fix else {}),
+            **(_extras(days, codes, C, ma, uni, rs, cwi, regime_on, base & eps, con) if extras else {})}
 
 
 def _extras(days, codes, C, ma, uni, rs, cwi, regime_on, cand, con) -> dict:

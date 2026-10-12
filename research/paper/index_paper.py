@@ -6,6 +6,10 @@ KOSPI200·KOSDAQ150 정기변경 편입(index_changes action='add')마다: 발�
 은 다시 쓰지 않는다. 2026-12 정기변경(발표 2026-11 하순)부터 — 그 전 변경은 무시(``--since``).
 
 사용: ``export $(grep -v '^#' ~/git/quant-airflow/.env | xargs) && uv run --extra pg python research/paper/index_paper.py``
+
+쌍 팔 ``--arm index27_rs``(META_EVOLUTION.md '전진 팔 *_rs 사전등록'): 같은 규칙·코드 경로, 정문 인자만 다르다 — 수정 가격
+``read_prices(session="regular")``, 동료 순위 시총의 원 종가 ``read_raw_close(aftermarket_fix=True)``(분봉 > 정규장 종가 항등식 > 일봉).
+장부 ``index27_rs_ledger.jsonl``, 기록일 2026-10-13 전 행은 쓰지 않는다.
 """
 from __future__ import annotations
 
@@ -25,16 +29,23 @@ warnings.filterwarnings("ignore")
 LEDGER = "research/paper/index27_ledger.jsonl"
 COST_RT = 0.00415
 IDX_MKT = {"KOSPI200": "거래소", "KOSDAQ150": "코스닥"}
+# 팔 설정 표 — index27 은 기존 고정값(바꾸지 않는다), index27_rs 는 정문 애프터마켓 보정 인자만 다르다
+ARMS = {"index27": {"ledger": LEDGER, "session": "raw", "aftermarket_fix": False},
+        "index27_rs": {"ledger": "research/paper/index27_rs_ledger.jsonl", "session": "regular", "aftermarket_fix": True,
+                       "start": "2026-10-13"}}
 
 
 def main() -> None:
     import psycopg2
-    from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
+    from swing_it.krx_session import NXT_START, patch_prices, read_raw_close, read_session_bars_agg
     from swing_it.storage import read_prices, read_shares
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ledger", default=LEDGER)
+    ap.add_argument("--arm", default="index27", choices=sorted(ARMS))
+    ap.add_argument("--ledger", default=None, help="기본: 팔별 장부(ARMS)")
     ap.add_argument("--since", default="2026-11-01", help="이 날짜 이후 발표된 변경만(사전등록 시작 = 2026-12 정기변경)")
     a = ap.parse_args()
+    arm = ARMS[a.arm]
+    a.ledger = a.ledger or arm["ledger"]
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
     q = lambda s, **k: pd.read_sql(s, con, **k)  # noqa: E731
@@ -45,10 +56,14 @@ def main() -> None:
         print(f"{a.since} 이후 발표된 KOSPI200·KOSDAQ150 정기변경 없음 — 기록할 것 없음")
         return
     start = str((ch["announce_date"].min() - pd.Timedelta(days=10)).date())
-    px = read_prices(con, session="raw", cols=("code", "date", "open", "close"), start=start, parse_dates=True)
-    px = patch_prices(px, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=True)
-    raw = read_prices(con, session="raw", cols=("code", "date", "open", "close"), table="daily_bars", start=start, parse_dates=True)
-    raw = patch_prices(raw, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=False)
+    px = read_prices(con, session=arm["session"], cols=("code", "date", "open", "close"), start=start, parse_dates=True)
+    px = patch_prices(px, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=True)   # session="regular" 이면 멱등
+    if arm["aftermarket_fix"]:                      # 쌍 팔: 원 종가 정문(분봉 > 항등식 > 일봉; 기본 --since 창은 전부 09-14 뒤)
+        raw = read_raw_close(con, start=start, aftermarket_fix=True)
+        print("원 종가 원천(종목-일):", raw["raw_src"].value_counts().to_dict())
+    else:
+        raw = read_prices(con, session="raw", cols=("code", "date", "open", "close"), table="daily_bars", start=start, parse_dates=True)
+        raw = patch_prices(raw, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=False)
     sh = read_shares(con, cols=("code", "shares_outstanding"), with_asof=True, parse_dates=True).rename(columns={"asof": "d"})
     stk = q("select code, market, name from stocks")
     C = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").sort_index()
@@ -80,6 +95,8 @@ def main() -> None:
             peers = [c for c in pool if abs(rk[c] - rk[r.code]) <= 50] if np.isfinite(rk.get(r.code, np.nan)) else []
             base = {"index": idx, "eff": str(eff.date()), "ann": str(ann.date()), "code": r.code, "name": r.name, "git": sha,
                     "run_at": pd.Timestamp.now().isoformat(timespec="seconds"), "krx_patched": True}
+            if a.arm != "index27":                  # 쌍 팔만 — 기존 팔 행은 열이 하나도 바뀌지 않는다
+                base.update({"arm": a.arm, "session": arm["session"], "aftermarket_fix": arm["aftermarket_fix"]})
             if key_e not in done:
                 new.append({"kind": "entry", **base, "date": str(days[i_in].date()), "px": float(p0), "n_peers": len(peers)})
             key_x = ("exit", idx, str(eff.date()), r.code)
@@ -95,6 +112,10 @@ def main() -> None:
             ret = float(p1 / p0 - 1)
             new.append({"kind": "exit", **base, "date": str(days[i_out].date()), "entry_px": float(p0), "px": float(p1), "ret": ret,
                         "ctrl": ctrl, "ctrl_kind": ctrl_kind, "excess_net": ret - COST_RT - ctrl, "n_peers": int(len(cr))})
+    early = [r for r in new if r["date"] < arm.get("start", "")]
+    for row in early:
+        print("시작 전(사전등록 첫 기록 거래일 전이라 쓰지 않는다):", json.dumps(row, ensure_ascii=False))
+    new = [r for r in new if r["date"] >= arm.get("start", "")]
     if new:
         os.makedirs(os.path.dirname(a.ledger), exist_ok=True)
         with open(a.ledger, "a", encoding="utf-8") as fh:

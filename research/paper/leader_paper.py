@@ -6,6 +6,10 @@
 
 사용: ``export $(grep -v '^#' ~/git/quant-airflow/.env | xargs) && uv run --with numba --extra pg python research/paper/leader_paper.py``
 (``--arm`` 은 사전등록 팔 이름, 기본 META_EVOLUTION.md 21세대 모의매매 등록)
+
+쌍 팔 ``*_rs``(META_EVOLUTION.md '전진 팔 *_rs 사전등록'): 기존 팔과 cfg·코드 경로가 같고 정문 인자만
+``read_prices(session="regular")``·``read_raw_close(aftermarket_fix=True)`` 로 다르다(:data:`ARM_PRICE`). 장부 ``leader_rs_ledger.jsonl``,
+첫 기록 거래일 2026-10-13(:data:`ARM_START` — 그 전 날짜 행은 쓰지 않는다).
 """
 from __future__ import annotations
 
@@ -31,14 +35,24 @@ ARMS = {                                              # 사전등록(META_EVOLUT
     "leader_C20": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1, "entry": "close",
                    "max_pos": 20, "pos_cap": 0.05, "risk": 0.0025},
 }
-ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl"}
+# 쌍 팔(META_EVOLUTION.md '전진 팔 *_rs 사전등록', 2026-10-13): cfg 는 짝 팔과 같은 사전, 정문 애프터마켓 보정 인자만 다르다
+RS_PAIR = {"leader_A_rs": "leader_A", "leader_C_rs": "leader_C", "leader_C20_rs": "leader_C20"}
+ARMS.update({k: dict(ARMS[v]) for k, v in RS_PAIR.items()})
+ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl",
+              **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}}
+PRICE_RAW = {"session": "raw", "aftermarket_fix": False}          # 기존 팔 고정값(바꾸지 않는다)
+ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True} for k in RS_PAIR}
+ARM_START = {k: "2026-10-13" for k in RS_PAIR}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
 
 
-def load_db(con) -> tuple:
+def load_db(con, session: str = "raw", info: "dict | None" = None) -> tuple:
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     from swing_it.storage import read_prices
-    px = read_prices(con, session="raw", cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True)
+    px = read_prices(con, session=session, cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True)
+    if info is not None:
+        info.update(px.attrs.get("krx_session", {}))
     # 2026-09-14+ 일봉에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다(종가 85~88% 오염) → 분봉 정규장(09:00~15:32)으로 다시 만든다(조정계수 = 시가 비율)
+    # (session="regular" 이면 정문이 이미 보정했다 — patch_prices 는 krx_patched 행을 건드리지 않는다(멱등))
     px = patch_prices(px, read_session_bars_agg(con, start=NXT_START), adjusted=True)
     stk = pd.read_sql("select code, market from stocks", con)
     days = pd.DatetimeIndex(sorted(px["date"].unique()))
@@ -60,10 +74,15 @@ def main() -> None:
     ap.add_argument("--ledger", default=None, help="기본: 팔별 장부(ARM_LEDGER), 없으면 leader21_ledger.jsonl")
     ap.add_argument("--legacy-close", action="store_true", help="정정 G28-3 전 결함 가격(daily_bars.close)으로 시총 — 비교용만")
     a = ap.parse_args()
+    price = ARM_PRICE.get(a.arm, PRICE_RAW)
+    if a.legacy_close and a.arm in ARM_PRICE:
+        raise SystemExit(f"{a.arm}: --legacy-close 는 쌍 팔에 쓰지 않는다(원 종가 정문의 애프터마켓 보정이 이 팔의 정의)")
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
-    days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)  # noqa: E741
-    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close)
+    px_info: dict = {}
+    days, codes, O, H, L_, C, TR, cost, mkt = load_db(con, session=price["session"], info=px_info)  # noqa: E741
+    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close,
+                session=price["session"], aftermarket_fix=price["aftermarket_fix"])
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
     from swing_it.storage import read_index
     kx = read_index(con, "001", cols=("date", "close"), with_level=False, order_by_date=True, parse_dates=True,   # ×100 정수(옛 값 그대로)
@@ -97,12 +116,16 @@ def main() -> None:
            "orders_next_open": {"buy": [(c, names.get(c, "")) for c in st["buy"]], "sell": [(c, names.get(c, "")) for c in st["sell"]],
                                 "add": [(c, names.get(c, "")) for c in st["add"]]},
            "bench_ret_today": bench}
+    if a.arm in ARM_PRICE:                          # 쌍 팔만 — 기존 팔 행은 열이 하나도 바뀌지 않는다
+        row.update({"pair": RS_PAIR[a.arm], **price, "price_session": px_info, "raw_src": D.get("raw_src_diag", {})})
     done = set()
     if os.path.exists(a.ledger):
         with open(a.ledger, encoding="utf-8") as fh:
             done = {(json.loads(x)["date"], json.loads(x)["arm"]) for x in fh if x.strip()}
     if (row["date"], row["arm"]) in done:
         print(f"이미 기록됨: {row['date']} {row['arm']} — 덧붙이지 않는다")
+    elif row["date"] < ARM_START.get(a.arm, ""):
+        print(f"시작 전: {row['date']} < {ARM_START[a.arm]} {row['arm']} — 사전등록 첫 기록 거래일 전이라 쓰지 않는다")
     else:
         os.makedirs(os.path.dirname(a.ledger), exist_ok=True)
         with open(a.ledger, "a", encoding="utf-8") as fh:
