@@ -306,7 +306,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         if free > 0:
             cs = np.flatnonzero(cand[:, t])
             cs = [c for c in cs if c not in pos]
-            cs.sort(key=lambda c: -D["rs"][c, t])
+            rk = D[cfg["rank_score"]] if cfg.get("rank_score") else D["rs"]     # 32 RL-1: leader_P_RL 은 예측 R 순(없으면 RS — 기존)
+            cs.sort(key=lambda c: -np.nan_to_num(rk[c, t], nan=-np.inf))
             p_buy = cs[:free]
         if entry == "close":                         # 종가 단일가 체결(신호는 같은 종가로 판정 — 15:19 대용 아님, 낙관 쪽 근사)
             for ci in p_buy:

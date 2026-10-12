@@ -1,0 +1,96 @@
+{
+ "events": 3325,
+ "backtest_entries": 722,
+ "missing_entries": 0,
+ "missing_examples": [],
+ "n_train": 3325,
+ "censored": 0,
+ "R_mean": 0.14957857571004657,
+ "R_clip_share": 0.01774436090225564,
+ "cv": [
+  {
+   "block": 0,
+   "from": "2017-09-18",
+   "to": "2019-12-13",
+   "n": 665,
+   "pearson": 0.03115840009058152,
+   "spearman": -0.011090841378089345
+  },
+  {
+   "block": 1,
+   "from": "2019-12-13",
+   "to": "2021-03-25",
+   "n": 665,
+   "pearson": 0.06633649749402147,
+   "spearman": 0.06338495936783849
+  },
+  {
+   "block": 2,
+   "from": "2021-03-26",
+   "to": "2023-02-03",
+   "n": 665,
+   "pearson": 0.1351840387644282,
+   "spearman": 0.21117892920875708
+  },
+  {
+   "block": 3,
+   "from": "2023-02-06",
+   "to": "2024-06-28",
+   "n": 665,
+   "pearson": 0.14536339946304183,
+   "spearman": 0.10988877073009444
+  },
+  {
+   "block": 4,
+   "from": "2024-07-01",
+   "to": "2026-08-21",
+   "n": 665,
+   "pearson": -0.06588998891419154,
+   "spearman": -0.09981964404569667
+  }
+ ],
+ "importance_gain": {
+  "log_adv": 0.1386,
+  "eps_yoy": 0.1293,
+  "d_lo252": 0.1045,
+  "regime_dist": 0.0759,
+  "r120": 0.0657,
+  "breadth": 0.0608,
+  "range20": 0.0603,
+  "rs": 0.052,
+  "r60": 0.0509,
+  "d_hi252": 0.0485,
+  "d_ma150": 0.043,
+  "d_ma200": 0.0396,
+  "d_ma50": 0.0388,
+  "r20": 0.0332,
+  "stop_dist": 0.031,
+  "tv_ratio50": 0.0277
+ },
+ "feats": [
+  "rs",
+  "d_ma50",
+  "d_ma150",
+  "d_ma200",
+  "stop_dist",
+  "range20",
+  "tv_ratio50",
+  "log_adv",
+  "d_hi252",
+  "d_lo252",
+  "r20",
+  "r60",
+  "r120",
+  "eps_yoy",
+  "breadth",
+  "regime_dist"
+ ],
+ "lgb": {
+  "objective": "regression",
+  "num_leaves": 15,
+  "min_data_in_leaf": 200,
+  "learning_rate": 0.03,
+  "feature_fraction": 0.8,
+  "verbose": -1
+ }
+}

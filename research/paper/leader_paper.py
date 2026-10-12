@@ -44,15 +44,18 @@ ARMS["leader_M"] = {"theta": 70, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid
                     "max_pos": 20, "pos_cap": 0.05, "risk": 0.0025}
 # 전진 팔(META '전진 팔 leader_P 사전등록'): leader_M + 쫓지 않기(20일 고점 +5% 이내) + 구조 손절(10일 저점, 10% 넘으면 안 삼, 고정) + 위험 0.25% 비중
 ARMS["leader_P"] = {**ARMS["leader_M"], "chase_max": 0.05, "stop": "struct", "stop_max": 0.10}
-PAIR = {**RS_PAIR, "leader_M": "leader_C_rs", "leader_P": "leader_M"}
+# 전진 팔(META '32 RL 단계 사전등록' RL-1): leader_P 와 같고 슬롯 순위만 RL-1 예측 R(모델 = rl32.MODEL_DIR, 해시 고정)
+ARMS["leader_P_RL"] = {**ARMS["leader_P"], "rank_score": "score_rl32"}
+PAIR = {**RS_PAIR, "leader_M": "leader_C_rs", "leader_P": "leader_M", "leader_P_RL": "leader_P"}
+DETAIL_ARMS = ("leader_M", "leader_P", "leader_P_RL")            # 장부 행에 손절선·비중·그날 청산 거래를 더하는 팔(정정 GP-1 M5) — 기존·*_rs 팔 행은 그대로
 ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl",
               **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}, "leader_M": "research/paper/leader_m_ledger.jsonl",
-              "leader_P": "research/paper/leader_p_ledger.jsonl"}
+              "leader_P": "research/paper/leader_p_ledger.jsonl", "leader_P_RL": "research/paper/leader_p_rl_ledger.jsonl"}
 PRICE_RAW = {"session": "raw", "aftermarket_fix": False, "unpatched": "nan"}   # 기존 팔 고정값(바꾸지 않는다; session="raw" 라 unpatched 는 동작 없음)
 # 쌍 팔: unpatched="raw" = 정문이 종가는 분봉 > 항등식으로 고치고, 고칠 원천 없는 고가·저가·거래량·거래대금은 원값 유지(krx_src 표시)
 # — META_EVOLUTION.md '*_rs 보충 — 정문 보정 범위 확대(첫 기록 전)'.
-ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M", "leader_P")}
-ARM_START = {k: "2026-10-13" for k in (*RS_PAIR, "leader_M", "leader_P")}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
+ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M", "leader_P", "leader_P_RL")}
+ARM_START = {k: "2026-10-13" for k in (*RS_PAIR, "leader_M", "leader_P", "leader_P_RL")}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
 
 
 def load_db(con, session: str = "raw", info: "dict | None" = None, unpatched: str = "nan") -> tuple:
@@ -104,6 +107,9 @@ def main() -> None:
         if d_ in days:
             D["regime_on"][days.get_loc(d_)] = bool(v)
     cfg = ARMS[a.arm]
+    if cfg.get("rank_score") == "score_rl32":     # 32 RL-1: 후보 칸 예측 R(해시 검사 포함)
+        from research.experiments.rl32 import score_array
+        D["score_rl32"] = score_array(D, cfg, con)
     a.ledger = a.ledger or ARM_LEDGER.get(a.arm, LEDGER)
     st: dict = {}
     eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st, paper=True)
@@ -127,6 +133,15 @@ def main() -> None:
            "orders_next_open": {"buy": [(c, names.get(c, "")) for c in st["buy"]], "sell": [(c, names.get(c, "")) for c in st["sell"]],
                                 "add": [(c, names.get(c, "")) for c in st["add"]]},
            "bench_ret_today": bench}
+    if a.arm in DETAIL_ARMS:                        # 정정 GP-1 M5: 판정을 장부만으로 계산할 수 있게 — 보유별 손절선·비중, 그날 청산 거래
+        for c, p in st["pos"].items():
+            if "stop" in p:
+                row["positions"][c].update(stop=float(p["stop"]), stop_dist=float(p["sdist"]), unit_w=float(p["uw"]), max_units=int(p["mu"]))
+            else:
+                row["positions"][c].update(stop=float(p["cost_basis"] / p["qty"] * (1 - cfg["hard"])), cost_w=float(p["cost_basis"] / st["equity"]))
+        done_tr = tr[tr["exit"] == st["last_day"]] if len(tr) else tr
+        row["closed_today"] = [{k: (float(v) if isinstance(v, (float, np.floating)) else (int(v) if isinstance(v, (np.integer,)) else v))
+                                for k, v in r.items()} | {"name": names.get(r["code"], "")} for r in done_tr.to_dict("records")]
     if a.arm in ARM_PRICE:                          # 쌍 팔만 — 기존 팔 행은 열이 하나도 바뀌지 않는다
         row.update({"pair": PAIR[a.arm], **price, "price_session": px_info, "raw_src": D.get("raw_src_diag", {})})
     done = set()
