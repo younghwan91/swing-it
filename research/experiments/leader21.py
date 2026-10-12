@@ -75,22 +75,30 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
         tt = ((C > ma[50]) & (ma[50] > ma[150]) & (ma[150] > ma[200]) & (ma[200] > ma200_prev) & (C >= 0.75 * hi252) & (C >= 1.30 * lo252))
     brk = {n: C >= _roll(Cd, n, "max") - 1e-9 for n in GRID["N"]}
     # 시가총액(원 종가 × 상장주식수 as-of) → 그날 순위 · 시총 가중 시장(KOSPI 대용) 200일선 국면
-    if raw_close:                                   # 정정 G28-2: daily_bars.close 는 분할 소급 반영 가격 → 원 종가 정문
-        from swing_it.krx_session import read_raw_close
-        px = read_raw_close(con, start="2016-08-01")
-    else:                                           # 21~26세대 기록 재현용(결함 가격)
+    sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
+                     parse_dates=["date", "knowledge_date"])
+    if raw_close:                                   # 정정 G28-4: 원 종가 × 분할 일관 주식수(krx_session.split_consistent_cap)
+        from swing_it.krx_session import read_raw_close, split_consistent_cap
+        rc = read_raw_close(con, start="2016-08-01")
+        rcw = rc.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
         px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
         if sess is not None:
             px = patch_prices(px, sess, adjusted=False)
-    pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
-    sh = pd.read_sql("select code, date, shares_outstanding, knowledge_date from shares_outstanding_history", con,
-                     parse_dates=["date", "knowledge_date"])
-    if pit_shares:                                  # 모의매매(검증 24차 MUST-FIX): 알게 된 날(knowledge_date) 기준, 없으면 date
-        sh["date"] = sh["knowledge_date"].fillna(sh["date"])
-    sh = sh[(sh["shares_outstanding"] > 0) & (sh["shares_outstanding"] <= 1e10)]       # 정제(21세대 결과 뒤 발견 — 082640 161조 주 등 오류 행)
-    shw = sh.pivot_table(index="date", columns="code", values="shares_outstanding", aggfunc="last")
-    shw = shw.reindex(index=shw.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
-    cap = (pxw * shw).to_numpy().T
+        adw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
+        capw, n_bad = split_consistent_cap(rcw, adw, sh, asof="knowledge_date" if pit_shares else "date")
+        cap = capw.to_numpy().T
+    else:                                           # 21~26세대 기록 재현용(결함: 소급 수정 가격 × 그 시점 주식수)
+        px = pd.read_sql("select code, date, close from daily_bars where date >= '2016-08-01'", con, parse_dates=["date"])
+        if sess is not None:
+            px = patch_prices(px, sess, adjusted=False)
+        pxw = px.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
+        if pit_shares:                              # 모의매매(검증 24차 MUST-FIX): 알게 된 날(knowledge_date) 기준, 없으면 date
+            sh["date"] = sh["knowledge_date"].fillna(sh["date"])
+        sh = sh[(sh["shares_outstanding"] > 0) & (sh["shares_outstanding"] <= 1e10)]   # 정제(21세대 결과 뒤 발견 — 082640 161조 주 등 오류 행)
+        shw = sh.pivot_table(index="date", columns="code", values="shares_outstanding", aggfunc="last")
+        shw = shw.reindex(index=shw.index.union(days)).sort_index().ffill().reindex(index=days, columns=codes)
+        cap = (pxw * shw).to_numpy().T
+        n_bad = -1
     cap = np.where(cap <= 2e15, cap, np.nan)                                          # 시총 2,000조원 초과 = 오류
     crank = pd.DataFrame(cap.T).rank(axis=1, ascending=False).to_numpy().T
     r1 = C[:, 1:] / C[:, :-1] - 1
@@ -108,7 +116,7 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     eps = np.zeros_like(base)
     eps[ci[ok], s[ok]] = True
     return {"days": days, "codes": codes, "O": O, "H": H, "L": L, "C": C, "TR": TR, "cost": cost, "mkt": mkt, "rs": rs,
-            "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cap": cap, "cw": cw,
+            "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cap": cap, "cap_jump_bad": n_bad, "cw": cw,
             "regime_on": regime_on, **(_extras(days, codes, C, ma, uni, rs, cwi, regime_on, base & eps, con) if extras else {})}
 
 

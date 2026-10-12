@@ -78,3 +78,18 @@ def test_raw_close_canary_rejects_retro_adjusted_price():
     with pytest.raises(AssertionError):
         check_raw_close_canary(bad)
     check_raw_close_canary(bad.assign(close=2_060_000.0))
+
+
+def test_split_consistent_cap_bridges_stale_shares():
+    import numpy as np
+
+    from swing_it.krx_session import split_consistent_cap
+    days = pd.DatetimeIndex(["2018-04-30", "2018-05-04", "2018-12-28"])
+    raw = pd.DataFrame({"S": [2_500_000.0, 51_900.0, 38_700.0]}, index=days)          # 5/4 50:1 분할
+    adj = pd.DataFrame({"S": [50_000.0, 51_900.0, 38_700.0]}, index=days)              # 소급 수정 가격
+    sh = pd.DataFrame({"code": ["S"], "date": ["2017-12-31"], "shares_outstanding": [129_000_000]})   # 분할 전 주식수(늦게 바뀜)
+    sh = pd.concat([sh, pd.DataFrame({"code": ["S"], "date": ["2018-04-30"], "shares_outstanding": [129_000_000]})])
+    cap, bad = split_consistent_cap(raw, adj, sh)
+    assert np.isclose(cap["S"].iloc[0], 2_500_000 * 129e6)                 # 분할 전 = 원 종가 × 주식수
+    assert np.isclose(cap["S"].iloc[1], 51_900 * 129e6 * 50)               # 분할 뒤에도 주식수가 50배로 이어진다
+    assert bad == 0

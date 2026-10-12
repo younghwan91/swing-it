@@ -1308,3 +1308,7 @@ EAR = C(s) / C(r 전 거래일) − 1. 진입 = s+1 에 H(s) + 1호가 매수정
 - **MINOR:** read_raw_close 가 2024-01-02~18 전 종목을 일봉으로 메움(원천 전환일 가짜 점프 — 카나리아 한 행으론 못 잡음) · 2026-09-14 이후 supply_demand.close 도 NXT 오염(분봉 없는 종목 ~30% 는 오염 종가로) · 1e10·2e15 필터는 아무것도 안 거름 → '가격 30% 안쪽인데 시총 3배 점프' 검사로.
 - **수용:** G28-2 원인 진단(daily_bars.close 소급 수정, supply_demand.close 원 종가 — 분할 8건 날짜·배수 일치), 모의매매 장부 유효(오늘 상위 200 D1p = D2p 동일), 모의매매 원 종가 기본.
 - **근본 수정(다음):** 시총 정문 = 원 종가 × **분할 일관 주식수**(배수 보정) + 원천 전환·시총 점프 검사. DART 접수일 점-시점 주식수는 quant-airflow 요청. 산출: `rawcap/g28_3_cap_sensitivity.png`, `rawcap/verify30_D2_summary.json`.
+
+### 정정 G28-5 사전등록(결과 전 — 단, 검증자 D2 숫자는 이미 봄) — 분할 일관 시총 정문으로 재실행(기술만)
+- `krx_session.split_consistent_cap`: f = daily_bars.close / 원 종가(누적 분할 배수), 주식수 행 ÷ f(행 date 시점) = 현재 기준 주식수 → asof 열부터 앞으로 채움 → 시총 = daily_bars.close × 현재 기준 주식수. 점검 = 원 가격 ±30% 안쪽인데 시총 3배 점프한 종목-일 수. 테스트 1개(삼성 50:1 분할에서 주식수가 50배로 이어짐). `leader21.build(raw_close=True)` 가 이것을 쓴다(기본 False = 기록 재현).
+- `rawcap_rerun.py` 그대로 다시: 격자 215 A·C, 비용 1·2배. 바 없음 — 검증자 D2(14.7 / 12.4)와 같은 자리인지, 점검 위반 수만 본다.

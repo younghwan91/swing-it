@@ -161,3 +161,40 @@ def read_raw_close(con: Any, *, start: str, end: "str | None" = None) -> pd.Data
     out = combine_raw_close(sd, bars, sess)
     check_raw_close_canary(out)
     return out
+
+
+def split_consistent_cap(raw: pd.DataFrame, adj: pd.DataFrame, shares: pd.DataFrame, *, asof: str = "date") -> "tuple[pd.DataFrame, int]":
+    """시총 = 원 종가 × **분할 일관 주식수**(정정 G28-4).
+
+    주식수 표는 주로 연말 DART 행이라 분할·병합 뒤 수개월 늦게 바뀐다 — 원 종가 × 그 주식수는 그 사이 분할 배수만큼 틀린다(삼성전자 2018-05~12
+    시총 순위 36~38). ``daily_bars.close``(``adj``)는 분할을 소급 반영한 가격이므로 f = adj / raw 가 그날의 누적 분할 배수다. 주식수 행(그 행의
+    ``date`` = 집계 시점)을 f 로 나눠 '현재 기준 주식수' 로 바꾸면 분할에 연속이고, ``asof`` 열 날짜부터 앞으로 채운 뒤 시총 = adj × 현재 기준 주식수
+    = raw × (f_t / f_d) × 주식수. 수집 뒤 일어난 분할(daily_bars 가 아직 소급 안 한 것)은 못 잡는다 — 최근 구간은 주간 키움 주식수가 덮는다.
+
+    Args:
+        raw, adj: 날짜 × 종목 넓은 표(같은 색인·열). raw = :func:`read_raw_close`, adj = daily_bars.close(NXT 보정 전후 같은 처리).
+        shares: 긴 표 code, date, shares_outstanding(+ ``asof`` 열).
+    Returns:
+        (시총 넓은 표, 점검 위반 수 = 원 가격 일 변동 30% 안쪽인데 시총이 3배 넘게 뛴 종목-일).
+    """
+    f = (adj / raw).where((adj > 0) & (raw > 0))
+    f = f.ffill()
+    sh = shares[(shares["shares_outstanding"] > 0)].copy()
+    sh["date"] = pd.to_datetime(sh["date"])
+    sh["k"] = pd.to_datetime(sh[asof]).fillna(sh["date"])
+    days = raw.index
+    pos = np.clip(days.searchsorted(sh["date"].to_numpy(), side="right") - 1, 0, len(days) - 1)
+    fl = f.stack().rename("f").reset_index()
+    fl.columns = ["date_t", "code", "f"]
+    key = pd.DataFrame({"code": sh["code"].to_numpy(), "date_t": days[pos]})
+    fd = key.merge(fl, on=["date_t", "code"], how="left")["f"].to_numpy()
+    sh["s_cb"] = sh["shares_outstanding"].to_numpy(float) / fd
+    sh = sh[np.isfinite(sh["s_cb"]) & (sh["s_cb"] > 0)]
+    S = sh.pivot_table(index="k", columns="code", values="s_cb", aggfunc="last")
+    S = S.reindex(index=S.index.union(days)).sort_index().ffill().reindex(index=days, columns=raw.columns)
+    cap = adj * S
+    with np.errstate(divide="ignore", invalid="ignore"):
+        jump = (cap / cap.shift(1)).abs()
+        rr = (raw / raw.shift(1)).abs()
+    bad = int((((jump > 3) | (jump < 1 / 3)) & (rr < 1.3) & (rr > 1 / 1.3)).sum().sum())
+    return cap, bad

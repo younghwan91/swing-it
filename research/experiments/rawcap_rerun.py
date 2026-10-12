@@ -35,6 +35,7 @@ def main() -> None:
     jac = pd.Series(np.where(union > 0, inter / np.maximum(union, 1), np.nan), index=D0["days"])
     out["top200_jaccard"] = {str(y): float(v) for y, v in jac.groupby(jac.index.year).mean().items()}
     reg = pd.Series(D0["regime_on"] == D1["regime_on"], index=D0["days"])
+    out["cap_jump_bad"] = {"defect": int(D0["cap_jump_bad"]), "raw": int(D1["cap_jump_bad"])}
     out["regime_agree"] = {str(y): float(v) for y, v in reg.groupby(reg.index.year).mean().items()}
     for nm in ("A_open", "C_close"):
         for cm in (1, 2):
