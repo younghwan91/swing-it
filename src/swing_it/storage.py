@@ -797,6 +797,98 @@ def _read_prices_wide_raw(con: Any, *, cols: "tuple[str, ...]", table: str, requ
     return {c: pd.DataFrame(arrays[c], index=days, columns=codes) for c in cols}
 
 
+# ── 자료 커버리지 ─────────────────────────────────────────────────────────────────────────────────────────────
+#: 표(또는 표·종류)마다 자료가 있는 첫날(2026-10-12 DB 실측). 이 전 구간을 요청하는 정문은 :func:`require_coverage` 로 막는다 —
+#: 2020~23 설계 창에서 뉴스·공매도·분봉·공식 지수는 **없다**(조용히 빈 값·대용으로 채우면 거짓 통과가 난다; 재구축 대용 지수가
+#: −4%/년 어긋나 거짓 통과를 낸 적 있다). ``earnings_disclosures.periodic`` 전에는 실적 known_date 가 avail_date 로 돌아간다.
+COVERAGE: dict[str, str] = {
+    "news_articles": "2023-03-15",
+    "short_selling": "2024-05-09",
+    "minute_bars": "2025-08-01",
+    "sector_index": "2024-01-26",
+    "earnings_disclosures.periodic": "2019-02-28",
+}
+
+
+class CoverageError(ValueError):
+    """요청 구간이 표의 자료 시작일보다 앞선다."""
+
+
+def require_coverage(table: str, start: "str | None") -> None:
+    """``start``(None = 처음부터)가 :data:`COVERAGE` 의 시작일보다 앞서면 :class:`CoverageError`."""
+    first = COVERAGE[table]
+    if start is None or str(start)[:10] < first:
+        raise CoverageError(f"{table} 자료는 {first} 부터다 — 요청 시작 {start or '처음'} 은 그 전이다. 그 전 구간은 값이 없다"
+                            f"(대용을 쓰려면 명시하라).")
+
+
+#: 공식 지수 표(``sector_index``)의 가격 열은 **×100 정수**다(001 KOSPI 2,500.12 → 250012).
+_INDEX_PRICE_COLS = ("open", "high", "low", "close")
+
+
+def read_index(con: Any, codes: "str | list[str] | tuple[str, ...] | None" = None, *,
+               cols: "tuple[str, ...]" = ("code", "date", "close"), start: "str | None" = None, end: "str | None" = None,
+               proxy: "Any | None" = None, with_level: bool = True, order_by_date: bool = False, parse_dates: bool = False):
+    """업종·시장 지수 정문(``sector_index``; 001 = KOSPI, 101 = KOSDAQ). 직접 SQL 은 린트 (o) 위반.
+
+    가격 열(open·high·low·close)은 표 그대로 **×100 정수**로 주고, ``with_level`` 이면 ``level = close / 100``(실수)을 덧붙인다.
+    비교·수익률을 옛 숫자와 비트 단위로 맞춰야 하면 정수 열을 쓴다(정수/100 은 끝자리가 달라질 수 있다).
+
+    **커버리지:** 공식 지수는 2024-01-26 부터다(:data:`COVERAGE`). ``start`` 가 없거나 그 전이면 ``proxy`` 를 명시해야 한다:
+      - ``pd.Series``(날짜 → 대용 수준, 코드 하나일 때): 첫 공식일 앞쪽을 대용으로 잇는다. 대용은 **첫 공식일 수준에 맞춰** 배율을
+        곱한다(``is_proxy`` 열). 대용 자체의 품질은 부르는 쪽 책임 — 재구축 대용이 −4%/년 어긋나 거짓 통과를 낸 적 있다.
+      - ``str``: 부르는 쪽이 그 전 구간을 스스로 다룬다는 선언과 이유(예: "시총 가중 대용 — leader21.build"). 값은 공식 구간만.
+    """
+    import pandas as pd  # noqa: PLC0415
+
+    if proxy is None:
+        require_coverage("sector_index", start)
+    use = tuple(cols)
+    if not all(c in ("code", "name", "date", "open", "high", "low", "close", "volume", "trade_value") for c in use):
+        raise ValueError(f"sector_index 열이 아니다: {use}")
+    ph = _ph(con)
+    where, params = [], []
+    if isinstance(codes, str):
+        where.append(f"code = {ph}")
+        params.append(codes)
+    elif codes is not None:
+        where.append(f"code IN ({', '.join([ph] * len(codes))})")
+        params.extend(codes)
+    if start is not None:
+        where.append(f"date >= {ph}")
+        params.append(start)
+    if end is not None:
+        where.append(f"date <= {ph}")
+        params.append(end)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    df = pd.read_sql_query(f"SELECT {', '.join(use)} FROM sector_index{clause}" + (" ORDER BY date" if order_by_date else ""),  # noqa: S608
+                           con, params=tuple(params) or None, parse_dates=["date"] if parse_dates and "date" in use else None)
+    if with_level and "close" in df.columns:
+        df["level"] = df["close"].astype(float) / 100.0
+    if isinstance(proxy, pd.Series):
+        if isinstance(codes, (list, tuple)) and len(codes) != 1 or codes is None or "date" not in df.columns:
+            raise ValueError("대용 Series 는 코드 하나·date 열이 있을 때만 잇는다")
+        d = pd.to_datetime(df["date"])
+        first = d.min()
+        px = proxy.copy()
+        px.index = pd.to_datetime(px.index)
+        px = px.sort_index()
+        base = px.loc[:first].dropna()
+        if base.empty or not with_level:
+            raise ValueError("대용이 첫 공식일까지 값이 없거나 with_level=False — 수준을 맞출 수 없다")
+        scale = float(df.loc[d == first, "level"].iloc[0]) / float(base.iloc[-1])
+        pre = px.loc[px.index < first]
+        if start is not None:
+            pre = pre.loc[pre.index >= pd.Timestamp(start)]
+        head = pd.DataFrame({"date": pre.index if parse_dates else [x.date() for x in pre.index], "level": pre.to_numpy(float) * scale})
+        if "code" in use:
+            head["code"] = codes if isinstance(codes, str) else codes[0]
+        df["is_proxy"] = False
+        head["is_proxy"] = True
+        df = pd.concat([head, df], ignore_index=True)[list(df.columns)]
+    return df
+
+
 SUPPLY_TABLE = "supply_demand"
 _SUPPLY_READ_COLS = ("code", "date", "individual", "foreign_", "institution")
 #: 기관 세부 8종. 키움 소스에만 있고 네이버 폐지 백필에는 없다.

@@ -190,7 +190,9 @@ def kospi_series(con, t0: float) -> "tuple[pd.Series, dict]":
     """코스피 레벨 = ``sector_index`` '001' 종가(2024-01-26~). **그 전엔 지수 비교를 하지 않는다**(REVIEW_BACKTEST M2 —
     원자료 종가 × as-of 주식수 시총가중 대용이 2019·2020·2022 를 6~9%p 과소했다; 원자료 종가의 조정 기준 혼재가 유력).
     (b) 의 지수 열은 2024-01-26 이후 겹치는 구간만 적는다."""
-    idx = pd.read_sql_query("SELECT date, close FROM sector_index WHERE code = '001'", con)
+    from swing_it.storage import read_index  # noqa: PLC0415
+
+    idx = read_index(con, "001", cols=("date", "close"), with_level=False, proxy="없음 — 그 전엔 지수 비교를 하지 않는다(REVIEW_BACKTEST M2)")
     idx["date"] = pd.to_datetime(idx["date"])
     real = idx.set_index("date")["close"].astype(float).sort_index()
     info = {"index_lo": str(real.index[0].date()), "index_hi": str(real.index[-1].date()), "n": int(len(real))}

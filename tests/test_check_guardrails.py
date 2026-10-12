@@ -557,3 +557,22 @@ def test_rule_n_catches_bare_trade_value_thresholds(lint, tmp_path, monkeypatch)
 
 def test_rule_n_accepts_helpers_zero_and_non_money_names(lint, tmp_path, monkeypatch):
     assert _scan(lint, tmp_path, monkeypatch, _TV_OK, "check_trade_value_units") == []
+
+
+# --- (o) 공식 지수 ----------------------------------------------------------------------------------------
+
+def test_rule_o_catches_direct_index_reads(lint, tmp_path, monkeypatch):
+    src = '''
+import pandas as pd
+a = lambda con: pd.read_sql("select date, close from sector_index where code='001' order by date", con)
+def b(cur):
+    cur.execute("""SELECT s.code, s.date, i.close
+                   FROM supply_demand s JOIN sector_index i ON i.date = s.date""")
+'''
+    out = _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_index_select")
+    assert len(out) == 2 and all("read_index" in o for o in out), out
+
+
+def test_rule_o_ignores_prose(lint, tmp_path, monkeypatch):
+    src = '"""공식 지수는 sector_index(2024-01-26~). FROM sector_index 직접 읽기 금지."""\nx = 1\n'
+    assert _scan(lint, tmp_path, monkeypatch, src, "check_no_raw_index_select") == []

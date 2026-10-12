@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from swing_it.storage import (
-    connect, db_default, market_cap_asof_bulk, read_supply_demand)
+    connect, db_default, market_cap_asof_bulk, read_index, read_supply_demand)
 
 EOK = 1e8                 # 원 → 억원
 INDEX_RET: dict = {}
@@ -113,7 +113,8 @@ def index_returns(con, dates: list[str], sectors, markets,
     하나뿐인 업종(보험·증권 등 코스피 전용)은 거래소에만 붙인다. 지수가 아예 없는
     섹터는 ``None`` 으로 남겨, 소비자가 **섞지 않고 제외**할 수 있게 한다.
     """
-    si = pd.read_sql_query("SELECT code, name, date, close FROM sector_index", con)
+    si = read_index(con, cols=("code", "name", "date", "close"), with_level=False,
+                    proxy="없음 — 리포트 창(최근 거래일)만 쓴다")
     si["date"] = si["date"].astype(str)
     lookup: dict = {m: {} for m in markets}
     for name, g in si.groupby("name"):

@@ -261,3 +261,47 @@ def test_read_earnings_with_known_dates(tmp_path):
     assert pd.isna(df.loc["B", "event_date"])
     assert df.loc["C", "known_date"] == pd.Timestamp("2024-05-16")      # max(5/15, 5/14) = 5/15
     assert df.loc["C", "event_date"] == pd.Timestamp("2024-05-02")      # 잠정 4/30 다음 거래일
+
+
+# --- 공식 지수 정문·커버리지 ----------------------------------------------------------------------------------
+
+def _index_rows(con):
+    con.executemany("INSERT INTO sector_index(code, name, date, close) VALUES (?, ?, ?, ?)",
+                    [("001", "KOSPI", "2024-01-26", 250_012), ("001", "KOSPI", "2024-01-29", 251_000),
+                     ("101", "KOSDAQ", "2024-01-26", 85_000)])
+    con.commit()
+
+
+def test_read_index_levels_and_coverage(tmp_path):
+    import pandas as pd
+
+    from swing_it.storage import CoverageError, read_index
+
+    con = connect(tmp_path / "t.db")
+    _index_rows(con)
+    with pytest.raises(CoverageError, match="2024-01-26"):
+        read_index(con, "001")                                       # 처음부터 = 커버리지 전 요청 → 대용 명시 필요
+    with pytest.raises(CoverageError):
+        read_index(con, "001", start="2023-06-01")
+    df = read_index(con, "001", start="2024-01-26", order_by_date=True)
+    assert df["close"].tolist() == [250_012, 251_000]                # ×100 정수 그대로
+    assert df["level"].tolist() == [2500.12, 2510.0]
+    raw = read_index(con, ["001", "101"], cols=("code", "date", "close"), with_level=False, proxy="테스트 — 공식 구간만")
+    assert list(raw.columns) == ["code", "date", "close"] and len(raw) == 3
+    # 대용 잇기: 첫 공식일 수준에 맞춘 배율
+    proxy = pd.Series([1.0, 1.1, 1.2], index=pd.to_datetime(["2024-01-24", "2024-01-25", "2024-01-26"]))
+    sp = read_index(con, "001", start="2024-01-24", proxy=proxy, parse_dates=True, order_by_date=True)
+    assert sp["is_proxy"].tolist() == [True, True, False, False]
+    assert sp["level"].iloc[1] == pytest.approx(1.1 * 2500.12 / 1.2) and sp["level"].iloc[2] == 2500.12
+    assert pd.isna(sp["close"].iloc[0])
+
+
+def test_require_coverage_table():
+    from swing_it.storage import COVERAGE, CoverageError, require_coverage
+
+    assert COVERAGE["news_articles"] == "2023-03-15" and COVERAGE["short_selling"] == "2024-05-09"
+    require_coverage("minute_bars", "2025-08-01")
+    with pytest.raises(CoverageError):
+        require_coverage("minute_bars", "2025-07-31")
+    with pytest.raises(CoverageError):
+        require_coverage("short_selling", None)

@@ -65,8 +65,10 @@ def _matched(p, tr: pd.DataFrame, cfg: dict) -> tuple[dict, pd.DataFrame]:
 
 def _index_hedged(con, tr: pd.DataFrame, p, hold: int) -> np.ndarray:
     """같은 보유 구간(진입일 시가 → hold 번째 날 종가) 시장 지수 수익을 뺀 값. 2024-01-26 이전 지수 없음."""
-    idx = pd.read_sql_query(
-        "SELECT code, date, open, close FROM sector_index WHERE code IN ('001','101')", con)
+    from swing_it.storage import read_index  # noqa: PLC0415
+
+    idx = read_index(con, ["001", "101"], cols=("code", "date", "open", "close"), with_level=False,
+                     proxy="없음 — 2024-01-26 전 진입은 헤지 NaN(사전등록 그대로)")
     idx["date"] = pd.to_datetime(idx["date"])
     op = idx.pivot(index="date", columns="code", values="open").reindex(p.days)
     cl = idx.pivot(index="date", columns="code", values="close").reindex(p.days)

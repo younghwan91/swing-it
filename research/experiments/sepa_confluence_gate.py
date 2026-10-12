@@ -480,7 +480,10 @@ def sub_alpha(m: dict, mask: pd.Series):
 
 def index_hedge(con, D: Data, t: pd.DataFrame) -> pd.Series:
     """진입일 ≥ 2024-01-26 트레이드: 같은 보유 구간(진입일 시가 → 청산일 종가) KOSPI 001 / KOSDAQ 101 수익을 뺀 값."""
-    idx = pd.read_sql_query("SELECT code, date, open, close FROM sector_index WHERE code IN ('001','101')", con)
+    from swing_it.storage import read_index  # noqa: PLC0415
+
+    idx = read_index(con, ["001", "101"], cols=("code", "date", "open", "close"), with_level=False,
+                     proxy="없음 — 진입일 ≥ 2024-01-26 트레이드만 헤지(HEDGE_LO)")
     idx["date"] = pd.to_datetime(idx["date"])
     op = idx.pivot(index="date", columns="code", values="open").astype(float)
     cl = idx.pivot(index="date", columns="code", values="close").astype(float)

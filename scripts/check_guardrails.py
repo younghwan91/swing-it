@@ -22,6 +22,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
       표시가 있어야 하고, ``avail_col`` 매개변수는 기본값을 가질 수 없다.
   (m) 분봉 시간대 — ``minute_bars`` 가 나오는 파일에서 ``at time zone``·``tz_localize``·``tz_convert``·``utc=True`` 금지.
   (n) 거래대금 단위 — ``ADV_*``·``adv_floor``·``TV_FLOOR`` 류 이름에 맨 숫자 리터럴(0 제외)을 넣으면 실패(swing_it.units.eok 등).
+  (o) 공식 지수 — ``sector_index`` 를 정문(storage.read_index) 밖에서 직접 SELECT·JOIN 하면 실패.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -594,6 +595,19 @@ def check_trade_value_units() -> list[str]:
     return out
 
 
+# (o) sector_index 는 2024-01-26 부터만 있고 값은 ×100 정수다. 직접 읽는 코드는 그 전 구간을 조용히 비우거나 대용으로 채웠다
+# (재구축 대용이 −4%/년 어긋나 거짓 통과). 정문 storage.read_index 는 그 전 요청에 대용(proxy) 명시를 요구하고 level(=close/100)을 준다.
+_RAW_INDEX = re.compile(r"\b(?:FROM|JOIN)\s+sector_index\b", re.I)
+_INDEX_READ_EXEMPT = {"src/swing_it/storage.py", "scripts/check_guardrails.py", "tests/test_check_guardrails.py"}
+
+
+def check_no_raw_index_select() -> list[str]:
+    """(o) storage 밖에서 sector_index 를 직접 SELECT·JOIN 하면 위반."""
+    return _scan_sql(_INDEX_READ_EXEMPT, _RAW_INDEX, "index",
+                     "sector_index 를 직접 읽었다. swing_it.storage.read_index(con, codes, ...) 를 쓸 것 — 공식 지수는 "
+                     "2024-01-26 부터라 그 전 구간은 proxy= 로 대용을 명시해야 하고, 값은 ×100 정수(level = close/100)")
+
+
 def check_no_survivor_only_join() -> list[str]:
     """(g2) supply_demand 를 상장 마스터(stocks)와 INNER JOIN 하면 위반."""
     out = []
@@ -733,6 +747,7 @@ def main() -> int:
     violations += check_avail_date_asof()
     violations += check_minute_bars_naive_kst()
     violations += check_trade_value_units()
+    violations += check_no_raw_index_select()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

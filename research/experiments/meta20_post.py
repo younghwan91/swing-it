@@ -97,8 +97,9 @@ def main() -> None:
     import psycopg2  # noqa: PLC0415
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
-    ix = pd.read_sql("select code, date, close from sector_index where code in ('001','101') and date >= '2024-01-01' order by date", con,
-                     parse_dates=["date"])
+    from swing_it.storage import read_index
+    ix = read_index(con, ["001", "101"], cols=("code", "date", "close"), start="2024-01-01", with_level=False, order_by_date=True,
+                    parse_dates=True, proxy="없음 — 2024-01-26 이후 겹치는 구간만 비교")
     C = np.load(f"{a.cache}/C.npy", mmap_mode="r")
     def ew(lo, hi):
         idx = days[(days >= lo) & (days <= hi)]

@@ -65,7 +65,9 @@ def main() -> None:
     days, codes, O, H, L_, C, TR, cost, mkt = load_db(con)  # noqa: E741
     D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close)
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
-    kx = pd.read_sql("select date, close from sector_index where code='001' order by date", con, parse_dates=["date"]).set_index("date")["close"]
+    from swing_it.storage import read_index
+    kx = read_index(con, "001", cols=("date", "close"), with_level=False, order_by_date=True, parse_dates=True,   # ×100 정수(옛 값 그대로)
+                    proxy="시총 가중 대용(leader21.build regime_on) — 지수 200일선이 생긴 날부터만 덮어쓴다").set_index("date")["close"]
     kma = kx.rolling(200, min_periods=200).mean()
     kon = (kx >= kma).where(kma.notna())
     for d_, v in kon.dropna().items():
@@ -76,8 +78,8 @@ def main() -> None:
     st: dict = {}
     eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st, paper=True)
     ret_today = float(eq.iloc[-1] / eq.iloc[-2] - 1)
-    ix = pd.read_sql("select code, date, close from sector_index where code in ('001','101') and date >= %s order by date", con,
-                     params=(str(days[-5].date()),), parse_dates=["date"])
+    ix = read_index(con, ["001", "101"], cols=("code", "date", "close"), start=str(days[-5].date()), with_level=False,
+                    order_by_date=True, parse_dates=True)
     bench = {}
     for code, nm in (("001", "kospi"), ("101", "kosdaq")):
         z = ix[ix["code"] == code].set_index("date")["close"]

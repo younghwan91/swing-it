@@ -588,8 +588,10 @@ def load_regime_inputs(con: Any, *, start: "str | None" = None, end: "str | None
             flow_net = pd.concat(nets).reindex(index=days)
             flow_vol = pd.concat(vols).reindex(index=days)
 
-    official = pd.read_sql_query(
-        "SELECT code, date, close FROM sector_index WHERE code IN ('001', '101')", con)
+    from swing_it.storage import read_index  # noqa: PLC0415
+
+    official = read_index(con, ["001", "101"], cols=("code", "date", "close"), with_level=False,   # ×100 정수 그대로(옛 값과 같음)
+                          proxy="없음 — 2024-01-26 전은 official=NaN, 대용 국면은 별도 계산(RegimeInputs.official)")
     if official.empty:
         off = None
     else:

@@ -134,6 +134,9 @@ def read_session_bars_any(con: Any, *, start: str, end: "str | None" = None) -> 
     없으면 ``None``(보정할 원천이 없다 — 부르는 쪽이 에러로 바꾼다)."""
     import sqlite3  # noqa: PLC0415
 
+    from swing_it.storage import require_coverage  # noqa: PLC0415
+
+    require_coverage("minute_bars", start)                  # 분봉은 2025-08-01 부터 — 그 전 요청은 빈 보정이 아니라 에러
     if not isinstance(con, sqlite3.Connection):
         return read_session_bars_agg(con, start=start, end=end)
     if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='minute_bars'").fetchone() is None:

@@ -52,9 +52,10 @@ def trading_days(con) -> list[dt.date]:
 
 def kospi_returns(con) -> pd.Series:
     """sector_index 001 종가 일수익률(기술 열) — 2024-01-26 부터."""
-    cur = con.cursor()
-    cur.execute("SELECT date, close FROM sector_index WHERE code = '001' ORDER BY date")
-    s = pd.Series({pd.Timestamp(d): float(c) for d, c in cur.fetchall()}).sort_index()
+    from swing_it.storage import read_index  # noqa: PLC0415
+
+    ix = read_index(con, "001", cols=("date", "close"), with_level=False, order_by_date=True, proxy="없음 — 2024-01-26 부터만")
+    s = pd.Series({pd.Timestamp(d): float(c) for d, c in ix.itertuples(index=False)}).sort_index()
     return s.pct_change()
 
 
