@@ -103,7 +103,7 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     eps = np.zeros_like(base)
     eps[ci[ok], s[ok]] = True
     return {"days": days, "codes": codes, "O": O, "H": H, "L": L, "C": C, "TR": TR, "cost": cost, "mkt": mkt, "rs": rs,
-            "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cw": cw,
+            "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cap": cap, "cw": cw,
             "regime_on": regime_on, **(_extras(days, codes, C, ma, uni, rs, cwi, regime_on, base & eps, con) if extras else {})}
 
 
@@ -175,6 +175,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
     p_buy, p_sell, p_add = [], set(), set()
     sell_why: dict = {}
     eq, trades = np.zeros(t1 - t0), []
+    expo = np.zeros(t1 - t0)                       # 25세대: 그날 종가 위성 노출(포지션 가치 / 자산)
     eq_prev = 1.0
     def close_pos(ci, px, t, why):
         nonlocal cash
@@ -235,6 +236,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
             mtm += p["qty"] * p["last_px"]
         e = cash + mtm
         eq[k] = e
+        expo[k] = mtm / e if e > 0 else 0.0
         for ci, p in list(pos.items()):
             p["w_peak"] = max(p["w_peak"], p["qty"] * p["last_px"] / e)
             c_ = C[ci, t]
@@ -278,10 +280,14 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         state.update(pos={D["codes"][c]: {**p, "w": p["qty"] * p["last_px"] / eq_prev} for c, p in pos.items()}, cash=cash,
                      equity=eq_prev, buy=[D["codes"][c] for c in p_buy], sell=[D["codes"][c] for c in p_sell],
                      add=[D["codes"][c] for c in p_add], regime_on=bool(D["regime_on"][t1 - 1]), last_day=str(days[t1 - 1].date()))
-        return pd.Series(eq, index=days[t0:t1]), pd.DataFrame(trades)
+        out_eq = pd.Series(eq, index=days[t0:t1])
+        out_eq.attrs["expo"] = expo
+        return out_eq, pd.DataFrame(trades)
     for ci in list(pos):
         close_pos(ci, pos[ci]["last_px"], t1 - 1, "end")
-    return pd.Series(eq, index=days[t0:t1]), pd.DataFrame(trades)
+    out_eq = pd.Series(eq, index=days[t0:t1])
+    out_eq.attrs["expo"] = expo
+    return out_eq, pd.DataFrame(trades)
 
 
 def metrics(eq: pd.Series, lo=None, hi=None) -> dict:
