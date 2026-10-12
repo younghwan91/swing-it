@@ -31,9 +31,10 @@ import pandas as pd
 from ..engine.panels import lookup_panel, price_arrays
 from ..engine.sim_crosssectional import rank_ic, rank_tilt_backtest
 from ..features.volatility import VOL_WINDOW, realized_vol_panel
+from swing_it.units import eok
 
 # Deployment spec (scalp-it note #31 adoption) — the low-vol book's frozen rules.
-DEPLOY_ADV_FLOOR = 5000.0   # trailing 20d avg trade value ≥ 5000 백만원 (50억)
+DEPLOY_ADV_FLOOR = eok(50)   # trailing 20d avg trade value ≥ 5000 백만원 (50억)
 HOLD_DAYS = 21              # monthly rebalance
 N_DECILES = 10
 MIN_NAMES = 30             # skip a rebalance below this many eligible names

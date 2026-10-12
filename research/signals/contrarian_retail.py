@@ -36,6 +36,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 
 def _load_env_db() -> str:
@@ -52,7 +53,7 @@ def _load_env_db() -> str:
 PRICE_TABLE = "daily_bars_adjusted"   # 분할조정 (원자료 daily_bars 금지)
 SIGNAL_WINDOW = 5      # 개미 순매수 누적 윈도(거래일)
 SIGNAL_LAG = 1         # 룩어헤드 방지 래그(거래일)
-BASELINE = dict(horizon=20, step=5, top_n=40, adv_floor=20000.0, start_index=130, min_names=20)
+BASELINE = dict(horizon=20, step=5, top_n=40, adv_floor=eok(200), start_index=130, min_names=20)
 
 
 def load_data(db: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -222,7 +223,7 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     return float((ar * br).sum() / d) if d > 0 else float("nan")
 
 
-def diagnose(prices, signal_panel, *, horizon=20, step=5, adv_floor=20000.0,
+def diagnose(prices, signal_panel, *, horizon=20, step=5, adv_floor=eok(200),
              adv_window=20, start_index=130, min_names=20, top_n=40, date_lo=None, date_hi=None):
     """부호 격리 진단: 랭크-IC + 롱숏 스프레드. signal_panel은 이미 반대매매(-1) 신호.
 
@@ -358,7 +359,7 @@ def ic_weighted_book(
     *,
     horizon: int = 20,
     step: int = 5,
-    adv_floor: float = 20000.0,
+    adv_floor: float = eok(200),
     adv_window: int = 20,
     start_index: int = 130,
     min_names: int = 20,
@@ -489,7 +490,7 @@ def _signal_panels(prices, flow, window, lag):
 
 
 def simulate_trades(prices, flow, *, window=5, lag=1, hold=20, stop=0.08, target=0.15,
-                    mom_q=0.7, ext_q=0.9, adv_floor=20000.0, adv_window=20, start_index=130,
+                    mom_q=0.7, ext_q=0.9, adv_floor=eok(200), adv_window=20, start_index=130,
                     cost_roundtrip=0.0046, side="both"):
     """이벤트드리븐 트레이드: 급등(모멘텀 상위) 종목 중 개미 극단 추격→숏 / 극단 투매→롱.
 
@@ -543,7 +544,7 @@ def simulate_trades(prices, flow, *, window=5, lag=1, hold=20, stop=0.08, target
 
 
 def simulate_momentum_long(prices, flow, *, window=5, lag=1, hold=20, stop=0.08, target=0.15,
-                           trail=0.0, top_mom=0.8, retail_rule="all", ext_q=0.8, adv_floor=20000.0,
+                           trail=0.0, top_mom=0.8, retail_rule="all", ext_q=0.8, adv_floor=eok(200),
                            adv_window=20, start_index=130, cost_roundtrip=0.0046, seed=0):
     """롱온리 모멘텀 매매 + 개미 수급 필터. 필터가 순수 모멘텀을 이기는지 검증.
 
@@ -736,7 +737,7 @@ except ImportError:  # pragma: no cover
 
 
 def simulate_fast(prices, flow, *, window=5, lag=1, hold=20, stop=0.10, target=0.0,
-                  trail=0.20, top_mom=0.8, ext_q=0.8, adv_floor=20000.0, adv_window=20,
+                  trail=0.20, top_mom=0.8, ext_q=0.8, adv_floor=eok(200), adv_window=20,
                   start_index=130, cost_roundtrip=0.0046, _cache=None):
     """numba 가속 dump 시뮬 → (트레이드 수익 배열, 진입일 문자열 배열).
 
@@ -760,7 +761,7 @@ def simulate_fast(prices, flow, *, window=5, lag=1, hold=20, stop=0.10, target=0
 
 
 def simulate_detailed(prices, flow, *, window=8, lag=1, hold=60, stop=0.10, target=0.0,
-                      trail=0.20, top_mom=0.8, ext_q=0.85, adv_floor=20000.0, adv_window=20,
+                      trail=0.20, top_mom=0.8, ext_q=0.85, adv_floor=eok(200), adv_window=20,
                       start_index=130, cost_roundtrip=0.0046, _cache=None):
     """분포 분석용 상세 시뮬 → 트레이드별 (수익·진입일·모멘텀강도·투매강도·보유일·청산사유).
 

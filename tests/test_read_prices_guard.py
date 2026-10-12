@@ -88,3 +88,29 @@ def test_read_prices_wide_sqlite_fallback_pivots_and_checks(tmp_path):
     assert panels["close"].shape == (2, 2)
     assert panels["close"].loc["2020-01-03", "000030"] != panels["close"].loc["2020-01-03", "000030"]  # NaN
     con.close()
+
+
+def _tv_rows(n, *, unit=1.0, start="2020-01-"):
+    """현실 단위 행: trade_value(백만원) = close × volume / 1e6 × unit."""
+    return [(f"{i:06d}", f"{start}{(i % 28) + 1:02d}", 10_000, 10_100, 9_900, 10_000, 50_000,
+             10_000 * 50_000 / 1e6 * unit, "kiwoom") for i in range(n)]
+
+
+def test_trade_value_unit_canary_passes_real_units(tmp_path):
+    con = connect(tmp_path / "t.db")
+    _seed(con, _tv_rows(40))
+    assert len(read_prices(con, cols=("code", "date", "close", "volume", "trade_value"))) == 40
+    assert len(read_prices(con, cols=("code", "date", "trade_value"))) == 40     # close·volume 없으면 표본 질의로 잰다
+
+
+def test_trade_value_unit_canary_catches_won_units(tmp_path):
+    """trade_value 가 원 단위로 적재되면(백만원의 1e6 배) 읽는 자리에서 시끄럽게 실패한다(4f6ef61 배선 오류의 거울)."""
+    from swing_it.storage import TradeValueUnitError
+
+    con = connect(tmp_path / "t.db")
+    _seed(con, _tv_rows(40, unit=1e6))
+    with pytest.raises(TradeValueUnitError, match="백만원"):
+        read_prices(con, cols=("code", "date", "trade_value"))
+    with pytest.raises(TradeValueUnitError):
+        read_prices(con, cols=("code", "date", "close", "volume", "trade_value"))
+    assert len(read_prices(con, cols=("code", "date", "close"))) == 40           # trade_value 를 안 읽으면 검사하지 않는다

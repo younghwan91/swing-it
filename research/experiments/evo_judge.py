@@ -15,10 +15,11 @@ import sys
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 EVO = "research/logs/sepa_explore/pattern_ga_evo"
 N_MIN, T_MIN, K, MIN_SETS, BOOT, SEED, SLOT_W = 60, 1.0, 3.0, 5, 2000, 20261011, 0.10
-SMALL_ADV, SMALL_SLIP = 1000.0, 0.004
+SMALL_ADV, SMALL_SLIP = eok(10), 0.004
 
 
 def load(c: str):

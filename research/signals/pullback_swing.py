@@ -29,10 +29,11 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 # --- 사전등록 파라미터 기본값 (러너가 명시적으로 넘기지만, 여기 문서화) ----------
 ADV_WINDOW = 20
-ADV_FLOOR = 20000.0        # trade_value 단위(~20B KRW), Step -1/Step 1 과 동일
+ADV_FLOOR = eok(200)        # trade_value 단위(~20B KRW), Step -1/Step 1 과 동일
 MIN_GAP = 10               # 동일 종목 재진입 최소 거래일 간격(독립 스윙 프록시)
 RSI_LEN = 14
 RSI_MAX = 30.0             # 전일 과매도 임계(깊은 눌림 조임 레버)

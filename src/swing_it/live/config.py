@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, fields
+from swing_it.units import eok
 
 #: 상한가 시가 판정 허용폭 — :data:`swing_it.features.korea.LIMIT_UP_REL_TOL` 과 같은 값(0.7%p).
 #: 여기 사본을 두는 이유: config 는 무의존(다른 에이전트·CLI 가 가볍게 import)이어야 한다.
@@ -96,7 +97,7 @@ class StrategyConfig:
     """
 
     # --- 유니버스(korea.universe_mask 위생 + ADV 하한) ---
-    adv_floor: float = 5_000.0          # ADV20 ≥ 5,000 백만원(50억) — 상한 없음(두 구간 합)
+    adv_floor: float = eok(50)          # ADV20 ≥ 5,000 백만원(50억) — 상한 없음(두 구간 합)
     adv_window: int = 20
     min_price: float = 1_000.0          # 원자료 종가(daily_bars.close) 기준
     min_history: int = 252

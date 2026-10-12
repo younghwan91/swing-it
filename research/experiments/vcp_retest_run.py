@@ -38,6 +38,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -96,8 +97,8 @@ CAP_SENS = "2026-04-30"                           # 사건 상한 민감도(정�
 FLOW_LO = "2024-04-25"                            # 수급 팔 사건 하한(정정 M3)
 SUB_HI = "2024-12-31"                             # 하위 구간 2017-09 ~ 2024-12
 MINUTE_LO = "2025-08-01"                          # 분봉 시작
-ADV_FLOOR = 5_000.0                               # ADV20 ≥ 50억 (백만원) — 사전 규칙이 VOID 일 때의 기본
-ADV_FLOORS_FUNNEL = (5_000.0, 3_000.0, 2_000.0, 1_000.0)   # 정정 2: 하한 후보(50억·30억·20억·10억)
+ADV_FLOOR = eok(50)                               # ADV20 ≥ 50억 (백만원) — 사전 규칙이 VOID 일 때의 기본
+ADV_FLOORS_FUNNEL = (eok(50), eok(30), eok(20), eok(10))   # 정정 2: 하한 후보(50억·30억·20억·10억)
 FLOOR_RULE_N, FLOOR_RULE_SUB = 60, 30             # 정정 2: V0 체결 ≥ 60 ∧ 2017-09~2024-12 ≥ 30 인 가장 높은 하한
 NXT_LAST_DAY = "2026-09-11"                       # NXT 미보정 종목의 보유 경로 끝(정정 2 B-M3)
 H0_WICK = 0.08                                    # H0 윗꼬리 플래그(기술 칸, 정정 2 A-M3) — (H0 − max(시가, 종가)) / H0 ≥ 8%

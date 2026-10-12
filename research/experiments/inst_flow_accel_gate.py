@@ -23,6 +23,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,7 +43,7 @@ PRE_HOLD = 21         # 보유(거래일)
 PRE_STEP = 21         # 리밸 간격 = 월
 PRE_TOPQ = 0.10       # 상위 10% 롱
 PRE_STOP = 0.08       # 하드손절 8% (R 정규화 분모)
-ADV_FLOOR = 5000.0    # 백만원 = 50억
+ADV_FLOOR = eok(50)    # 백만원 = 50억
 ADV_WIN = 20
 START_I = 80          # 워밍업(질량창 20 + LAG 20 + WIN 20 + 여유)
 MASS_LAG = 40         # v2: 질량을 두 유량 창보다 앞선 [t−59..t−40] 에서 잰다

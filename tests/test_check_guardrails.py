@@ -519,3 +519,41 @@ def test_rule_m_ignores_files_without_minute_bars(lint, tmp_path, monkeypatch):
     """분봉과 무관한 파일의 시간대 처리(뉴스 발행 시각 등)는 대상이 아니다."""
     src = 'import pandas as pd\nx = pd.to_datetime(["2026-01-01"], utc=True).tz_convert("Asia/Seoul")\n'
     assert _scan(lint, tmp_path, monkeypatch, src, "check_minute_bars_naive_kst") == []
+
+
+# --- (n) 거래대금 단위 -------------------------------------------------------------------------------------
+
+_TV_BARE = '''
+ADV_FLOOR = 20000.0
+MIN_TV = 1_000.0
+ADV_LO, ADV_HI = 5_000.0, eok(200)
+CFG = {"adv_floor": 5000, "horizon": 20}
+FUNNEL = None
+ADV_FLOORS_FUNNEL = (5_000.0, 3_000.0)
+
+def f(prices, *, adv_floor: float = 20000.0):
+    return g(prices, adv_floor=10 * 100)
+'''
+
+_TV_OK = '''
+from swing_it.units import eok
+ADV_FLOOR = eok(200)
+ADV_WINDOW = 20
+TV_UNIT_BAND = (0.5, 2.0)
+ROW = {"tv": 500.0, "inst": 1.0}
+CFG = {"adv_floor": eok(50), "adv_window": 20}
+
+def f(prices, *, adv_floor: float = 0.0, adv_window: int = 20):
+    return g(prices, adv_floor=eok(10))
+'''
+
+
+def test_rule_n_catches_bare_trade_value_thresholds(lint, tmp_path, monkeypatch):
+    """대입·튜플 대입·dict 문턱 키·기본값·키워드 인자·리터럴 곱 모두 잡는다."""
+    out = _scan(lint, tmp_path, monkeypatch, _TV_BARE, "check_trade_value_units")
+    names = sorted(o.split("문턱 ")[1].split(" ")[0] for o in out)
+    assert names == ["ADV_FLOOR", "ADV_FLOORS_FUNNEL", "ADV_LO", "MIN_TV", "adv_floor", "adv_floor", "adv_floor"], out
+
+
+def test_rule_n_accepts_helpers_zero_and_non_money_names(lint, tmp_path, monkeypatch):
+    assert _scan(lint, tmp_path, monkeypatch, _TV_OK, "check_trade_value_units") == []

@@ -21,6 +21,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (l) 실적 as-of — ``avail_date`` 를 as-of 키로 쓰는 자리(``avail_col="avail_date"``·merge_asof 키)는 ``# legacy-asof: <이유>``
       표시가 있어야 하고, ``avail_col`` 매개변수는 기본값을 가질 수 없다.
   (m) 분봉 시간대 — ``minute_bars`` 가 나오는 파일에서 ``at time zone``·``tz_localize``·``tz_convert``·``utc=True`` 금지.
+  (n) 거래대금 단위 — ``ADV_*``·``adv_floor``·``TV_FLOOR`` 류 이름에 맨 숫자 리터럴(0 제외)을 넣으면 실패(swing_it.units.eok 등).
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -514,6 +515,85 @@ def check_minute_bars_naive_kst() -> list[str]:
     return out
 
 
+# (n) trade_value 는 백만원 단위다(ADV 10억 = 1,000). 맨 숫자 문턱은 한 자리 틀려도 그럴듯해 보인다 — 4f6ef61 이 원 단위로
+# 배선했고, features/universe.py 는 10,000 을 "10억" 이라 적었다(실제 100억). 거래대금 문턱 이름(토큰 adv·tv)에 숫자 리터럴을
+# 넣는 자리(대입·기본값·키워드 인자·dict 키)를 막고 swing_it.units.eok(억)·jo(조)·mil(백만원) 을 쓰게 한다. 0 은 단위와 무관해 허용.
+# window·days·rank 처럼 돈이 아닌 이름은 뺀다. tests/ 는 작은 가짜 단위를 쓰므로 대상이 아니다.
+_TV_TOKENS = {"adv", "tv"}
+_TV_NOT_MONEY = {"window", "win", "days", "day", "n", "rank", "frac", "pct", "q", "ratio", "mult", "rel", "z", "lag", "len",
+                 "periods", "min_periods", "col", "cols", "key", "name", "band", "sample", "unit", "units"}
+#: dict 키는 문턱 낱말(floor·min·max·lo·hi·cap·cut)이 함께 있을 때만 본다 — {"tv": 500.0} 같은 데이터 행(검증기 합성 표)은 문턱이 아니다.
+_TV_THRESHOLD = {"floor", "min", "max", "lo", "hi", "cap", "cut", "thr", "threshold"}
+_TV_EXEMPT = {
+    "scripts/check_guardrails.py", "tests/test_check_guardrails.py", "src/swing_it/units.py",
+    # kqflow TUI 는 리포트 값을 **억 원** 단위로 받는다(scripts/sector_flow.py 가 원 / 1e8). trade_value(백만원) 문턱이 아니다.
+    "src/swing_it/tui/flow_view.py",
+}
+
+
+def _is_money_name(name: str) -> bool:
+    toks = [t for t in re.split(r"[_\d]+", name.lower()) if t]
+    return bool(_TV_TOKENS & set(toks)) and not (_TV_NOT_MONEY & set(toks))
+
+
+def _bare_number(node) -> bool:
+    """숫자 리터럴(부호·사칙연산 포함, 0 제외)인가."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value != 0
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        return _bare_number(node.operand)
+    if isinstance(node, ast.BinOp):
+        lits = [x for x in (node.left, node.right) if isinstance(x, (ast.Constant, ast.UnaryOp, ast.BinOp))]
+        return len(lits) == 2 and all(_bare_number(x) or (isinstance(x, ast.Constant) and x.value == 0) for x in lits)
+    if isinstance(node, ast.Tuple):
+        return any(_bare_number(e) for e in node.elts)
+    return False
+
+
+def check_trade_value_units() -> list[str]:
+    """(n) 거래대금 문턱 이름에 맨 숫자 리터럴을 넣으면 위반."""
+    out = []
+    for p in _iter_py(REPO):
+        rel = p.relative_to(REPO).as_posix()
+        if rel in _TV_EXEMPT or rel.startswith((".venv/", "tests/")):
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            out.append(f"[units] {rel} — 파싱 실패: {exc}")
+            continue
+        hits: list[tuple[int, str]] = []
+        for n in ast.walk(tree):
+            pairs = []
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    elts = t.elts if isinstance(t, ast.Tuple) else [t]
+                    vals = n.value.elts if isinstance(t, ast.Tuple) and isinstance(n.value, ast.Tuple) else [n.value] * len(elts)
+                    pairs += list(zip(elts, vals))
+            elif isinstance(n, ast.AnnAssign) and n.value is not None:
+                pairs.append((n.target, n.value))
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = n.args
+                pos = a.posonlyargs + a.args
+                pairs += [(x, d) for x, d in zip(pos[len(pos) - len(a.defaults):], a.defaults)]
+                pairs += [(x, d) for x, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+            elif isinstance(n, ast.Call):
+                pairs += [(k, k.value) for k in n.keywords if k.arg]
+            elif isinstance(n, ast.Dict):
+                pairs += [(k, v) for k, v in zip(n.keys, n.values) if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                          and _TV_THRESHOLD & set(re.split(r"[_\d]+", k.value.lower()))]
+            for tgt, val in pairs:
+                name = (tgt.id if isinstance(tgt, ast.Name) else tgt.attr if isinstance(tgt, ast.Attribute)
+                        else tgt.arg if isinstance(tgt, (ast.arg, ast.keyword)) else tgt.value if isinstance(tgt, ast.Constant)
+                        else None)
+                if isinstance(name, str) and _is_money_name(name) and _bare_number(val):
+                    hits.append((getattr(val, "lineno", getattr(n, "lineno", 0)), name))
+        out += [f"[units] {rel}:{ln} — 거래대금 문턱 {name} 에 맨 숫자를 넣었다. trade_value 는 백만원 단위다 — "
+                f"swing_it.units.eok(억)·jo(조)·mil(백만원) 으로 단위를 적어라(예: eok(200) = 20,000 = 200억)."
+                for ln, name in sorted(set(hits))]
+    return out
+
+
 def check_no_survivor_only_join() -> list[str]:
     """(g2) supply_demand 를 상장 마스터(stocks)와 INNER JOIN 하면 위반."""
     out = []
@@ -652,6 +732,7 @@ def main() -> int:
     violations += check_no_raw_shares_select()
     violations += check_avail_date_asof()
     violations += check_minute_bars_naive_kst()
+    violations += check_trade_value_units()
     violations += check_verdicts_have_runner()
     violations += check_commit_identity()
 

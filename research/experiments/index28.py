@@ -17,6 +17,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok  # noqa: E402
 
 sys.path[:0] = [".", "src"]
 warnings.filterwarnings("ignore")
@@ -27,7 +28,7 @@ IDX_MKT = {"KOSPI200": "거래소", "KOSDAQ150": "코스닥"}
 RANK_FRAC = 0.7
 WIN = 120          # 기준일까지 평균 창(거래일, 약 6개월)
 MIN_VALID = 100
-MIN_TV = 1000.0    # 평균 거래대금(백만 원) = 10억
+MIN_TV = eok(10)    # 평균 거래대금(백만 원) = 10억
 
 
 def load(con):

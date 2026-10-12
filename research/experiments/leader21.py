@@ -15,6 +15,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok  # noqa: E402
 
 sys.path[:0] = [".", "src"]
 
@@ -23,7 +24,7 @@ START, END = "2017-10-02", "2026-10-08"
 FOLDS = (("2017-10-02", "2020-01-01", "2022-01-01"), ("2017-10-02", "2022-01-01", "2024-01-01"))
 GRID = {"theta": (70, 80, 90), "N": (20, 50, 120), "ma_exit": (50, 100), "hard": (0.15, 0.25), "pyramid": (0, 1),
         "univ": ("all", "top200"), "regime": (0, 1)}            # 보강(검증 23차 권고, 결과 전): 시가총액 상위 200 · 시장 국면(시총 가중 200일선)
-MAX_POS, RISK, POS_CAP, ADV_MIN, LU = 10, 0.005, 0.10, 1000.0, 1.29
+MAX_POS, RISK, POS_CAP, ADV_MIN, LU = 10, 0.005, 0.10, eok(10), 1.29
 SG = {"004690", "017390", "016710", "003100", "004360", "032190", "003380", "030210"}
 _D: dict = {}
 

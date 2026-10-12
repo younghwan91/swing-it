@@ -36,6 +36,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -66,7 +67,7 @@ DESIGN_VARIANTS = ("WD 문구대로", "WD + 소비 차단(M3)", "WD + D ≤ 0.99
 
 EVENT_LO, EVENT_HI, FLOW_LO, SUB_HI, CAP_SENS = R.EVENT_LO, R.EVENT_HI, R.FLOW_LO, R.SUB_HI, R.CAP_SENS
 RS_MIN, BREADTH_MIN = 70.0, 0.5
-ADV_FLOORS_FUNNEL = (5_000.0, 3_000.0, 2_000.0, 1_000.0)
+ADV_FLOORS_FUNNEL = (eok(50), eok(30), eok(20), eok(10))
 FLOOR_RULE_N, FLOOR_RULE_SUB = 80, 40
 N_NULL, NULL_K, NULL_PULL, NULL_PULL_HI, NULL_SEED = 300, (10, 40), 0.08, 0.40, 20261012
 NULL_EXPAND, NULL_POOL_MULT = 5, 3

@@ -29,6 +29,7 @@ import pandas as pd
 from ..engine.metrics import newey_west_t, summarize_periods
 from ..engine.panels import panel_pivot, price_arrays, resolve_signal
 from ..engine.sim_crosssectional import rank_ic, rank_tilt_backtest, staggered_tranche_backtest
+from swing_it.units import eok
 
 # Backward-compat re-exports (the metric/panel logic now lives in the engine).
 # `research/experiments/pead_refinement.py` and the engine parity tests still import these
@@ -45,7 +46,7 @@ def pead_backtest(
     *,
     signal_panel: pd.DataFrame | None = None,
     horizon: int = 40,
-    adv_floor: float = 5000.0,
+    adv_floor: float = eok(50),
     adv_window: int = 20,
     # 기본값은 발표 수치에 묶여 있어 그대로 둔다. 일자별 거래세를 반영한 왕복 비용은
     # krx_quant_core.costs.round_trip_cost(on, market) 참고.
@@ -117,7 +118,7 @@ def staggered_backtest(
     horizon: int = 60,
     step: int = 20,
     top_n: int = 40,
-    adv_floor: float = 20000.0,
+    adv_floor: float = eok(200),
     adv_window: int = 20,
     start_index: int = 130,
     min_names: int = 20,
@@ -164,7 +165,7 @@ def pead_rank_ic(
     *,
     signal_panel: pd.DataFrame | None = None,
     horizon: int = 40,
-    adv_floor: float = 5000.0,
+    adv_floor: float = eok(50),
     adv_window: int = 20,
     start_index: int = 130,
     fresh_days: int = 0,
@@ -221,7 +222,7 @@ def recommend_holdings(
     shares: pd.DataFrame,
     *,
     top_n: int = 10,
-    adv_floor: float = 20000.0,
+    adv_floor: float = eok(200),
     adv_window: int = 20,
     cap_rank: tuple[int, int] = (20, 100),
     asof: str | None = None,

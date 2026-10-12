@@ -37,6 +37,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -65,7 +66,7 @@ PRIOR_LEDGERS = (*R.PRIOR_LEDGERS, ("vcp_retest", "research/logs/sepa_explore"))
 EVENT_LO, EVENT_HI = R.EVENT_LO, R.EVENT_HI
 CAP_SENS, FLOW_LO, SUB_HI = R.CAP_SENS, R.FLOW_LO, R.SUB_HI
 RS_MIN, BREADTH_MIN = 70.0, 0.5
-ADV_FLOORS_FUNNEL = (5_000.0, 3_000.0, 2_000.0, 1_000.0)
+ADV_FLOORS_FUNNEL = (eok(50), eok(30), eok(20), eok(10))
 FLOOR_RULE_N, FLOOR_RULE_SUB = 80, 40
 B1_N, B1_SUB_N = 80, 40
 GL_MIN, AVG_LOSS_R_MIN, R_P5_MIN, BIG_LOSS_MAX, BE_MARGIN = 2.0, -1.0, -1.3, 0.05, 0.05

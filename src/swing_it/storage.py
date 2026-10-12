@@ -461,7 +461,7 @@ def _attach_known_dates(con: Any, df, *, calendar=None):
         x = np.asarray(x, dtype="datetime64[ns]")
         ok = ~np.isnat(x)
         i = days.searchsorted(x[ok], side="right")
-        res = np.full(len(x), np.datetime64("NaT"), dtype="datetime64[ns]")
+        res = np.full(len(x), np.datetime64("NaT", "ns"), dtype="datetime64[ns]")
         inside = i < len(days)
         res[np.flatnonzero(ok)[inside]] = days.to_numpy()[i[inside]]
         return res
@@ -553,7 +553,8 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
             안 돌았다는 뜻이다. 폐지 시세가 DB 에 아예 없으면(신규 DB 등) 통과시킨다 —
             없는 걸 요구할 수는 없고, 그 경우는 백필 자체가 선행 과제다.
         start, end: ``YYYY-MM-DD``(양 끝 포함) — **날짜로만** 자른다(종목은 자르지 않는다). 주면 폐지 검사도 그 창 기준
-            (:func:`_assert_window_has_delisted`).
+            (:func:`_assert_window_has_delisted`). ``trade_value`` 를 요청하면 단위 카나리아(:func:`_check_trade_value_units`,
+            백만원이 아니면 :class:`TradeValueUnitError`)가 돈다(값은 바꾸지 않는다).
         parse_dates: ``date`` 열을 datetime64 로(``pd.read_sql(parse_dates=["date"])`` 와 같은 경로).
         session: ``"regular"``(기본) — 2026-09-14~ 행(KRX 애프터마켓 16:00~20:00 체결이 섞였다)을 분봉 정규장 값으로 보정한다
             (:func:`_apply_regular_session`; 보정 행 수는 ``df.attrs["krx_session"]``, 보정했으면 ``krx_patched`` 열). 그 날짜가 없는 창은
@@ -587,6 +588,7 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
                                         start=start or "0000-01-01", end=end or "9999-12-31")
         elif not where:
             _assert_universe_has_delisted(con, df, table=table)
+    _check_trade_value_units(con, df, table=table, start=start, end=end)
     if session == "regular":
         df = _apply_regular_session(con, df, table=table, strict=strict)
         if extra_open:
@@ -594,6 +596,51 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
             df = df.drop(columns="open")
             df.attrs.update(attrs)
     return df
+
+
+#: 거래대금 단위 카나리아 — 표본의 trade_value / (close × volume / 1e6) 중앙값이 이 밖이면 trade_value 가 백만원 단위가 아니다
+#: (원 단위면 ~1e6, 억 단위면 ~0.01). 조정 테이블은 분할 전 행의 비율이 분할 배수만큼 크지만 중앙값은 1 근처다.
+TV_UNIT_BAND = (0.5, 2.0)
+_TV_SAMPLE = 5000
+
+
+class TradeValueUnitError(AssertionError):
+    """trade_value 가 백만원 단위가 아니다(수집·적재 단위 결함)."""
+
+
+def _check_trade_value_units(con: Any, df, *, table: str, start: "str | None", end: "str | None") -> None:
+    """``trade_value`` 를 읽을 때 단위 카나리아. 프레임에 close·volume 이 있으면 그것으로, 없으면 같은 창의 작은 표본 질의로 잰다.
+    값이 바뀌지 않는다 — 통과하거나 :class:`TradeValueUnitError`."""
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    if "trade_value" not in df.columns or table not in _SESSION_TABLES:
+        return
+    if {"close", "volume"} <= set(df.columns):
+        x = df[["close", "volume", "trade_value"]]
+        if len(x) > _TV_SAMPLE:
+            x = x.iloc[np.linspace(0, len(x) - 1, _TV_SAMPLE).astype(int)]
+    else:
+        ph = _ph(con)
+        where, params = ["trade_value > 0", "volume > 0", "close > 0"], []
+        if start is not None:
+            where.append(f"date >= {ph}")
+            params.append(start)
+        if end is not None:
+            where.append(f"date <= {ph}")
+            params.append(end)
+        x = pd.read_sql_query(f"SELECT close, volume, trade_value FROM {table} WHERE {' AND '.join(where)} "  # noqa: S608
+                              f"LIMIT {_TV_SAMPLE}", con, params=tuple(params) or None)
+    c, v, t = (pd.to_numeric(x[k], errors="coerce").abs().to_numpy(float) for k in ("close", "volume", "trade_value"))
+    ok = np.isfinite(c) & np.isfinite(v) & np.isfinite(t) & (c > 0) & (v > 0) & (t > 0)
+    if ok.sum() < 20:
+        return                                  # 판단할 표본이 없다(빈 창·작은 픽스처)
+    r = float(np.median(t[ok] / (c[ok] * v[ok] / 1e6)))
+    lo, hi = TV_UNIT_BAND
+    if not lo <= r <= hi:
+        raise TradeValueUnitError(
+            f"{table}.trade_value 단위 카나리아 실패: 표본 {int(ok.sum())}행의 trade_value / (close × volume / 1e6) 중앙값 = {r:.4g} "
+            f"(정상 {lo}~{hi}). trade_value 는 백만원 단위여야 한다(ADV 10억 = 1,000) — 적재 단위가 바뀌었는지 확인하라.")
 
 
 def read_code_bars(con: Any, code: str, *, start: str, end: str,

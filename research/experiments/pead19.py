@@ -20,13 +20,14 @@ import sys
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok  # noqa: E402
 
 sys.path[:0] = [".", "src"]
 
 SEED = 20261019
 N_BOOT, N_PERM = 3000, 1000
 LO, SEAL = "2019-03-01", "2024-01-01"
-ADV_MIN = 1000.0                                        # 10억 — daily_bars_adjusted.trade_value 단위 = 백만원
+ADV_MIN = eok(10)                                        # 10억 — daily_bars_adjusted.trade_value 단위 = 백만원
 EAR_MIN = 0.05
 SG = {"004690", "017390", "016710", "003100", "004360", "032190", "003380", "030210"}
 

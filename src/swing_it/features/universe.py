@@ -34,10 +34,11 @@ Pure DataFrame in → DataFrame out.
 from __future__ import annotations
 
 import pandas as pd
+from swing_it.units import eok
 
 # Frozen universe hyperparameters (pre-registered — do not tune per experiment).
 CAP_RANK = (100, 400)       # market-cap rank band (exclude mega 1–100, keep 101–400)
-ADV_FLOOR = 10000.0         # 20d ADV ≥ 10억 (백만원 units: 10000 = 10억)
+ADV_FLOOR = eok(100)         # 20d ADV ≥ 100억 (= 10,000 백만원). 옛 주석 "10000 = 10억" 은 틀렸다(값은 그대로 100억)
 # Absolute small-mid band (원): 3천억–2조. Chosen over pure "<3천억" small-cap for
 # adequate sample size against a liquidity-pre-filtered backfill (see module note).
 CAP_BAND = (3.0e11, 2.0e12)

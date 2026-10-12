@@ -36,6 +36,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -100,7 +101,7 @@ PRIOR_LEDGERS = (("sepa_confluence", "research/logs"), ("sepa_explore", "researc
                  ("minervini_exits", "research/logs/sepa_explore"))
 
 # --- 사전등록 수치(CONVERGENCE.md — 탐색하지 않는다) ---
-ADV_LO, ADV_HI = 5_000.0, 20_000.0          # U_s: 5,000 ≤ ADV20 < 20,000 (백만원 = 50억~200억)
+ADV_LO, ADV_HI = eok(50), eok(200)          # U_s: 5,000 ≤ ADV20 < 20,000 (백만원 = 50억~200억)
 PEAD_POP_FLOOR = 5_000.0                    # PEAD 순위 모집단: 그날 ADV20 ≥ 5,000 위생 통과
 FLOW_LO = "2024-02-19"                      # F 를 쓰는 팔의 사건 하한
 NEWS_LO = "2025-09-01"                      # 팔 E(뉴스) 사건 하한

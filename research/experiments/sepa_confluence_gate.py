@@ -27,6 +27,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from swing_it.units import eok
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -107,7 +108,7 @@ OLD_MINERVINI_TRIAL: dict = {
     "near_high": 0.90, "above_low": 1.25, "rs_min": 70,
     "breakout": "close > max(high[t-50..t-1])",
     "vol_dryup": "mean vol[t-5..t-1] < 0.70 × mean vol[t-50..t-1]",
-    "adv_floor": 20000, "entry": "t+1 open", "dedup_gap": 10,
+    "adv_floor": int(eok(200)), "entry": "t+1 open", "dedup_gap": 10,
     "stop": 0.07, "hold": 10, "exit": "time",
 }
 

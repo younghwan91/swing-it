@@ -21,6 +21,7 @@ from swing_it.features.catalysts import align_to_trading_days, catalyst_events, 
 from swing_it.features.flows import net_to_volume, smart_money_net
 from swing_it.features.technical import average_trade_value, moving_average, simple_return
 from swing_it.storage import read_prices, read_supply_demand
+from swing_it.units import eok
 
 # --- 사전등록 config (이게 테스트) ---
 PREREG = {
@@ -28,7 +29,7 @@ PREREG = {
     "stop": 0.08,           # 하드손절
     "max_event_ret": 0.08,  # 사건일 수익률 상한
     "ma_window": 60,        # 추세 MA
-    "adv_floor": 5000.0,    # 20일 평균 거래대금(백만원) 하한 = 50억
+    "adv_floor": eok(50),    # 20일 평균 거래대금(백만원) 하한 = 50억
     "min_price": 1000.0,
     "require_flow": True,   # 외국인+기관 순매수 > 0
     "require_trend": True,  # 종가 ≥ MA60

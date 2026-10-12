@@ -38,10 +38,11 @@ import numpy as np
 import pandas as pd
 
 from swing_it.features.technical import average_trade_value, simple_return
+from swing_it.units import eok
 
 # --- 사전등록 상수(설계서 §3) — 실험마다 바꾸지 않는다 ---
 ADV_WINDOW = 20             # ADV20
-ADV_FLOOR = 20_000.0        # 20일 평균 거래대금 ≥ 200억 (백만원 단위: 20,000 = 200억)
+ADV_FLOOR = eok(200)        # 20일 평균 거래대금 ≥ 200억 (백만원 단위: 20,000 = 200억)
 MIN_PRICE = 1_000.0         # 가격 ≥ 1,000원 (거래 가능한 원 단위 가격 — raw_close 권장, universe_mask 참고)
 MIN_HISTORY = 252           # 상장 후 252거래일 이상
 UNIVERSE_MARKETS = ("KOSPI", "KOSDAQ")   # 코넥스 제외

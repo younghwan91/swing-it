@@ -49,9 +49,10 @@ from swing_it.strategies.pead import (
     _summarize,
     staggered_backtest,
 )
+from swing_it.units import eok
 
 # --- Baseline parameters (the anchor every experiment is compared against) ---
-BASELINE = dict(horizon=60, step=20, top_n=40, adv_floor=20000.0)
+BASELINE = dict(horizon=60, step=20, top_n=40, adv_floor=eok(200))
 ADV_WINDOW = 20
 START_INDEX = 130
 MIN_NAMES = 20
@@ -245,7 +246,7 @@ def trailing_stop_backtest(
     horizon: int = 60,
     step: int = 20,
     top_n: int = 40,
-    adv_floor: float = 20000.0,
+    adv_floor: float = eok(200),
     start_index: int = START_INDEX,
     min_names: int = MIN_NAMES,
     trail_pct: float = 1.0,

@@ -22,6 +22,7 @@ import os
 import sys
 
 import pandas as pd
+from swing_it.units import eok
 
 # 스크립트로 실행하면 sys.path[0]=이 파일 디렉터리(research/experiments)뿐이라
 # 형제 `prop_gate` 는 되지만 `research.signals` 패키지 import 는 실패한다. repo 루트를
@@ -69,7 +70,7 @@ from swing_it.storage import connect, db_default, read_prices  # noqa: E402 — 
 #  · 유니버스 = ADV(20d) ≥ 20B KRW(trade_value floor 20000) — Step -1/Step 1 과 동일.
 # ===========================================================================
 PRICE_TABLE = "daily_bars_adjusted"     # split-adjusted (raw daily_bars 금지)
-ADV_FLOOR = 20000.0                      # trade_value 단위(~20B KRW)
+ADV_FLOOR = eok(200)                      # trade_value 단위(~20B KRW)
 MIN_GAP = 10                             # 동일 종목 재진입 최소 간격(독립 스윙 프록시)
 
 RSI_MAX = 30.0                           # 전일 과매도 임계(깊은 눌림)

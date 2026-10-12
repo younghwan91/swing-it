@@ -47,11 +47,12 @@ from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
 from swing_it.storage import connect, db_default, read_earnings, read_prices
 from swing_it.validation.optimization import TRAIN_HI
 from swing_it.validation.walkforward import FOLDS
+from swing_it.units import eok
 
 # --- Parameters -------------------------------------------------------------
 PRICE_TABLE = "daily_bars_adjusted"       # split-adjusted (raw daily_bars forbidden)
 ADV_WINDOW = 20                            # trailing days for ADV
-ADV_FLOOR = 20000.0                        # trade_value units (~repo "liquid mid-large")
+ADV_FLOOR = eok(200)                        # trade_value units (~repo "liquid mid-large")
 MIN_GAP = 10                               # min trading-day gap between same-code entries
 # Untouched final-confirmation window (R1) — never a search knob.
 UNTOUCHED_LO, UNTOUCHED_HI = "2025-07-01", "2026-07-01"

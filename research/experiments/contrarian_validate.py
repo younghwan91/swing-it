@@ -30,12 +30,13 @@ from research.signals.contrarian_retail import (
     load_data,
     simulate_fast,
 )
+from swing_it.units import eok
 
 BEST_PARAMS_PATH = "research/logs/contrarian_retail/bo_best_params.json"
 # 플래토 내부·라운드 고정 파라미터 (경계 아님 — "다 가지 말고 멈춘" 값)
 ROBUST = dict(window=8, top_mom=0.80, ext_q=0.85, stop=0.10, trail=0.20, hold=60)
 # explore 가 흔들 구조상수의 기준값(simulate_fast 기본과 일치).
-STRUCTURAL = dict(adv_floor=20000.0, adv_window=20, lag=1, target=0.0, cost_roundtrip=0.0046)
+STRUCTURAL = dict(adv_floor=eok(200), adv_window=20, lag=1, target=0.0, cost_roundtrip=0.0046)
 
 
 def _fs(prices, flow, cache, params, *, lo=None, hi=None, cost=0.0046, **structural):
