@@ -70,7 +70,7 @@ CACHE_VERSION = "pga-v4"                # 사건 표 정의가 바뀌면 올린�
 # --- 사전등록 수치(탐색하지 않는다) ---
 EVENT_LO, EVENT_HI = "2017-09-15", "2026-08-31"
 END_DAY = "2026-09-11"                 # 데이터 끝(NXT 절단) — 시가평가(M2-3)
-ADV_FLOOR = 1_000.0                    # ADV20 ≥ 10억(백만원)
+ADV_FLOOR = float(os.environ.get("PATTERN_GA_ADV_FLOOR", "1000"))   # ADV20 ≥ 10억(백만원) · 14세대(사용자 10-12): 5억(500) 시험
 MINUTE_LO = "2025-08-01"
 COST_MULT = 2.0
 SEEDS = tuple(range(10))
@@ -1470,6 +1470,8 @@ def ensure_cache(cache: str, t0: float, *, with_p: bool) -> None:
     meta = json.load(open(mp_, encoding="utf-8")) if os.path.exists(mp_) else {}
     if "families" in meta and not (meta.get("version") == CACHE_VERSION and meta.get("code_hash") == code_hash()):
         raise SystemExit(f"사건 가족 캐시 {cache} 는 기준 캐시와 링크를 공유한다 — 재빌드 금지(event_families_build.py 로 다시 만든다)")
+    if meta and float(meta.get("adv_floor", ADV_FLOOR)) != ADV_FLOOR:   # 14세대: 하한이 다른 캐시를 조용히 재사용하지 않는다
+        raise SystemExit(f"캐시 {cache} 의 ADV 하한 {meta.get('adv_floor')} ≠ 현재 {ADV_FLOOR} — 다른 캐시 디렉터리를 쓴다")
     if meta.get("version") == CACHE_VERSION and meta.get("code_hash") == code_hash() and all(os.path.exists(os.path.join(cache, f"{k}.npy")) for k in ARR_NAMES):
         if with_p and "p" not in meta:
             import vcp_retest_run as R  # noqa: PLC0415
