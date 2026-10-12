@@ -166,6 +166,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
     reg = cfg.get("regime", 0)
     reg_arr = {"k200": D["regime_on"], "k200r50": D.get("regime_r50"), "breadth": D.get("breadth_on")}.get(cfg.get("regime_kind", "k200"))
     max_pos = int(cfg.get("max_pos", MAX_POS))
+    entry = cfg.get("entry", "open")                # 23세대: "open" = 다음날 시가(기존) · "close" = 신호일 종가(종가 단일가)
+    gap_max = cfg.get("gap_max")
     cash, pos = 1.0, {}                        # ci → {qty, cost_basis, first_px, units, entry_t, last_px}
     p_buy, p_sell, p_add = [], set(), set()
     sell_why: dict = {}
@@ -205,6 +207,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                 continue
             op, pc = O[ci, t], C[ci, t - 1]
             if not (np.isfinite(op) and op > 0 and D["TR"][ci, t]) or (np.isfinite(pc) and op >= pc * LU):
+                continue
+            if gap_max is not None and np.isfinite(pc) and op > pc * (1 + gap_max):     # 23세대: 갭 상승 진입 회피
                 continue
             amt = min(unit * eq_prev, cash)
             if amt <= 0:
@@ -249,12 +253,23 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
             p_buy = []
             eq_prev = e
             continue
-        free = max_pos - len(pos) + len(p_sell)
+        free = max_pos - len(pos) + (len(p_sell) if entry == "open" else 0)
         if free > 0:
             cs = np.flatnonzero(cand[:, t])
             cs = [c for c in cs if c not in pos]
             cs.sort(key=lambda c: -D["rs"][c, t])
             p_buy = cs[:free]
+        if entry == "close":                         # 종가 단일가 체결(신호는 같은 종가로 판정 — 15:19 대용 아님, 낙관 쪽 근사)
+            for ci in p_buy:
+                cl, pc = C[ci, t], C[ci, t - 1]
+                if not (np.isfinite(cl) and cl > 0 and D["TR"][ci, t]) or (np.isfinite(pc) and cl >= pc * LU):
+                    continue
+                amt = min(unit * e, cash)
+                if amt <= 0:
+                    continue
+                pos[ci] = {"qty": amt / cl, "cost_basis": amt, "first_px": cl, "units": 1, "entry_t": t, "last_px": cl, "w_peak": 0.0}
+                cash -= amt
+            p_buy = []
         eq_prev = e
     if state is not None:                          # 모의매매: 마지막 날 보유·다음날 주문을 넘긴다(청산하지 않음)
         state.update(pos={D["codes"][c]: {**p, "w": p["qty"] * p["last_px"] / eq_prev} for c, p in pos.items()}, cash=cash,
