@@ -191,6 +191,17 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         cand = cand & D["sector_strong"]
     elif cfg.get("rank") == "rs_eps":
         cand = cand & D["eps_growth"]
+    struct = cfg.get("stop") == "struct"            # 전진 팔 leader_P(META '전진 팔 leader_P 사전등록'): 구조 손절·위험 비중 — 없으면 기존 경로 그대로
+    if cfg.get("chase_max") is not None:            # leader_P: 쫓지 않기 — 종가 ≤ 직전 20일 최고 종가(그날 제외) × (1 + chase_max)
+        prev20 = pd.DataFrame(C.T).shift(1).rolling(20, min_periods=20).max().to_numpy().T
+        with np.errstate(invalid="ignore"):
+            cand = cand & (C <= prev20 * (1 + cfg["chase_max"]))
+    if struct:                                      # 손절선 = 그날 포함 10일 최저 저가, 거리 > stop_max 면 후보에서 뺀다(슬롯 순위 전)
+        assert cfg.get("entry") == "close", "구조 손절은 종가 진입 팔만"
+        low10 = pd.DataFrame(L.T).rolling(10, min_periods=10).min().to_numpy().T
+        with np.errstate(invalid="ignore", divide="ignore"):
+            sdist = 1.0 - low10 / C
+            cand = cand & (sdist > 0) & (sdist <= cfg["stop_max"])
     reg = cfg.get("regime", 0)
     reg_arr = {"k200": D["regime_on"], "k200r50": D.get("regime_r50"), "breadth": D.get("breadth_on")}.get(cfg.get("regime_kind", "k200"))
     max_pos = int(cfg.get("max_pos", MAX_POS))
@@ -210,7 +221,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         cash += p["qty"] * px * (1 - c_rt)
         trades.append({"code": D["codes"][ci], "entry": str(days[p["entry_t"]].date()), "exit": str(days[t].date()), "why": why,
                        "ret": px * (1 - c_rt) * p["qty"] / p["cost_basis"] - 1, "units": p["units"], "hold": t - p["entry_t"],
-                       "w_peak": p["w_peak"]})
+                       "w_peak": p["w_peak"], **({"stop_dist": p["sdist"], "unit_w": p["uw"]} if "stop" in p else {})})
     for k, t in enumerate(range(t0, t1)):
         # 1) 시가 체결: 매도 → 추가 → 매수
         keep = set()
@@ -225,7 +236,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         sell_why = {c: w for c, w in sell_why.items() if c in keep}
         for ci in list(p_add):
             if ci in pos and np.isfinite(O[ci, t]) and D["TR"][ci, t]:
-                amt = min(unit * eq_prev, cash)
+                amt = min(pos[ci].get("uw", unit) * eq_prev, cash)
                 if amt > 0:
                     pos[ci]["qty"] += amt / O[ci, t]
                     pos[ci]["cost_basis"] += amt
@@ -250,7 +261,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         for ci in list(pos):
             p = pos[ci]
             avg = p["cost_basis"] / p["qty"]
-            stop = avg * (1 - cfg["hard"])
+            stop = p["stop"] if "stop" in p else avg * (1 - cfg["hard"])     # leader_P: 진입 때 고정한 구조선(올리지 않는다)
             if np.isfinite(L[ci, t]) and L[ci, t] <= stop * (1 + (1e-9 if paper else 0.0)):
                 px = min(O[ci, t], stop) if np.isfinite(O[ci, t]) else stop
                 close_pos(ci, px, t, "hard_stop")
@@ -274,7 +285,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
             p["nan"] = 0
             if np.isfinite(mae[ci, t]) and c_ < mae[ci, t]:
                 p_sell.add(ci)
-            elif cfg["pyramid"] and p["units"] < max_units and c_ >= p["first_px"] * (1 + 0.10 * p["units"]) and D["hi20"][ci, t]:
+            elif cfg["pyramid"] and p["units"] < p.get("mu", max_units) and c_ >= p["first_px"] * (1 + 0.10 * p["units"]) and D["hi20"][ci, t]:
                 p_add.add(ci)
         if reg and not reg_arr[t]:                # 국면 꺼짐: 새로 안 산다 + regime_mode 에 따라 보유 처리
             rm = cfg.get("regime_mode", "liquidate")  # 26세대: liquidate(기존 전량) · gate(보유 유지) · weak(MA50 아래만 매도)
@@ -302,10 +313,13 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
                 cl, pc = C[ci, t], C[ci, t - 1]
                 if not (np.isfinite(cl) and cl > 0 and D["TR"][ci, t]) or (np.isfinite(pc) and cl >= pc * (LU if lu_arr is None else lu_arr[t])):
                     continue
-                amt = min(unit * e, cash)
+                uw = min(pos_cap, cfg.get("risk", RISK) / sdist[ci, t]) if struct else unit
+                amt = min(uw * e, cash)
                 if amt <= 0:
                     continue
                 pos[ci] = {"qty": amt / cl, "cost_basis": amt, "first_px": cl, "units": 1, "entry_t": t, "last_px": cl, "w_peak": 0.0}
+                if struct:                              # 위험 비중: 첫 단위 = min(상한, 위험 / 손절 거리), 추가 단위도 같은 금액, 종목당 상한까지(최대 3)
+                    pos[ci].update(stop=low10[ci, t], sdist=float(sdist[ci, t]), uw=uw, mu=max(1, min(3, int(pos_cap / uw + 1e-9))))
                 cash -= amt
             p_buy = []
         eq_prev = e

@@ -19,7 +19,7 @@ sys.path[:0] = [".", "src"]
 import research.experiments.leader21 as L  # noqa: E402
 import research.paper.leader_paper as P  # noqa: E402
 
-ARMS = ("leader_M", "leader_C_rs", "leader_C20_rs")
+ARMS = ("leader_M", "leader_C_rs", "leader_C20_rs", "leader_P")   # leader_P: META '전진 팔 leader_P 사전등록' 과거 기술(판정 무관)
 PERIODS = (("2017-10-02", "2024-01-01", "설계 2017-10~2023"), ("2024-01-01", "2100-01-01", "오염 2024~"))
 
 

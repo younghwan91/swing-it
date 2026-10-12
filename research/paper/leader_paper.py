@@ -42,14 +42,17 @@ ARMS.update({k: dict(ARMS[v]) for k, v in RS_PAIR.items()})
 # 슬롯 20 · C20 비중 규칙 · 보정 정문 가격. 짝(판정) = leader_C_rs
 ARMS["leader_M"] = {"theta": 70, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "all", "regime": 1, "entry": "close",
                     "max_pos": 20, "pos_cap": 0.05, "risk": 0.0025}
-PAIR = {**RS_PAIR, "leader_M": "leader_C_rs"}
+# 전진 팔(META '전진 팔 leader_P 사전등록'): leader_M + 쫓지 않기(20일 고점 +5% 이내) + 구조 손절(10일 저점, 10% 넘으면 안 삼, 고정) + 위험 0.25% 비중
+ARMS["leader_P"] = {**ARMS["leader_M"], "chase_max": 0.05, "stop": "struct", "stop_max": 0.10}
+PAIR = {**RS_PAIR, "leader_M": "leader_C_rs", "leader_P": "leader_M"}
 ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl",
-              **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}, "leader_M": "research/paper/leader_m_ledger.jsonl"}
+              **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}, "leader_M": "research/paper/leader_m_ledger.jsonl",
+              "leader_P": "research/paper/leader_p_ledger.jsonl"}
 PRICE_RAW = {"session": "raw", "aftermarket_fix": False, "unpatched": "nan"}   # 기존 팔 고정값(바꾸지 않는다; session="raw" 라 unpatched 는 동작 없음)
 # 쌍 팔: unpatched="raw" = 정문이 종가는 분봉 > 항등식으로 고치고, 고칠 원천 없는 고가·저가·거래량·거래대금은 원값 유지(krx_src 표시)
 # — META_EVOLUTION.md '*_rs 보충 — 정문 보정 범위 확대(첫 기록 전)'.
-ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M")}
-ARM_START = {k: "2026-10-13" for k in (*RS_PAIR, "leader_M")}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
+ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M", "leader_P")}
+ARM_START = {k: "2026-10-13" for k in (*RS_PAIR, "leader_M", "leader_P")}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
 
 
 def load_db(con, session: str = "raw", info: "dict | None" = None, unpatched: str = "nan") -> tuple:
