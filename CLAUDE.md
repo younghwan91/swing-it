@@ -42,32 +42,24 @@
 - 모의매매 팔(leader_A 등)은 도중에 규칙을 바꾸지 않는다. 바꾸려면 새 팔·새 장부로 사전등록한다.
 - 원장(`TRIALS.jsonl`·`RUNS.jsonl`·`research/paper/*.jsonl`)은 코드만 덧붙인다. 손으로 고치지 않는다(`.claude/settings.json` 의 `Edit` deny —
   편집 도구·`sed`·`>>` 리다이렉트를 막고, 파이썬 스크립트의 덧붙이기는 막지 않는다).
-- 가격·실적은 정문(`storage.read_prices`·`read_earnings`)으로 읽는다. 직접 SELECT 는 린트 (d)(g) 위반이다.
-  fcs 에는 기존 위반이 남아 있다 — 새로 늘리지 않는다.
+- 가격·실적·주식수·지수는 정문(`storage.read_prices`·`read_earnings`·`read_shares`·`read_index`)으로 읽는다. 직접 SELECT 는
+  린트 (d)(g)(j)(k)(o) 위반이다(2026-10-12 기준선 0건).
 
-## 데이터 함정 (kr_quant)
-- **IMPORTANT — NXT 오염:** 2026-09-14 이후 `daily_bars`·`daily_bars_adjusted` 의 고가·저가·종가·거래량에 NXT 야간
-  체결(~19:59)이 섞였다. 시가만 정상이다. 그 날짜를 쓰는 코드는 `swing_it.krx_session.patch_prices`(fcs)로
-  분봉 09:00~15:32 정규장을 다시 만든다. 기억에 적혀 있었는데도 모의매매 첫 장부가 오염을 읽었다(730def6).
-  `minute_bars.ts` 는 시간대 없는 KST라 `at time zone` 을 걸면 어긋난다(이 실수로 "오진"이라 잘못 판정한 적 있다).
-  main 의 `docs/superpowers/specs/2026-10-08-swing-roadmap.md` 에 남은 "오진" 문구는 틀린 것이다.
-- **실적 as-of:** `earnings.avail_date` 는 제출 마감일 고정값이라 정기보고서 18% 가 그보다 늦다(미래 정보).
-  EPS 값은 max(avail_date, `earnings_disclosures` kind='periodic' rcept_dt) 다음 거래일부터 쓴다.
-  이벤트일(서프라이즈·PEAD)은 min(rcept_dt) 다음 거래일이다. 구현: `research/signals/eps_asof.py`(fcs).
-  2018Q3 이전에는 정기보고서 날짜가 없어 avail_date 로 돌아간다.
-- `trade_value` 단위는 **백만원**이다(ADV 10억 = 1,000; 4f6ef61 배선 오류).
-- `supply_demand` 의 주체 열(`individual`·`foreign_`·`institution`·`etc_corp`)은 금액이 아니라 순매매 **수량**이다
-  (× 종가는 근사). `flu_rt` 는 등락률 ×100 이다. 네 주체를 더하면 ≈ 0 이라 `etc_corp` 를 빼면 안 된다.
-  `institution` 은 세부 합과 다르니 합계 열을 그대로 쓴다. 0 은 "0 또는 미보고"다. 폐지 종목은 기관·외국인만 있고
-  나머지는 NULL(0 과 다르다) — 정문 `storage.read_supply_demand`.
-- 상장주식수 `shares_outstanding_history` 는 knowledge_date 기준 as-of 로 쓴다. 시총 = 원 종가 × 그 시점 주식수(정정 G21-1).
-- **IMPORTANT — `daily_bars.close` 는 원 종가가 아니다:** 이후 액면분할·병합이 소급 반영돼 있다(005930 2017 41,200 vs 실제 206만, 종목-월 3~14% 가 1.5배 넘게 어긋남).
-  시총·유니버스는 `swing_it.krx_session.read_raw_close`(fcs; supply_demand.close 우선, 카나리아 검사)로 만든다. 단, 원 종가에 분할 전 주식수를 곱하면 거울상 결함(주식수 반영이 연말 DART 행이라 수개월 늦다) —
-  시총은 원 종가 × **분할 일관 주식수**로 만든다. 21~26세대 설계 숫자는 시총 구성에 따라 5~15% 로 흔들린다(정정 G28-2·4).
-  main 의 `storage.market_cap_asof(_bulk)` 도 같은 결함이다.
-- 공식 지수 `sector_index`(001=KOSPI, 101=KOSDAQ, 값은 ×100 정수)는 2024-01-26 부터만 있다. 그 전의 대용 지수는 공식 지수 수준과 맞춘다
-  (재구축 대용이 −4%/년 어긋나 거짓 통과를 낸 적 있다).
-- 커버리지: 뉴스 표 2023-03~, 공매도 2024-05~ 라 2020~23 설계 창에 못 쓴다. `stocks` 의 업종·시장 구분은 현재 스냅샷이다.
+## 데이터 함정 (kr_quant) — 대부분 정문·린트가 강제한다(fcs `scripts/check_guardrails.py`)
+- **KRX 애프터마켓 오염(2026-09-14~, 16:00~20:00; 처음엔 NXT 로 오인):** 일봉 고저종·거래량, 수급 close·flu_rt·acc_trde_qty. 시가만 정상.
+  → 정문 `read_prices`·`read_prices_wide`·`read_supply_demand` 기본 `session="regular"` / 린트 (g)(j). 원값은 `session="raw"` 명시.
+  판단: 미보정 행 수(`attrs["krx_session"]`)를 보고 `strict=True` 를 쓸지 정한다(분봉은 하루 ~1,400 종목뿐). 글로는 못 막았다(730def6).
+- `minute_bars.ts` = 시간대 없는 KST → 린트 (m). 정규장 = `krx_session.SESSION_OPEN/CLOSE`(15:32). main 로드맵의 "오진" 문구는 틀렸다.
+- 실적 as-of → `read_earnings(with_known=True)` 의 `known_date`·`event_date` / 린트 (l)(`avail_date` 키는 `# legacy-asof:`). 2019-02-28 전은 avail_date.
+- `trade_value` = 백만원 → `swing_it.units.eok()` / 린트 (n) / `read_prices` 단위 카나리아. TUI 리포트 값은 억 단위.
+- 주식수 → `read_shares(with_asof=True)` / 린트 (k). 지수 → `read_index`(×100 정수 + `level`, 2024-01-26 전은 `proxy=` 필수) / 린트 (o).
+  대용 지수의 품질은 부르는 쪽 책임(재구축 대용 −4%/년 어긋남 → 거짓 통과). 커버리지 → `storage.COVERAGE`·`require_coverage`
+  (뉴스 2023-03-15·공매도 2024-05-09 — 정문 없음, 직접 쓰면 시작일을 스스로 확인).
+- **`daily_bars.close` 는 원 종가가 아니다**(분할 소급) → `krx_session.read_raw_close`(새 코드 `aftermarket_fix=True`)·
+  `market_cap_asof(_bulk)`(옛 정의 `legacy=True`). 판단: 원 종가 × 연말 DART 주식수는 분할 뒤 수개월 틀린다(거울상) — 패널이면
+  `split_consistent_cap`(`asof=` 필수). 21~26세대 설계 숫자는 시총 구성에 따라 5~15% 흔들린다(정정 G28-2·4).
+- 판단(코드로 못 옮김): 수급 주체 열은 순매매 **수량**(× 종가는 근사), 네 주체 합 ≈ 0 이라 `etc_corp` 를 빼면 안 되고 `institution` 은
+  합계 열을 그대로 쓴다. 0 은 "0 또는 미보고", 폐지 종목은 기관·외국인만(나머지 NULL). `stocks` 업종·시장은 현재 스냅샷이다.
 
 ## 실행 환경 함정
 - numba 다중 작업자는 `NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1` 환경변수가 필수다. 코드의 `set_num_threads(1)` 은 안 먹어서
