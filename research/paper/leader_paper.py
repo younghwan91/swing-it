@@ -25,6 +25,8 @@ LEDGER = "research/paper/leader21_ledger.jsonl"
 COST_RT = 0.00415                                     # 캐시 cost_tab 최근 값(왕복, 시장 공통)
 ARMS = {                                              # 사전등록(META_EVOLUTION.md 21세대 모의매매) — 결과 보고 바꾸지 않는다
     "leader_A": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1},   # 격자 215(검증 24차 권고)
+    # 23세대 C(정정 G23-1): 신호일 KRX 종가(종가 단일가) 매수 — 체결 충실도 팔. 체결가 = krx_session 정규장 종가.
+    "leader_C": {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid": 1, "univ": "top200", "regime": 1, "entry": "close"},
 }
 
 
