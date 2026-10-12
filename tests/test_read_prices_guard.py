@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from swing_it.storage import DAILY_BAR_COLUMNS, connect, read_prices
@@ -114,3 +115,19 @@ def test_trade_value_unit_canary_catches_won_units(tmp_path):
     with pytest.raises(TradeValueUnitError):
         read_prices(con, cols=("code", "date", "close", "volume", "trade_value"))
     assert len(read_prices(con, cols=("code", "date", "close"))) == 40           # trade_value 를 안 읽으면 검사하지 않는다
+
+
+def test_trade_value_unit_canary_catches_recent_only_unit_change(tmp_path):
+    """최근 며칠만 단위가 바뀐 경우도 잡는다 — 예전 대체 질의(ORDER 없는 LIMIT 5000)는 앞쪽 행만 보고 통과시켰다."""
+    from swing_it.storage import TradeValueUnitError
+
+    days = pd.bdate_range("2019-01-01", periods=400).strftime("%Y-%m-%d")
+    rows = [(f"{c:06d}", d, 10_000, 10_100, 9_900, 10_000, 50_000, 500.0 * (1e6 if i >= 398 else 1.0), "kiwoom")
+            for i, d in enumerate(days) for c in range(25)]
+    con = connect(tmp_path / "t.db")
+    _seed(con, rows)
+    with pytest.raises(TradeValueUnitError, match=days[-1]):
+        read_prices(con, cols=("code", "date", "trade_value"))                   # 표본 질의 경로
+    with pytest.raises(TradeValueUnitError, match=days[-1]):
+        read_prices(con, cols=("code", "date", "close", "volume", "trade_value"))   # 프레임 경로
+    assert len(read_prices(con, cols=("code", "date", "trade_value"), end=days[-3])) == 25 * 398   # 바뀌기 전 창은 통과

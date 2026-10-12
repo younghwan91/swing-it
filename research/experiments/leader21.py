@@ -52,15 +52,16 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
 
 
 def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,  # noqa: E741
-          raw_close: bool = False, session: str = "raw", aftermarket_fix: bool = False) -> dict:
+          raw_close: bool = False, session: str = "raw", aftermarket_fix: bool = False, unpatched: str = "nan") -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통.
 
-    ``session``·``aftermarket_fix`` 는 정문 인자 그대로(기본 = 기존 팔 고정값 ``"raw"``·``False``). 모의매매 쌍 팔 ``*_rs``
-    (META_EVOLUTION.md '전진 팔 *_rs 사전등록')만 ``"regular"``·``True`` — 그 뒤의 ``krx_patch`` 분봉 보정은 멱등이라 그대로 둔다.
+    ``session``·``aftermarket_fix``·``unpatched`` 는 정문 인자 그대로(기본 = 기존 팔 고정값 ``"raw"``·``False``·``"nan"`` — raw 면
+    unpatched 는 동작 없음). 모의매매 쌍 팔 ``*_rs``(META_EVOLUTION.md '전진 팔 *_rs 사전등록' + 보충)만 ``"regular"``·``True``·``"raw"``
+    — 그 뒤의 ``krx_patch`` 분봉 보정은 멱등이라 그대로 둔다.
     """
     from swing_it.features.eps_asof import eps_ok
     from swing_it.storage import read_prices
-    tv = read_prices(con, session=session, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True)
+    tv = read_prices(con, session=session, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True, unpatched=unpatched)
     sess = None
     if krx_patch:                                   # 모의매매: 2026-09-14+ KRX 애프터마켓 섞인 일봉 → 분봉 정규장 값(krx_session)
         from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg

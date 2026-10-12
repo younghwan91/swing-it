@@ -477,18 +477,46 @@ _PRICE_READ_COLS = ("code", "date", "open", "high", "low", "close", "volume", "t
 #: 가격 정문의 세션 모드. ``"regular"``(기본) = 2026-09-14~ 행을 KRX 정규장 값으로 보정(:mod:`swing_it.krx_session`, 분봉 09:00~15:32),
 #: ``"raw"`` = 테이블 값 그대로(애프터마켓 16:00~20:00 체결 포함). 사전등록 재현·자체 보정 경로는 ``"raw"`` 를 **명시**한다.
 SESSIONS = ("regular", "raw")
-#: 보정 대상 가격 테이블 → 조정 테이블인가(조정계수 = 행 시가 / 정규장 시가).
+#: 보정 대상 가격 테이블 → 조정 테이블인가(분봉 조정계수 = 행 시가 / 정규장 시가, 항등식 배율 = 행 종가 / 수급 종가).
+#: 이 밖의 표(``daily_bars_raw``·``daily_bars_adj_v2`` 등)는 보정하지 않는다 — ``session="regular"`` 를 명시하면 :class:`ValueError`.
 _SESSION_TABLES = {"daily_bars": False, "daily_bars_adjusted": True}
 _SESSION_COLS = ("open", "high", "low", "close", "volume", "trade_value")
+
+#: 정규장 모드에서 **고칠 수 없는 값**의 처리 — 세 정문(:func:`read_prices`·:func:`read_prices_wide`·:func:`read_supply_demand`) 공통.
+#: ``"nan"``(기본) = NaN 으로 비운다(오염값을 남기지 않는다). ``"raw"`` = 테이블 원값(애프터마켓 포함)을 그대로 두고 ``krx_src`` 로 표시한다.
+#: 정책 하나로 통일했다(2026-10-13 리뷰 MAJOR 1 — 전에는 가격은 원값, 수급은 NaN 이라 두 정문이 조용히 달랐다).
+UNPATCHED = ("nan", "raw")
+#: 행별 보정 원천(``krx_src`` 열, 정규장 모드에서 2026-09-14~ 행이 있을 때만 붙는다):
+#:   ``"pre"`` 09-14 전(보정 불필요) · ``"session"`` 분봉 정규장(모든 열) · ``"identity"`` 정규장 종가 항등식(종가·등락률만 — 고가·저가·
+#:   거래량·거래대금은 고칠 원천이 없어 :data:`UNPATCHED` 정책) · ``"none"`` 원천 없음(마지막 거래일의 분봉 없는 종목 등, 모든 오염 열이 정책).
+#: 시가는 오염되지 않아 언제나 원값이다. ``krx_patched`` = 그 행의 요청 열이 전부 정규장 값인가.
+KRX_SRC = ("pre", "session", "identity", "none")
 
 
 class SessionUnavailable(RuntimeError):
     """정규장 보정이 필요한데 할 수 없다(sqlite 에 분봉 표 없음, strict 모드의 미보정 행)."""
 
 
-def _check_session(session: str) -> None:
-    if session not in SESSIONS:
+def _check_session(session: "str | None", unpatched: str = "nan") -> None:
+    if session is not None and session not in SESSIONS:
         raise ValueError(f"session 은 {SESSIONS} 중 하나 — {session!r}")
+    if unpatched not in UNPATCHED:
+        raise ValueError(f"unpatched 는 {UNPATCHED} 중 하나 — {unpatched!r}")
+
+
+def _resolve_session(session: "str | None", table: str) -> str:
+    """``session=None``(기본) → 보정 대상 표면 ``"regular"``, 아니면 ``"raw"``(경고 — 그 표는 보정 경로가 없다).
+    보정 대상이 아닌 표에 ``"regular"`` 를 **명시**하면 조용히 원값을 주지 않고 :class:`ValueError`."""
+    if table in _SESSION_TABLES:
+        return session or "regular"
+    if session == "regular":
+        raise ValueError(f"{table} 은 정규장 보정 대상이 아니다({tuple(_SESSION_TABLES)} 만) — session='regular' 로 읽으면 애프터마켓이 섞인 "
+                         "원값이 그대로 나온다. 원값이면 session='raw' 를 명시하라.")
+    if session is None:
+        import warnings  # noqa: PLC0415
+
+        warnings.warn(f"{table} 은 정규장 보정 대상이 아니라 원값(session='raw')으로 읽는다 — session='raw' 를 명시하라.", stacklevel=3)
+    return "raw"
 
 
 def _session_needs_open(table: str, use: "tuple[str, ...]", session: str, end: "str | None") -> bool:
@@ -499,13 +527,18 @@ def _session_needs_open(table: str, use: "tuple[str, ...]", session: str, end: "
             and any(c in _SESSION_COLS for c in use) and (end is None or end >= AFTERMARKET_START))
 
 
-def _apply_regular_session(con: Any, df, *, table: str, strict: bool):
-    """긴 가격표의 2026-09-14~ 행을 정규장 값으로(:func:`swing_it.krx_session.patch_prices`). 결과 ``attrs["krx_session"]`` 에
-    {rows, patched, unpatched}. 그 날짜 행이 없으면 **입력을 그대로**(dtype 도) 돌려준다 — 그래서 09-14 전 창은 ``"raw"`` 와 바이트 같다.
-    보정한 경우 ``krx_patched`` 열이 붙고 가격 열은 float 가 된다(``date`` 열은 입력 그대로)."""
+def _apply_regular_session(con: Any, df, *, table: str, strict: bool, unpatched: str = "nan"):
+    """긴 가격표의 2026-09-14~ 행을 정규장 값으로. 결과 ``attrs["krx_session"]`` 에 {rows, patched, unpatched, by_src, policy}.
+    그 날짜 행이 없으면 **입력을 그대로**(dtype 도) 돌려준다 — 그래서 09-14 전 창은 ``"raw"`` 와 바이트 같다.
+
+    원천 순서: ① 분봉 정규장(:func:`swing_it.krx_session.patch_prices` — 모든 열) ② 분봉이 없으면 종가만 정규장 종가 항등식
+    (:func:`swing_it.krx_session.read_regular_close`; 조정표는 × 행 종가 / |수급 종가| — 같은 애프터마켓 마지막 체결의 조정 배율)
+    ③ 그래도 못 고친 값(②의 고가·저가·거래량·거래대금, 원천 없는 행의 모든 오염 열)은 ``unpatched`` 정책(:data:`UNPATCHED`).
+    보정한 경우 ``krx_patched``·``krx_src``(:data:`KRX_SRC`) 열이 붙고 가격 열은 float 가 된다(``date`` 열은 입력 그대로)."""
+    import numpy as np  # noqa: PLC0415
     import pandas as pd  # noqa: PLC0415
 
-    from swing_it.krx_session import AFTERMARKET_START, patch_prices, read_session_bars_any  # noqa: PLC0415
+    from swing_it.krx_session import AFTERMARKET_START, patch_prices, read_regular_close, read_session_bars_any  # noqa: PLC0415
 
     info = {"session": "regular", "since": AFTERMARKET_START, "rows": 0, "patched": 0, "unpatched": 0}
     if (table not in _SESSION_TABLES or not {"code", "date"} <= set(df.columns)
@@ -523,20 +556,49 @@ def _apply_regular_session(con: Any, df, *, table: str, strict: bool):
         raise SessionUnavailable(
             f"{table} 에 {AFTERMARKET_START} 이후 행 {int(late.sum())}개가 있는데 이 DB 에 minute_bars 가 없어 정규장으로 보정할 수 "
             "없다(그 날짜 일봉에는 KRX 애프터마켓 16:00~20:00 체결이 섞였다). 원값이 필요하면 session='raw' 로 명시하라.")
-    out = patch_prices(df, sess, since=AFTERMARKET_START, adjusted=_SESSION_TABLES[table])
+    adjusted = _SESSION_TABLES[table]
+    out = patch_prices(df, sess, since=AFTERMARKET_START, adjusted=adjusted)
     out["date"] = df["date"].to_numpy()                    # patch_prices 가 datetime 으로 바꾼 날짜 열을 입력 모양으로 되돌린다
+    src = np.where(late, "none", "pre").astype(object)
+    src[late & out["krx_patched"].to_numpy(bool)] = "session"
+    need = src == "none"
+    if "close" in out.columns and need.any():
+        ident = read_regular_close(con, start=lo, end=hi, with_raw=True)
+        if len(ident):
+            i = ident.assign(code=ident["code"].astype(str), date=pd.to_datetime(ident["date"])).set_index(["code", "date"])
+            key = pd.MultiIndex.from_arrays([out.loc[need, "code"].astype(str).to_numpy(), d[need].to_numpy()])
+            ic = i["close"].reindex(key).to_numpy(float)
+            if adjusted:                                   # 조정 배율 = 행 종가 / |수급 종가|(둘 다 같은 애프터마켓 마지막 체결)
+                rc = i["sd_close"].reindex(key).to_numpy(float)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    ic = ic * (out.loc[need, "close"].to_numpy(float) / np.where(rc > 0, rc, np.nan))
+            ok = np.isfinite(ic) & (ic > 0)
+            rows = np.flatnonzero(need)[ok]
+            out.iloc[rows, out.columns.get_loc("close")] = ic[ok]
+            src[rows] = "identity"
+    dirty = [c for c in _SESSION_COLS if c in out.columns and c != "open"]   # 시가는 오염되지 않았다
+    rest = [c for c in dirty if c != "close"]
+    if unpatched == "nan":
+        for c in dirty:
+            m = (src == "none") | ((src == "identity") & (c != "close"))
+            if m.any():
+                out.loc[m, c] = np.nan
+    out["krx_patched"] = (src == "session") | ((src == "identity") & (not rest))
+    out["krx_src"] = src
     n, k = int(late.sum()), int(out.loc[late, "krx_patched"].sum())
-    info.update(rows=n, patched=k, unpatched=n - k)
+    info.update(rows=n, patched=k, unpatched=n - k, policy=unpatched,
+                by_src={x: int((src == x).sum()) for x in ("session", "identity", "none")})
     out.attrs["krx_session"] = info
     if strict and n > k:
-        raise SessionUnavailable(f"{table} {AFTERMARKET_START} 이후 {n}행 중 {n - k}행은 분봉이 없어 정규장으로 보정하지 못했다(strict)")
+        raise SessionUnavailable(f"{table} {AFTERMARKET_START} 이후 {n}행 중 {n - k}행은 정규장 값으로 다 고치지 못했다(strict; 원천별 "
+                                 f"{info['by_src']} — 항등식 행은 종가만 고친다)")
     return out
 
 
 def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
                 table: str = PRICE_TABLE, require_delisted: bool = True,
                 start: "str | None" = None, end: "str | None" = None,
-                parse_dates: bool = False, session: str = "regular", strict: bool = False):
+                parse_dates: bool = False, session: "str | None" = None, strict: bool = False, unpatched: str = "nan"):
     """백테스트용 가격 패널 — **상장폐지 종목 포함**을 로딩 시점에 검사한다.
 
     생존편향은 "가장 큰 숨은 인플레이터"인데(GUARDRAILS §3), 검증 스택은 넘겨받은
@@ -556,17 +618,20 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
             (:func:`_assert_window_has_delisted`). ``trade_value`` 를 요청하면 단위 카나리아(:func:`_check_trade_value_units`,
             백만원이 아니면 :class:`TradeValueUnitError`)가 돈다(값은 바꾸지 않는다).
         parse_dates: ``date`` 열을 datetime64 로(``pd.read_sql(parse_dates=["date"])`` 와 같은 경로).
-        session: ``"regular"``(기본) — 2026-09-14~ 행(KRX 애프터마켓 16:00~20:00 체결이 섞였다)을 분봉 정규장 값으로 보정한다
-            (:func:`_apply_regular_session`; 보정 행 수는 ``df.attrs["krx_session"]``, 보정했으면 ``krx_patched`` 열). 그 날짜가 없는 창은
-            ``"raw"`` 와 바이트 같다. sqlite 에 분봉 표가 없는데 그 날짜가 있으면 :class:`SessionUnavailable`.
-            ``"raw"`` — 테이블 값 그대로(사전등록 재현·자체 보정 경로가 명시).
-        strict: 정규장 모드에서 분봉이 없어 보정 못 한 행이 하나라도 있으면 :class:`SessionUnavailable`.
+        session: ``"regular"``(``None`` 기본 = 보정 대상 표면 이것) — 2026-09-14~ 행(KRX 애프터마켓 16:00~20:00 체결이 섞였다)을 정규장
+            값으로 보정한다(:func:`_apply_regular_session`: 분봉 > 종가 항등식 > ``unpatched`` 정책; 수는 ``df.attrs["krx_session"]``,
+            보정했으면 ``krx_patched``·``krx_src`` 열). 그 날짜가 없는 창은 ``"raw"`` 와 바이트 같다. sqlite 에 분봉 표가 없는데 그 날짜가
+            있으면 :class:`SessionUnavailable`. ``"raw"`` — 테이블 값 그대로(사전등록 재현·자체 보정 경로가 명시). 보정 대상이 아닌 표
+            (``daily_bars_raw``·``daily_bars_adj_v2``)에 ``"regular"`` 를 명시하면 :class:`ValueError`, 기본값이면 경고 뒤 원값.
+        strict: 정규장 모드에서 요청 열을 다 고치지 못한 행이 하나라도 있으면 :class:`SessionUnavailable`.
+        unpatched: 정규장 모드에서 고칠 원천이 없는 값 — ``"nan"``(기본, 비운다) · ``"raw"``(원값 유지, ``krx_src`` 로 표시). :data:`UNPATCHED`.
 
     Returns: pandas DataFrame.
     """
     import pandas as pd
 
-    _check_session(session)
+    _check_session(session, unpatched)
+    session = _resolve_session(session, table)
     use = tuple(cols or _PRICE_READ_COLS)
     extra_open = _session_needs_open(table, use, session, end)
     sel = ", ".join(use + (("open",) if extra_open else ()))
@@ -590,7 +655,7 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
             _assert_universe_has_delisted(con, df, table=table)
     _check_trade_value_units(con, df, table=table, start=start, end=end)
     if session == "regular":
-        df = _apply_regular_session(con, df, table=table, strict=strict)
+        df = _apply_regular_session(con, df, table=table, strict=strict, unpatched=unpatched)
         if extra_open:
             attrs = dict(df.attrs)
             df = df.drop(columns="open")
@@ -601,46 +666,64 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
 #: 거래대금 단위 카나리아 — 표본의 trade_value / (close × volume / 1e6) 중앙값이 이 밖이면 trade_value 가 백만원 단위가 아니다
 #: (원 단위면 ~1e6, 억 단위면 ~0.01). 조정 테이블은 분할 전 행의 비율이 분할 배수만큼 크지만 중앙값은 1 근처다.
 TV_UNIT_BAND = (0.5, 2.0)
-_TV_SAMPLE = 5000
+#: 카나리아가 보는 날짜 수 — 창 안에 고르게 + **마지막 날짜들**(최근 적재분만 단위가 바뀐 경우를 잡는다). 날짜마다 중앙값을 따로 잰다.
+_TV_SAMPLE_DAYS, _TV_RECENT_DAYS, _TV_MIN_ROWS = 12, 3, 20
 
 
 class TradeValueUnitError(AssertionError):
     """trade_value 가 백만원 단위가 아니다(수집·적재 단위 결함)."""
 
 
+def _tv_sample_dates(dates) -> list:
+    """정렬된 고유 날짜에서 고르게 :data:`_TV_SAMPLE_DAYS` 개 + 마지막 :data:`_TV_RECENT_DAYS` 개."""
+    import numpy as np  # noqa: PLC0415
+
+    u = sorted(set(dates))
+    if len(u) <= 5 * _TV_SAMPLE_DAYS:
+        return u                                    # 짧은 창(작은 픽스처 포함)은 전부
+    pick = {u[i] for i in np.linspace(0, len(u) - 1, min(_TV_SAMPLE_DAYS, len(u))).astype(int)}
+    return sorted(pick | set(u[-_TV_RECENT_DAYS:]))
+
+
 def _check_trade_value_units(con: Any, df, *, table: str, start: "str | None", end: "str | None") -> None:
-    """``trade_value`` 를 읽을 때 단위 카나리아. 프레임에 close·volume 이 있으면 그것으로, 없으면 같은 창의 작은 표본 질의로 잰다.
-    값이 바뀌지 않는다 — 통과하거나 :class:`TradeValueUnitError`."""
+    """``trade_value`` 를 읽을 때 단위 카나리아. 값이 바뀌지 않는다 — 통과하거나 :class:`TradeValueUnitError`.
+
+    창(``start``~``end``) 안 날짜를 고르게 + 마지막 날짜들을 골라 **날짜마다** 중앙값을 잰다(행이 :data:`_TV_MIN_ROWS` 미만인 날은 건너뛴다).
+    프레임에 close·volume 이 있으면 그것으로, 없으면 같은 날짜들의 표본 질의로 잰다. (예전 대체 질의는 ``ORDER`` 없는 ``LIMIT 5000`` 이라
+    표본이 창 어디서 오는지 몰랐고, 최근 행만 단위가 바뀐 경우를 놓쳤다 — 2026-10-13 리뷰.)"""
     import numpy as np  # noqa: PLC0415
     import pandas as pd  # noqa: PLC0415
 
     if "trade_value" not in df.columns or table not in _SESSION_TABLES:
         return
+    if "date" not in df.columns or not len(df):
+        return                                  # 날짜 없는 요청 — 판단할 창이 없다
+    uniq = {str(u)[:10]: u for u in df["date"].unique()}   # 고유 날짜만 문자열로(수백만 행 astype(str) 을 피한다)
+    days = _tv_sample_dates(uniq)
     if {"close", "volume"} <= set(df.columns):
-        x = df[["close", "volume", "trade_value"]]
-        if len(x) > _TV_SAMPLE:
-            x = x.iloc[np.linspace(0, len(x) - 1, _TV_SAMPLE).astype(int)]
+        sel = df["date"].isin([uniq[d] for d in days]).to_numpy()
+        x = df.loc[sel, ["date", "close", "volume", "trade_value"]]
+        x = x.assign(day=x.pop("date").map({uniq[d]: d for d in days}))
     else:
         ph = _ph(con)
-        where, params = ["trade_value > 0", "volume > 0", "close > 0"], []
-        if start is not None:
-            where.append(f"date >= {ph}")
-            params.append(start)
-        if end is not None:
-            where.append(f"date <= {ph}")
-            params.append(end)
-        x = pd.read_sql_query(f"SELECT close, volume, trade_value FROM {table} WHERE {' AND '.join(where)} "  # noqa: S608
-                              f"LIMIT {_TV_SAMPLE}", con, params=tuple(params) or None)
+        x = pd.read_sql_query(f"SELECT date, close, volume, trade_value FROM {table} WHERE trade_value > 0 AND volume > 0 AND close > 0 "  # noqa: S608
+                              f"AND date IN ({', '.join([ph] * len(days))})", con, params=tuple(days))
+        x["day"] = x.pop("date").astype(str).str[:10]
     c, v, t = (pd.to_numeric(x[k], errors="coerce").abs().to_numpy(float) for k in ("close", "volume", "trade_value"))
     ok = np.isfinite(c) & np.isfinite(v) & np.isfinite(t) & (c > 0) & (v > 0) & (t > 0)
-    if ok.sum() < 20:
+    if ok.sum() < _TV_MIN_ROWS:
         return                                  # 판단할 표본이 없다(빈 창·작은 픽스처)
-    r = float(np.median(t[ok] / (c[ok] * v[ok] / 1e6)))
+    r = pd.Series(t[ok] / (c[ok] * v[ok] / 1e6)).groupby(x["day"].to_numpy()[ok])
+    med = r.median()[r.size() >= _TV_MIN_ROWS]
+    if med.empty:
+        med = pd.Series({"(전체)": float(np.median(t[ok] / (c[ok] * v[ok] / 1e6)))})
     lo, hi = TV_UNIT_BAND
-    if not lo <= r <= hi:
+    bad = med[(med < lo) | (med > hi)]
+    if len(bad):
         raise TradeValueUnitError(
-            f"{table}.trade_value 단위 카나리아 실패: 표본 {int(ok.sum())}행의 trade_value / (close × volume / 1e6) 중앙값 = {r:.4g} "
-            f"(정상 {lo}~{hi}). trade_value 는 백만원 단위여야 한다(ADV 10억 = 1,000) — 적재 단위가 바뀌었는지 확인하라.")
+            f"{table}.trade_value 단위 카나리아 실패: 날짜별 trade_value / (close × volume / 1e6) 중앙값이 {lo}~{hi} 밖 — "
+            f"{', '.join(f'{d} {m:.4g}' for d, m in bad.items())} (표본 {len(med)}일). trade_value 는 백만원 단위여야 한다"
+            f"(ADV 10억 = 1,000) — 적재 단위가 바뀌었는지 확인하라.")
 
 
 def read_code_bars(con: Any, code: str, *, start: str, end: str,
@@ -699,17 +782,19 @@ class PricePanels(dict):
 def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, table: str = PRICE_TABLE,
                      require_delisted: bool = True, batch: int = 250_000,
                      start: "str | None" = None, end: "str | None" = None,
-                     session: str = "regular", strict: bool = False):
+                     session: "str | None" = None, strict: bool = False, unpatched: str = "nan"):
     """:func:`read_prices` 의 **메모리 절약판** — 긴 프레임을 만들지 않고 날짜×종목 와이드 패널을 바로 채운다.
 
-    ``session``·``strict`` 는 :func:`read_prices` 와 같다. ``"regular"``(기본)면 2026-09-14~ 행을 분봉 정규장 값으로 제자리 보정하고
-    :class:`PricePanels`(``.krx_session`` = {rows, patched, unpatched})를 돌려준다. ``"raw"`` 는 예전처럼 dict.
+    ``session``·``strict``·``unpatched`` 는 :func:`read_prices` 와 같다(같은 :func:`_apply_regular_session` 을 09-14~ 칸에만 건다).
+    ``"regular"``(기본)면 2026-09-14~ 칸을 정규장 값으로 제자리 보정하고 :class:`PricePanels`(``.krx_session`` = {rows, patched,
+    unpatched, by_src, policy})를 돌려준다. ``"raw"`` 는 예전처럼 dict.
     """
     import pandas as pd  # noqa: PLC0415
 
-    from swing_it.krx_session import AFTERMARKET_START, patch_wide, read_session_bars_any  # noqa: PLC0415
+    from swing_it.krx_session import AFTERMARKET_START  # noqa: PLC0415
 
-    _check_session(session)
+    _check_session(session, unpatched)
+    session = _resolve_session(session, table)
     use = tuple(cols)
     extra_open = _session_needs_open(table, use, session, end)
     panels = _read_prices_wide_raw(con, cols=use + (("open",) if extra_open else ()), table=table,
@@ -720,15 +805,16 @@ def read_prices_wide(con: Any, *, cols: "tuple[str, ...]" = _PRICE_WIDE_COLS, ta
     info = {"session": "regular", "since": AFTERMARKET_START, "rows": 0, "patched": 0, "unpatched": 0}
     days = next(iter(panels.values())).index if panels else pd.DatetimeIndex([])
     late = days >= pd.Timestamp(AFTERMARKET_START)
-    if table in _SESSION_TABLES and late.any() and any(c in _SESSION_COLS for c in panels):
-        sess = read_session_bars_any(con, start=days[late].min().strftime("%Y-%m-%d"), end=days[late].max().strftime("%Y-%m-%d"))
-        if sess is None:
-            raise SessionUnavailable(
-                f"{table} 에 {AFTERMARKET_START} 이후 {int(late.sum())}거래일이 있는데 이 DB 에 minute_bars 가 없어 정규장으로 보정할 수 "
-                "없다(KRX 애프터마켓 16:00~20:00 체결이 섞였다). 원값이 필요하면 session='raw' 로 명시하라.")
-        info.update(patch_wide(out, sess, since=AFTERMARKET_START, adjusted=_SESSION_TABLES[table]))
-        if strict and info["unpatched"]:
-            raise SessionUnavailable(f"{table} {AFTERMARKET_START} 이후 {info['unpatched']}행은 분봉이 없어 보정하지 못했다(strict)")
+    cols_ = [c for c in _SESSION_COLS if c in out]
+    if table in _SESSION_TABLES and late.any() and cols_:
+        # 긴 정문과 **같은 함수**로 고친다(분봉 > 항등식 > 정책) — 09-14~ 칸만 길게 펴서 넘기고 제자리에 꽂는다.
+        long = pd.concat({c: out[c].loc[late].stack(future_stack=True) for c in cols_}, axis=1)
+        long = long.dropna(how="all").rename_axis(["date", "code"]).reset_index()
+        fixed = _apply_regular_session(con, long, table=table, strict=strict, unpatched=unpatched)
+        for c in cols_:
+            w = fixed.pivot(index="date", columns="code", values=c)
+            out[c].loc[w.index, w.columns] = w.to_numpy()
+        info.update(fixed.attrs["krx_session"])
     if extra_open:
         del out["open"]
     out.krx_session = info
@@ -908,7 +994,7 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
                        sources: "tuple[str, ...] | None" = None,
                        require_delisted: bool = True,
                        allow_individual_survivorship: bool = False,
-                       session: str = "regular", strict: bool = False, parse_dates: bool = False):
+                       session: str = "regular", strict: bool = False, parse_dates: bool = False, unpatched: str = "nan"):
     """수급 패널 정문 — 가격의 :func:`read_prices` 에 대응하는 자리.
 
     이 테이블에는 오랫동안 정문이 없었다. 그래서 소비자들이 ``supply_demand JOIN
@@ -937,16 +1023,19 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
             ``AssertionError`` 로 막는다 — 조용한 생존편향보다 시끄러운 실패가 낫다.
         session: ``"regular"``(기본) — ``close``·``flu_rt``·``acc_trde_qty`` 를 요청했고 2026-09-14~ 행이 있으면 그 행을 KRX 정규장 값으로
             바꾼다(:func:`_apply_regular_supply`): 종가 = 분봉 정규장 > 항등식(:func:`swing_it.krx_session.regular_close_from_supply_demand`),
-            등락률 = 그 종가 / 그날 기준가, 거래량 = 분봉 정규장 합. 못 고친 값은 **NaN**(오염값을 남기지 않는다)이고 수는
-            ``df.attrs["krx_session"]``. ``"raw"`` — 테이블 값 그대로(사전등록 재현·자체 보정 경로가 명시). 순매매 수량 열은 손대지 않는다.
+            등락률 = 그 종가 / 그날 기준가, 거래량 = 분봉 정규장 합. 못 고친 값은 ``unpatched`` 정책(기본 **NaN** — 가격 정문과 같은
+            :data:`UNPATCHED`), 수는 ``df.attrs["krx_session"]``, 행별 원천은 ``krx_src``(:data:`KRX_SRC`). 정규장 모드의 ``close`` 는
+            **부호 없는 가격**이다(전 행 절댓값 — 키움 원천의 등락 부호는 ``session="raw"`` 에만 남는다; 2026-10-13 DB 에는 음수 0 건).
+            ``"raw"`` — 테이블 값 그대로(사전등록 재현·자체 보정 경로가 명시). 순매매 수량 열은 손대지 않는다.
         strict: 정규장 모드에서 못 고친 행이 있으면 :class:`SessionUnavailable`.
+        unpatched: :func:`read_prices` 와 같다(``"nan"`` 기본 · ``"raw"``).
         parse_dates: ``date`` 를 datetime64 로(``pd.read_sql(parse_dates=["date"])`` 와 같은 경로).
 
     Returns: pandas DataFrame.
     """
     import pandas as pd
 
-    _check_session(session)
+    _check_session(session, unpatched)
     use = tuple(cols or _SUPPLY_READ_COLS)
     kiwoom_only = tuple(c for c in use if c in KIWOOM_ONLY_SUPPLY_COLS)
     if kiwoom_only and require_delisted and not allow_individual_survivorship:
@@ -981,11 +1070,15 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
     if require_delisted:
         _assert_supply_has_delisted(con, df, start=start, end=end)
     if affected:
-        df = _apply_regular_supply(con, df, use=use, strict=strict)
+        df = _apply_regular_supply(con, df, use=use, strict=strict, unpatched=unpatched)
         if extra:
             attrs = dict(df.attrs)
             df = df.drop(columns=list(extra))
             df.attrs.update(attrs)
+    if session == "regular" and "close" in use and len(df) and (df["close"].dropna() < 0).any():
+        attrs = dict(df.attrs)
+        df["close"] = df["close"].abs()                     # 한 규약: 정규장 모드 종가 = 부호 없는 가격(보정 행은 원래 부호가 없다)
+        df.attrs.update(attrs)
     return df
 
 
@@ -999,8 +1092,9 @@ def _aftermarket_start() -> str:
     return AFTERMARKET_START
 
 
-def _apply_regular_supply(con: Any, df, *, use: "tuple[str, ...]", strict: bool):
-    """수급표의 2026-09-14~ 행 close·flu_rt·acc_trde_qty 를 정규장 값으로(못 고치면 NaN). 그 날짜가 없으면 입력 그대로."""
+def _apply_regular_supply(con: Any, df, *, use: "tuple[str, ...]", strict: bool, unpatched: str = "nan"):
+    """수급표의 2026-09-14~ 행 close·flu_rt·acc_trde_qty 를 정규장 값으로(못 고치면 ``unpatched`` 정책). 그 날짜가 없으면 입력 그대로.
+    가격 정문(:func:`_apply_regular_session`)과 같은 원천 순서·정책·표시 열(``krx_patched``·``krx_src``)이다."""
     import numpy as np  # noqa: PLC0415
     import pandas as pd  # noqa: PLC0415
 
@@ -1027,27 +1121,35 @@ def _apply_regular_supply(con: Any, df, *, use: "tuple[str, ...]", strict: bool)
     i_close = i["close"].reindex(key).to_numpy(float) if len(i) else np.full(len(key), np.nan)
     rc = np.where(np.isfinite(s_close), s_close, i_close)
     ok = np.ones(len(key), bool)
+    keep = unpatched == "raw"                              # 못 고친 값을 원값으로 둘지(정책)
     for c in ("close", "flu_rt", "acc_trde_qty"):
         if c in out.columns:
             out[c] = out[c].astype(float)
     if "close" in use:
-        out.loc[late, "close"] = rc
+        raw_close = np.abs(df.loc[late, "close"].to_numpy(float))
+        out.loc[late, "close"] = np.where(np.isfinite(rc) | (not keep), rc, raw_close)
         ok &= np.isfinite(rc)
     if "flu_rt" in use:
         raw_c = np.abs(df.loc[late, "close"].to_numpy(float))
-        base = raw_c / (1.0 + df.loc[late, "flu_rt"].to_numpy(float) / 1e4)           # 그날 기준가(= 전 거래일 정규장 종가)
+        raw_f = df.loc[late, "flu_rt"].to_numpy(float)
+        base = raw_c / (1.0 + raw_f / 1e4)                                                # 그날 기준가(= 전 거래일 정규장 종가)
         with np.errstate(divide="ignore", invalid="ignore"):
             fr = (rc / base - 1.0) * 1e4
-        out.loc[late, "flu_rt"] = fr
+        out.loc[late, "flu_rt"] = np.where(np.isfinite(fr) | (not keep), fr, raw_f)
         ok &= np.isfinite(fr)
     if "acc_trde_qty" in use:
         q = s["volume"].reindex(key).to_numpy(float) if len(s) else np.full(len(key), np.nan)
-        out.loc[late, "acc_trde_qty"] = q
+        out.loc[late, "acc_trde_qty"] = np.where(np.isfinite(q) | (not keep), q, df.loc[late, "acc_trde_qty"].to_numpy(float))
         ok &= np.isfinite(q)
     out["krx_patched"] = False
     out.loc[late, "krx_patched"] = ok
+    src = np.where(late, "none", "pre").astype(object)
+    src[np.flatnonzero(late)[np.isfinite(i_close)]] = "identity"
+    src[np.flatnonzero(late)[np.isfinite(s_close)]] = "session"
+    out["krx_src"] = src
     n, k = int(late.sum()), int(ok.sum())
-    info.update(rows=n, patched=k, unpatched=n - k)
+    info.update(rows=n, patched=k, unpatched=n - k, policy=unpatched,
+                by_src={x: int((src == x).sum()) for x in ("session", "identity", "none")})
     out.attrs["krx_session"] = info
     if strict and n > k:
         raise SessionUnavailable(f"{SUPPLY_TABLE} {AFTERMARKET_START} 이후 {n}행 중 {n - k}행을 정규장으로 고치지 못했다(strict)")

@@ -8,7 +8,7 @@ KOSPI200·KOSDAQ150 정기변경 편입(index_changes action='add')마다: 발�
 사용: ``export $(grep -v '^#' ~/git/quant-airflow/.env | xargs) && uv run --extra pg python research/paper/index_paper.py``
 
 쌍 팔 ``--arm index27_rs``(META_EVOLUTION.md '전진 팔 *_rs 사전등록'): 같은 규칙·코드 경로, 정문 인자만 다르다 — 수정 가격
-``read_prices(session="regular")``, 동료 순위 시총의 원 종가 ``read_raw_close(aftermarket_fix=True)``(분봉 > 정규장 종가 항등식 > 일봉).
+``read_prices(session="regular", unpatched="raw")``, 동료 순위 시총의 원 종가 ``read_raw_close(aftermarket_fix=True)``(분봉 > 정규장 종가 항등식 > 일봉).
 장부 ``index27_rs_ledger.jsonl``, 기록일 2026-10-13 전 행은 쓰지 않는다.
 """
 from __future__ import annotations
@@ -30,9 +30,11 @@ LEDGER = "research/paper/index27_ledger.jsonl"
 COST_RT = 0.00415
 IDX_MKT = {"KOSPI200": "거래소", "KOSDAQ150": "코스닥"}
 # 팔 설정 표 — index27 은 기존 고정값(바꾸지 않는다), index27_rs 는 정문 애프터마켓 보정 인자만 다르다
-ARMS = {"index27": {"ledger": LEDGER, "session": "raw", "aftermarket_fix": False},
+# unpatched = 정문이 고칠 원천 없는 값을 어떻게 둘지(storage.UNPATCHED). index27 은 session="raw" 라 동작이 없다(기존 값 nan 그대로 적는다).
+# index27_rs 는 "raw"(원값 유지·krx_src 표시) — META_EVOLUTION.md '*_rs 보충 — 정문 보정 범위 확대(첫 기록 전)'.
+ARMS = {"index27": {"ledger": LEDGER, "session": "raw", "aftermarket_fix": False, "unpatched": "nan"},
         "index27_rs": {"ledger": "research/paper/index27_rs_ledger.jsonl", "session": "regular", "aftermarket_fix": True,
-                       "start": "2026-10-13"}}
+                       "unpatched": "raw", "start": "2026-10-13"}}
 
 
 def main() -> None:
@@ -56,7 +58,8 @@ def main() -> None:
         print(f"{a.since} 이후 발표된 KOSPI200·KOSDAQ150 정기변경 없음 — 기록할 것 없음")
         return
     start = str((ch["announce_date"].min() - pd.Timedelta(days=10)).date())
-    px = read_prices(con, session=arm["session"], cols=("code", "date", "open", "close"), start=start, parse_dates=True)
+    px = read_prices(con, session=arm["session"], cols=("code", "date", "open", "close"), start=start, parse_dates=True,
+                     unpatched=arm["unpatched"])
     px = patch_prices(px, read_session_bars_agg(con, start=max(start, NXT_START)), adjusted=True)   # session="regular" 이면 멱등
     if arm["aftermarket_fix"]:                      # 쌍 팔: 원 종가 정문(분봉 > 항등식 > 일봉; 기본 --since 창은 전부 09-14 뒤)
         raw = read_raw_close(con, start=start, aftermarket_fix=True)
@@ -96,7 +99,8 @@ def main() -> None:
             base = {"index": idx, "eff": str(eff.date()), "ann": str(ann.date()), "code": r.code, "name": r.name, "git": sha,
                     "run_at": pd.Timestamp.now().isoformat(timespec="seconds"), "krx_patched": True}
             if a.arm != "index27":                  # 쌍 팔만 — 기존 팔 행은 열이 하나도 바뀌지 않는다
-                base.update({"arm": a.arm, "session": arm["session"], "aftermarket_fix": arm["aftermarket_fix"]})
+                base.update({"arm": a.arm, "session": arm["session"], "aftermarket_fix": arm["aftermarket_fix"],
+                             "unpatched": arm["unpatched"]})
             if key_e not in done:
                 new.append({"kind": "entry", **base, "date": str(days[i_in].date()), "px": float(p0), "n_peers": len(peers)})
             key_x = ("exit", idx, str(eff.date()), r.code)

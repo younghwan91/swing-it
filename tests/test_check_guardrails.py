@@ -796,7 +796,7 @@ def load(con, s):
     b = read_supply_demand(con, cols=("code", "date", "institution"))
     c = read_raw_close(con, start="2016-08-01")
     d = market_cap_asof_bulk(con, a)
-    e = read_prices(con, session=s["session"], start="2016-08-01")      # 변수도 명시다
+    e = read_prices(con, session=s["session"], start="2016-08-01", unpatched=s["unpatched"])   # 변수도 명시다
     f = read_raw_close(con, start="2016-08-01", aftermarket_fix=False)
     return a, b, c, d, e, f
 '''
@@ -816,7 +816,23 @@ def _paper_tree(lint, tmp_path, monkeypatch, rel: str, src: str) -> list[str]:
 def test_rule_p_requires_explicit_gateway_args_in_paper_paths(lint, tmp_path, monkeypatch, rel):
     out = _paper_tree(lint, tmp_path, monkeypatch, rel, _PAPER_BAD)
     assert len(out) == 4 and all("[explicit]" in o for o in out), out
-    assert sorted(o.split("() 에 ")[1].split(" ")[0] for o in out) == ["aftermarket_fix=", "legacy=", "session=", "session="]
+    assert sorted(o.split("() 에 ")[1].split(" 를 ")[0] for o in out) == [
+        "aftermarket_fix=", "legacy=", "session=, unpatched=", "session=, unpatched="]
+
+
+def test_rule_p_requires_unpatched_unless_session_is_literal_raw(lint, tmp_path, monkeypatch):
+    """정규장 모드(리터럴 "regular"·변수)면 못 고친 값 정책(unpatched=)도 명시 — 리터럴 "raw" 면 그 인자는 동작이 없어 요구하지 않는다."""
+    src = (
+        "def load(con, arm):\n"
+        "    a = read_prices(con, session=\"raw\", cols=(\"code\", \"date\", \"close\"))\n"
+        "    b = read_prices(con, session=\"regular\", cols=(\"code\", \"date\", \"close\"))\n"
+        "    c = read_prices_wide(con, session=arm[\"session\"], cols=(\"close\",))\n"
+        "    d = read_supply_demand(con, session=\"regular\", unpatched=\"nan\")\n"
+        "    return a, b, c, d\n"
+    )
+    out = _paper_tree(lint, tmp_path, monkeypatch, "research/paper/arm.py", src)
+    assert [o.split(":")[1].split(" ")[0] for o in out] == ["3", "4"], out
+    assert all("unpatched=" in o for o in out)
 
 
 def test_rule_p_ignores_files_outside_paper_paths(lint, tmp_path, monkeypatch):

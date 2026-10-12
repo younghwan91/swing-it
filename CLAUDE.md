@@ -47,8 +47,11 @@
 
 ## 데이터 함정 (kr_quant) — 대부분 정문·린트가 강제한다(fcs `scripts/check_guardrails.py`)
 - **KRX 애프터마켓 오염(2026-09-14~, 16:00~20:00; 처음엔 NXT 로 오인):** 일봉 고저종·거래량, 수급 close·flu_rt·acc_trde_qty. 시가만 정상.
-  → 정문 `read_prices`·`read_prices_wide`·`read_supply_demand` 기본 `session="regular"` / 린트 (g)(j). 원값은 `session="raw"` 명시.
-  판단: 미보정 행 수(`attrs["krx_session"]`)를 보고 `strict=True` 를 쓸지 정한다(분봉은 하루 ~1,400 종목뿐). 글로는 못 막았다(730def6).
+  → 정문 `read_prices`·`read_prices_wide`·`read_supply_demand` 기본 `session="regular"`(분봉 > 종가 항등식 > `unpatched` 정책 —
+  기본 `"nan"`, 원값 유지는 `"raw"`; 행별 원천 `krx_src`) / 린트 (g)(j)(p). 원값은 `session="raw"` 명시. 모의매매·재현 파일은 린트 (p) 가
+  `session=`(정규장이면 `unpatched=` 도) 명시를 강제한다.
+  판단: 미보정 행 수(`attrs["krx_session"]`)를 보고 `strict=True` 를 쓸지 정한다(분봉은 2026-10-13 백필 뒤 하루 ~2,510 / 2,628 종목,
+  나머지는 항등식으로 종가만 — 마지막 거래일은 항등식도 없다). 글로는 못 막았다(730def6).
 - `minute_bars.ts` = 시간대 없는 KST → 린트 (m). 정규장 = `krx_session.SESSION_OPEN/CLOSE`(15:32). main 로드맵의 "오진" 문구는 틀렸다.
 - 실적 as-of → `read_earnings(with_known=True)` 의 `known_date`·`event_date` / 린트 (l)(`avail_date` 키는 `# legacy-asof:`). 2019-02-28 전은 avail_date.
 - `trade_value` = 백만원 → `swing_it.units.eok()` / 린트 (n) / `read_prices` 단위 카나리아. TUI 리포트 값은 억 단위.
@@ -58,7 +61,7 @@
 - **`daily_bars.close` 는 원 종가가 아니다**(분할 소급) → `krx_session.read_raw_close`(새 코드 `aftermarket_fix=True`)·
   `market_cap_asof(_bulk)`(옛 정의 `legacy=True`). 판단: 원 종가 × 연말 DART 주식수는 분할 뒤 수개월 틀린다(거울상) — 패널이면
   `split_consistent_cap`(`asof=` 필수). 21~26세대 설계 숫자는 시총 구성에 따라 5~15% 흔들린다(정정 G28-2·4).
-- 판단(코드로 못 옮김): 수급 주체 열은 순매매 **수량**(× 종가는 근사), 네 주체 합 ≈ 0 이라 `etc_corp` 를 빼면 안 되고 `institution` 은
+- 판단(코드로 못 옮김): `flu_rt` 는 등락률 ×100 이다(그날 기준가 대비 — 정규장 종가 항등식의 원천). 수급 주체 열은 순매매 **수량**(× 종가는 근사), 네 주체 합 ≈ 0 이라 `etc_corp` 를 빼면 안 되고 `institution` 은
   합계 열을 그대로 쓴다. 0 은 "0 또는 미보고", 폐지 종목은 기관·외국인만(나머지 NULL). `stocks` 업종·시장은 현재 스냅샷이다.
 
 ## 실행 환경 함정

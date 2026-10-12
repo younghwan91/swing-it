@@ -712,6 +712,13 @@ EXPLICIT_KWARGS: dict[str, tuple[str, ...]] = {
     "market_cap_asof": ("legacy",),
     "market_cap_asof_bulk": ("legacy",),
 }
+#: 정규장 모드에서만 동작이 갈리는 인자 — ``session=`` 이 리터럴 ``"raw"`` 가 아니면(``"regular"``·변수) 이것도 명시해야 한다.
+#: ``unpatched`` = 고칠 원천 없는 값의 정책(NaN|원값, storage.UNPATCHED). 2026-10-13 MAJOR 1 에서 가격 정문 기본이 원값 → NaN 으로 바뀌었다.
+REGULAR_KWARGS: dict[str, tuple[str, ...]] = {
+    "read_prices": ("unpatched",),
+    "read_prices_wide": ("unpatched",),
+    "read_supply_demand": ("unpatched",),
+}
 
 
 def check_paper_explicit_kwargs() -> list[str]:
@@ -731,7 +738,11 @@ def check_paper_explicit_kwargs() -> list[str]:
             need = EXPLICIT_KWARGS.get(_called_name(n) or "")
             if not need:
                 continue
-            given = {k.arg for k in n.keywords if k.arg}
+            kws = {k.arg: k.value for k in n.keywords if k.arg}
+            given = set(kws)
+            sess = kws.get("session")
+            if not (isinstance(sess, ast.Constant) and sess.value == "raw"):
+                need = need + REGULAR_KWARGS.get(_called_name(n) or "", ())
             miss = [k for k in need if k not in given]
             if miss:
                 out.append(f"[explicit] {rel}:{n.lineno} — {_called_name(n)}() 에 {', '.join(m + '=' for m in miss)} 를 명시하지 "

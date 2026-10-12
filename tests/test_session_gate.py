@@ -61,8 +61,12 @@ def test_regular_is_default_and_patches_after_aftermarket_start(tmp_path):
     df = read_prices(con)
     a = df[(df["code"] == "A") & (df["date"] == "2026-09-15")].iloc[0]
     assert a["close"] == 102 * 0.5 and a["high"] == 104 * 0.5 and a["volume"] == 30
-    assert a["krx_patched"]
-    assert df.attrs["krx_session"] == {"session": "regular", "since": "2026-09-14", "rows": 2, "patched": 1, "unpatched": 1}
+    assert a["krx_patched"] and a["krx_src"] == "session"
+    assert df.attrs["krx_session"] == {"session": "regular", "since": "2026-09-14", "rows": 2, "patched": 1, "unpatched": 1,
+                                       "policy": "nan", "by_src": {"session": 1, "identity": 0, "none": 1}}
+    b = df[(df["code"] == "B") & (df["date"] == "2026-09-15")].iloc[0]
+    assert b["krx_src"] == "none" and not b["krx_patched"]                    # 분봉도 항등식(수급 행)도 없다
+    assert b["open"] == 7 and all(np.isnan(b[c]) for c in ("high", "low", "close", "volume", "trade_value"))   # 기본 정책 = NaN
     assert df.loc[df["date"] == "2026-09-11", "close"].iloc[0] == 50.5        # 보정 전 날짜는 그대로
     assert df["date"].tolist() == [r[1] for r in _ADJ_ROWS]                    # 날짜 열 모양은 입력 그대로
     with pytest.raises(SessionUnavailable, match="strict"):
@@ -117,7 +121,7 @@ def test_adjusted_table_without_open_column_reads_open_internally(tmp_path):
     _bars(con, _ADJ_ROWS)
     _minutes_table(con, _MIN_ROWS)
     df = read_prices(con, cols=("code", "date", "close"))
-    assert list(df.columns) == ["code", "date", "close", "krx_patched"]
+    assert list(df.columns) == ["code", "date", "close", "krx_patched", "krx_src"]
     assert df.loc[(df["code"] == "A") & (df["date"] == "2026-09-15"), "close"].iloc[0] == 51.0
 
 
@@ -128,8 +132,10 @@ def test_wide_regular_patches_in_place_and_reports(tmp_path):
     w = read_prices_wide(con, cols=("close", "volume"))
     assert set(w) == {"close", "volume"}                                          # 안에서 읽은 open 은 버린다
     assert w["close"].loc["2026-09-15", "A"] == 51.0 and w["volume"].loc["2026-09-15", "A"] == 30
-    assert w["close"].loc["2026-09-15", "B"] == 7.5                              # 분봉 없음 → 원값, 미보정으로 셈
+    assert np.isnan(w["close"].loc["2026-09-15", "B"])                         # 분봉·항등식 없음 → 기본 정책 NaN, 미보정으로 셈
     assert w.krx_session["patched"] == 1 and w.krx_session["unpatched"] == 1
+    keep = read_prices_wide(con, cols=("close", "volume"), unpatched="raw")
+    assert keep["close"].loc["2026-09-15", "B"] == 7.5 and keep["close"].loc["2026-09-15", "A"] == 51.0   # 원값 유지 정책
     raw = read_prices_wide(con, cols=("close",), session="raw")
     assert type(raw) is dict and raw["close"].loc["2026-09-15", "A"] == 57.5
 
@@ -213,3 +219,103 @@ def test_sqlite_connection_type_guard():
     con = sqlite3.connect(":memory:")
     from swing_it.krx_session import read_session_bars_any
     assert read_session_bars_any(con, start="2026-09-14") is None
+
+
+# --- 2026-10-13 리뷰 MAJOR 1: 분봉 없는 행의 종가를 항등식으로, 못 고친 열은 한 정책(nan|raw), 두 정문 통일 ---------------------------
+
+#: 수급 행 — B 의 09-15 정규장 종가 = 15.4 / 1.1 = 14(1원 호가). 원(애프터마켓) 종가 15, 조정표 7.5(×0.5) → 조정 정규장 종가 7.0.
+_SD_ROWS = [("A", "2026-09-15", 115, 1400.0, 999), ("A", "2026-09-16", 103, -98.0, 50),
+            ("B", "2026-09-15", 15, 700.0, 30), ("B", "2026-09-16", 15.4, 1000.0, 40)]
+
+
+def _sd_table(con, rows=_SD_ROWS):
+    con.executemany("INSERT INTO supply_demand(code, date, close, flu_rt, acc_trde_qty, foreign_, institution) "
+                    "VALUES (?,?,?,?,?,0,0)", rows)
+    con.commit()
+
+
+def _identity_db(tmp_path):
+    con = connect(tmp_path / "t.db")
+    _bars(con, _ADJ_ROWS)
+    _bars(con, [("A", "2026-09-15", 100, 120, 90, 115, 99, 9, "kiwoom"), ("B", "2026-09-15", 14, 16, 12, 15, 3, 2, "kiwoom")],
+          table="daily_bars")
+    _minutes_table(con, _MIN_ROWS)
+    _sd_table(con)
+    return con
+
+
+def test_identity_fixes_close_of_rows_without_minute_bars(tmp_path):
+    """분봉 없는 행도 종가는 항등식으로 고친다(조정표는 × 행 종가 / |수급 종가|). 고가·저가·거래량·거래대금은 고칠 원천이 없다 → 정책."""
+    con = _identity_db(tmp_path)
+    df = read_prices(con)
+    b = df[(df["code"] == "B") & (df["date"] == "2026-09-15")].iloc[0]
+    assert b["close"] == 7.0 and b["krx_src"] == "identity" and not b["krx_patched"]
+    assert b["open"] == 7 and all(np.isnan(b[c]) for c in ("high", "low", "volume", "trade_value"))
+    assert df.attrs["krx_session"]["by_src"] == {"session": 1, "identity": 1, "none": 0}
+    raw_t = read_prices(con, table="daily_bars")                               # 원 일봉은 배율 1 — 항등식 그대로
+    assert raw_t.loc[raw_t["code"] == "B", "close"].iloc[0] == 14.0
+    only_close = read_prices(con, cols=("code", "date", "close"))              # 종가만 요청하면 항등식 행도 '다 고쳤다'
+    late = only_close["date"] >= "2026-09-14"
+    assert only_close.loc[late, "krx_patched"].all() and only_close.attrs["krx_session"]["unpatched"] == 0
+    assert only_close.loc[~late, "krx_src"].tolist() == ["pre"]
+    read_prices(con, cols=("code", "date", "close"), strict=True)               # strict 도 통과
+    with pytest.raises(SessionUnavailable, match="strict"):
+        read_prices(con, strict=True)                                           # 고가·저가 등은 못 고쳤다
+
+
+def test_unpatched_raw_policy_keeps_table_values_and_marks_them(tmp_path):
+    con = _identity_db(tmp_path)
+    keep = read_prices(con, unpatched="raw")
+    b = keep[(keep["code"] == "B") & (keep["date"] == "2026-09-15")].iloc[0]
+    assert (b["close"], b["high"], b["low"], b["volume"], b["trade_value"]) == (7.0, 8, 6, 3, 2)   # 종가만 정규장, 나머지 원값
+    assert b["krx_src"] == "identity"
+    with pytest.raises(ValueError, match="unpatched"):
+        read_prices(con, unpatched="drop")
+
+
+def test_long_and_wide_gateways_agree(tmp_path):
+    """긴 정문과 와이드 정문이 같은 함수로 고친다 — 칸마다 같은 값."""
+    con = _identity_db(tmp_path)
+    for pol in ("nan", "raw"):
+        long = read_prices(con, unpatched=pol)
+        w = read_prices_wide(con, cols=("open", "high", "low", "close", "volume"), unpatched=pol)
+        for c in ("open", "high", "low", "close", "volume"):
+            got = [w[c].loc[pd.Timestamp(d), k] for k, d in zip(long["code"], long["date"], strict=True)]
+            np.testing.assert_array_equal(np.array(got, float), long[c].to_numpy(float), err_msg=f"{pol} {c}")
+
+
+def test_price_and_supply_gateways_share_one_policy(tmp_path):
+    """같은 행의 정규장 종가를 두 정문이 같은 원천·같은 정책으로 낸다(예전엔 가격 = 원값, 수급 = NaN 이라 조용히 달랐다)."""
+    con = _identity_db(tmp_path)
+    px = read_prices(con, table="daily_bars", cols=("code", "date", "close", "volume"))
+    sd = read_supply_demand(con, cols=("code", "date", "close", "acc_trde_qty"))
+    for code in ("A", "B"):
+        p = px[(px["code"] == code) & (px["date"] == "2026-09-15")].iloc[0]
+        q = sd[(sd["code"] == code) & (sd["date"] == "2026-09-15")].iloc[0]
+        assert p["close"] == q["close"] and p["krx_src"] == q["krx_src"]
+        assert np.isnan(p["volume"]) == np.isnan(q["acc_trde_qty"])           # 거래량: 분봉 있으면 값, 없으면 둘 다 NaN
+    keep = read_supply_demand(con, cols=("code", "date", "close", "acc_trde_qty"), unpatched="raw")
+    assert keep.loc[(keep["code"] == "B") & (keep["date"] == "2026-09-15"), "acc_trde_qty"].iloc[0] == 30
+    last = keep[(keep["code"] == "B") & (keep["date"] == "2026-09-16")].iloc[0]
+    assert last["close"] == 15.4 and last["krx_src"] == "none"                 # 마지막 날 — 원천 없음, 원값 유지(표시)
+
+
+def test_supply_regular_close_is_unsigned_price(tmp_path):
+    """정규장 모드의 수급 close 는 전 행 부호 없는 가격(보정 행은 원래 부호가 없다) — raw 는 원천 부호 그대로."""
+    con = connect(tmp_path / "t.db")
+    _sd_table(con, [("A", "2026-09-10", -100, -50.0, 1), ("A", "2026-09-11", 101, 100.0, 1)])
+    assert read_supply_demand(con, cols=("code", "date", "close"))["close"].tolist() == [100, 101]
+    assert read_supply_demand(con, cols=("code", "date", "close"), session="raw")["close"].tolist() == [-100, 101]
+
+
+def test_regular_on_unsupported_table_is_an_error_not_raw(tmp_path):
+    """보정 경로가 없는 표에 regular 를 명시하면 조용히 원값을 주지 않는다. 기본값이면 경고 뒤 원값(기존 호출부 호환)."""
+    con = connect(tmp_path / "t.db")
+    con.execute("CREATE TABLE daily_bars_raw (code TEXT, date TEXT, close REAL, source TEXT)")
+    con.execute("INSERT INTO daily_bars_raw VALUES ('A', '2026-09-15', 1.0, 'kiwoom')")
+    with pytest.raises(ValueError, match="정규장 보정 대상이 아니다"):
+        read_prices(con, table="daily_bars_raw", cols=("code", "date", "close"), session="regular")
+    with pytest.warns(UserWarning, match="session='raw'"):
+        df = read_prices(con, table="daily_bars_raw", cols=("code", "date", "close"))
+    assert df["close"].tolist() == [1.0] and "krx_src" not in df.columns
+    assert read_prices(con, table="daily_bars_raw", cols=("code", "date", "close"), session="raw")["close"].tolist() == [1.0]

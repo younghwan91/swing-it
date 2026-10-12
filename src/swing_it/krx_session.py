@@ -11,7 +11,8 @@
 
 **고치는 법 1 — 분봉:** ``minute_bars``(KST naive) 의 09:00~15:32 봉으로 정규장 OHLCV 를 다시 만들고, 조정 테이블에는 같은 날 조정계수
 (행 시가 / 정규장 시가 — 시가는 오염되지 않았다)를 곱해 넣는다. 분봉이 없는 종목·날짜는 원값을 두고 ``krx_patched=False`` 로 표시한다
-(분봉은 하루 ~1,400 종목뿐이다 — 나머지 ~1,200 종목은 아래 항등식으로만 종가를 되살린다).
+(분봉은 처음 하루 ~1,400 종목이었고 2026-10-13 백필 뒤 ~2,510 / 2,628 종목이다 — 나머지는 아래 항등식으로만 종가를 되살린다;
+정문 :func:`swing_it.storage.read_prices` 가 둘을 같은 순서로 쓴다).
 
 **고치는 법 2 — 정규장 종가 항등식:** ``supply_demand`` 의 ``flu_rt``(등락률 ×100)는 그날 **기준가**(= 전 거래일 정규장 종가) 대비다.
 그래서 정규장 종가(t) = 호가 반올림(|close(t+1)| / (1 + flu_rt(t+1)/1e4)). 2026-09-14~10-08 분봉 있는 25,303건 중 99.98% 정확
@@ -178,13 +179,14 @@ def patch_wide(panels: "dict[str, pd.DataFrame]", session: pd.DataFrame, *, sinc
 IDENTITY_MAX_JUMP = 1.35
 
 
-def regular_close_from_supply_demand(sd: pd.DataFrame, *, max_jump: float = IDENTITY_MAX_JUMP) -> pd.DataFrame:
+def regular_close_from_supply_demand(sd: pd.DataFrame, *, max_jump: float = IDENTITY_MAX_JUMP, with_raw: bool = False) -> pd.DataFrame:
     """``supply_demand``(code, date, close, flu_rt) → 정규장 종가(t) = 호가 반올림(|close(t+1)| / (1 + flu_rt(t+1)/1e4)).
 
     ``flu_rt``(등락률 ×100)는 그날 기준가(= 전 거래일 정규장 종가) 대비라, 다음 행이 전 행의 정규장 종가를 알려 준다. 종목의 **마지막 행**
     (t+1 없음)은 값이 없다. 기준가가 전일 종가와 다른 날(권리락·배당락)은 틀리고(2026-09-14~ 0.02%), 분할·병합은 원 종가 대비
     ``max_jump`` 배 밖이라 버린다. 호가표는 2023-01-25 통합 표(:func:`swing_it.features.korea.tick_size_vec`) — 그 전 날짜에 쓰면 안 된다.
-    반환 열 code, date(datetime64), close.
+    반환 열 code, date(datetime64), close. ``with_raw`` 면 ``sd_close``(= 그날 |수급 종가|, 애프터마켓 포함 원값)를 덧붙인다 — 조정 가격표에
+    항등식을 옮길 때 배율(표 종가 / 수급 종가)의 분모다(:func:`swing_it.storage._apply_regular_session`).
     """
     from swing_it.features.korea import tick_size_vec  # noqa: PLC0415
 
@@ -201,18 +203,31 @@ def regular_close_from_supply_demand(sd: pd.DataFrame, *, max_jump: float = IDEN
         reg = np.round(base / t) * t
         ratio = reg / c.to_numpy(float)
     ok = np.isfinite(reg) & (reg > 0) & np.isfinite(ratio) & (ratio <= max_jump) & (ratio >= 1.0 / max_jump)
-    return pd.DataFrame({"code": x["code"].to_numpy()[ok], "date": x["date"].to_numpy()[ok], "close": reg[ok]})
+    out = pd.DataFrame({"code": x["code"].to_numpy()[ok], "date": x["date"].to_numpy()[ok], "close": reg[ok]})
+    if with_raw:
+        out["sd_close"] = c.to_numpy(float)[ok]
+    return out
 
 
-def read_regular_close(con: Any, *, start: str, end: "str | None" = None) -> pd.DataFrame:
-    """``start``~``end`` 의 항등식 정규장 종가(:func:`regular_close_from_supply_demand`). t+1 행을 얻으려 ``end`` 뒤 한 달을 더 읽는다."""
+def read_regular_close(con: Any, *, start: str, end: "str | None" = None, with_raw: bool = False) -> pd.DataFrame:
+    """``start``~``end`` 의 항등식 정규장 종가(:func:`regular_close_from_supply_demand`). t+1 행을 얻으려 ``end`` 뒤 한 달을 더 읽는다.
+
+    quant-airflow 의 ``regular_close`` 뷰(마이그레이션 031)와 2026-09-14~ 41,943 건이 같다(2026-10-13 대조). 차이: 뷰는 다음 날
+    기업행동(``corporate_actions`` upd_rt≠0)·호가 불일치 행을 빼고(여기는 4+1 건을 더 낸다 — 그중 2 건은 분봉과 다르다), 여기는
+    애프터마켓 원 종가와 1.35 배 넘게 어긋나는 행을 빼서(분할 방어) 뷰보다 6 건 적다. sqlite 픽스처에서도 돌아야 해서 이 함수를 쓴다.
+    sqlite 에 ``supply_demand`` 표가 없으면 빈 표.
+    """
     import sqlite3  # noqa: PLC0415
 
-    ph = "?" if isinstance(con, sqlite3.Connection) else "%s"
+    is_lite = isinstance(con, sqlite3.Connection)
+    cols = ["code", "date", "close"] + (["sd_close"] if with_raw else [])
+    if is_lite and con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='supply_demand'").fetchone() is None:
+        return pd.DataFrame({c: pd.Series(dtype="datetime64[ns]" if c == "date" else float if c != "code" else object) for c in cols})
+    ph = "?" if is_lite else "%s"
     hi = (pd.Timestamp(end) + pd.Timedelta(days=31)).strftime("%Y-%m-%d") if end else "2100-01-01"
     sd = pd.read_sql_query(f"SELECT code, date, close, flu_rt FROM supply_demand WHERE date >= {ph} AND date <= {ph} "
                            "AND close IS NOT NULL AND flu_rt IS NOT NULL", con, params=(start, hi))
-    out = regular_close_from_supply_demand(sd)
+    out = regular_close_from_supply_demand(sd, with_raw=with_raw)
     out = out[out["date"] >= pd.Timestamp(start)]
     if end:
         out = out[out["date"] <= pd.Timestamp(end)]

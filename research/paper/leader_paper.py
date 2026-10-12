@@ -8,7 +8,7 @@
 (``--arm`` 은 사전등록 팔 이름, 기본 META_EVOLUTION.md 21세대 모의매매 등록)
 
 쌍 팔 ``*_rs``(META_EVOLUTION.md '전진 팔 *_rs 사전등록'): 기존 팔과 cfg·코드 경로가 같고 정문 인자만
-``read_prices(session="regular")``·``read_raw_close(aftermarket_fix=True)`` 로 다르다(:data:`ARM_PRICE`). 장부 ``leader_rs_ledger.jsonl``,
+``read_prices(session="regular", unpatched="raw")``·``read_raw_close(aftermarket_fix=True)`` 로 다르다(:data:`ARM_PRICE`). 장부 ``leader_rs_ledger.jsonl``,
 첫 기록 거래일 2026-10-13(:data:`ARM_START` — 그 전 날짜 행은 쓰지 않는다).
 """
 from __future__ import annotations
@@ -40,15 +40,18 @@ RS_PAIR = {"leader_A_rs": "leader_A", "leader_C_rs": "leader_C", "leader_C20_rs"
 ARMS.update({k: dict(ARMS[v]) for k, v in RS_PAIR.items()})
 ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl",
               **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}}
-PRICE_RAW = {"session": "raw", "aftermarket_fix": False}          # 기존 팔 고정값(바꾸지 않는다)
-ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True} for k in RS_PAIR}
+PRICE_RAW = {"session": "raw", "aftermarket_fix": False, "unpatched": "nan"}   # 기존 팔 고정값(바꾸지 않는다; session="raw" 라 unpatched 는 동작 없음)
+# 쌍 팔: unpatched="raw" = 정문이 종가는 분봉 > 항등식으로 고치고, 고칠 원천 없는 고가·저가·거래량·거래대금은 원값 유지(krx_src 표시)
+# — META_EVOLUTION.md '*_rs 보충 — 정문 보정 범위 확대(첫 기록 전)'.
+ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in RS_PAIR}
 ARM_START = {k: "2026-10-13" for k in RS_PAIR}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
 
 
-def load_db(con, session: str = "raw", info: "dict | None" = None) -> tuple:
+def load_db(con, session: str = "raw", info: "dict | None" = None, unpatched: str = "nan") -> tuple:
     from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
     from swing_it.storage import read_prices
-    px = read_prices(con, session=session, cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True)
+    px = read_prices(con, session=session, cols=("code", "date", "open", "high", "low", "close", "volume"), start="2016-08-01", parse_dates=True,
+                     unpatched=unpatched)
     if info is not None:
         info.update(px.attrs.get("krx_session", {}))
     # 2026-09-14+ 일봉에 KRX 애프터마켓(16:00~20:00) 체결이 섞였다(종가 85~88% 오염) → 분봉 정규장(09:00~15:32)으로 다시 만든다(조정계수 = 시가 비율)
@@ -80,9 +83,9 @@ def main() -> None:
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
     px_info: dict = {}
-    days, codes, O, H, L_, C, TR, cost, mkt = load_db(con, session=price["session"], info=px_info)  # noqa: E741
+    days, codes, O, H, L_, C, TR, cost, mkt = load_db(con, session=price["session"], info=px_info, unpatched=price["unpatched"])  # noqa: E741
     D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close,
-                session=price["session"], aftermarket_fix=price["aftermarket_fix"])
+                session=price["session"], aftermarket_fix=price["aftermarket_fix"], unpatched=price["unpatched"])
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
     from swing_it.storage import read_index
     kx = read_index(con, "001", cols=("date", "close"), with_level=False, order_by_date=True, parse_dates=True,   # ×100 정수(옛 값 그대로)
