@@ -481,6 +481,7 @@ def exit_vec(g: dict, extra_slip: float = 0.0, sell_extra: float = 0.0) -> np.nd
     px[PF.X_REV_NEXT] = float(g.get("rev_next") or 0)
     px[PF.X_PLOW_R] = _nan(g.get("plow_r"))
     px[PF.X_CLOSE_CUT] = _nan(g.get("close_cut"))
+    px[PF.X_TRAIL_GATE] = float(g.get("trail_gate") or 0)   # 16b: 이동평균 추적은 선 ≥ 진입가부터(미너비니 Champion p162)
     px[PF.X_SELL_TICK] = 1.0                     # 손절·본전 체결 −1호가(쐐기 D 와 같다)
     px[PF.X_SELL_EXTRA] = sell_extra
     px[PF.X_CLIMAX] = float(g.get("climax") or 0)

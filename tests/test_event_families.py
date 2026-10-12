@@ -72,3 +72,13 @@ def test_close_cut():
 def test_new_exit_genes_off_by_default():
     for k in ("X_LOCK_TO", "X_REV_R", "X_PLOW_R", "X_CLOSE_CUT", "X_ON_HOLD"):
         assert np.isnan(PF.LIVE_X[getattr(PF, k)])
+
+
+def test_trail_gate_waits_for_ma_above_entry():
+    # 16b(미너비니 Champion p162): MA50 이 진입가(100) 아래면 MA50 종가 이탈로 팔지 않는다 — 손절선이 지킨다
+    rows = [(100, 101, 99, 100), (100, 101, 98, 98.5), (98.5, 99, 97, 98), (98, 99, 97, 98)]
+    ma50 = [99, 99, 99, 99]
+    out = _run(_book(rows, ma50), _px(X_TRAIL=PF.TRAIL_MA50, X_INTRA=0.0, X_TRAIL_GATE=0.0))
+    assert int(out[PF.O_REASON]) == PF.R_TRAIL                                # 끔: 종가 98.5 < MA50 99 → 추적 매도
+    out = _run(_book(rows, ma50), _px(X_TRAIL=PF.TRAIL_MA50, X_INTRA=0.0, X_TRAIL_GATE=1.0))
+    assert int(out[PF.O_REASON]) != PF.R_TRAIL and int(out[PF.O_X]) == 3      # 켬: MA50 < 진입가 → 추적 없음(데이터 끝)

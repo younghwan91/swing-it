@@ -96,6 +96,8 @@ def gene_mask(XF: np.ndarray, Ff: np.ndarray, g: dict, fam: str, FI: dict) -> np
             m &= f("mkt_bos") > 0.6
         elif mk == "br200":
             m &= f("mkt_br200") > 0.5
+        if g.get("tt_req"):                                                       # 16b: 미너비니 추세 템플릿(s) ∧ RS ≥ 70
+            m &= (f("tt_s") > 0.5) & (f("rs") >= 70.0)
         am = g.get("atr_max")
         if am is not None:
             cs_ = f("close_s")

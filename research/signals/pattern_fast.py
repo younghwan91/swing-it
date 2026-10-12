@@ -86,14 +86,15 @@ MKT_NHNL_MIN, MKT_BOS_MIN = 0.5, 0.6                  # FWM M7: 신고가 > 신�
  X_SELL_SLIP, X_BE_MULT, X_TIGHT_R, X_PYR_R, X_WB, X_SELL_TICK, X_SELL_EXTRA, X_CLIMAX, X_CLIMAX_DAY, X_CLIMAX_5D,
  X_CLIMAX_R, X_STOP_CLOSE, X_STOP_HARD, X_FAIL_EXIT, X_REENTRY, X_DYN, X_GAP, X_CAP, X_BUF, X_DFLOOR, X_REENTRY_WIN,
  X_SMAX, X_INTRA, X_TRAIL_START, X_TRAIL_CLOSE, X_SAFE, X_BE_CLOSE, X_RISK, X_CLIMAX_CLOSE, X_PYR_CLOSE,
- X_ENTRY_CLOSE, X_ON_HOLD, X_LOCK_TO, X_REV_R, X_REV_NEXT, X_PLOW_R, X_CLOSE_CUT) = range(48)
+ X_ENTRY_CLOSE, X_ON_HOLD, X_LOCK_TO, X_REV_R, X_REV_NEXT, X_PLOW_R, X_CLOSE_CUT, X_TRAIL_GATE) = range(49)
+#: 16b(미너비니 Champion p162): X_TRAIL_GATE 1 = 이동평균 추적은 그 선이 진입가 이상일 때만(0 = 기존)
 #: 13세대(EVENT_FAMILIES.md): X_ENTRY_CLOSE = 진입 행 d 종가 매수(d 장중 처리 없음 · 최고가 시작 = e · 진입일 대조 0),
 #: X_ON_HOLD = 종가 진입 뒤 첫 거래일 시가 < e × (1 + 값)이면 시가 전량(오버나이트; ∞ = 늘 시가, NaN = 끔)
 #: 13세대 청산 분석(하이쿠 8 에이전트, exitlab): X_LOCK_TO = 본전 발동 뒤 손절 = e + 값·R(NaN = 기존 e × 1.005),
 #: X_REV_R = 고가가 e + 값·R 에 닿은 뒤 종가가 그날 범위 아래 1/3 이면 반전 청산(X_REV_NEXT 1 = 다음날 시가, 0 = 그 종가),
 #: X_PLOW_R = 고가가 e + 값·R 에 닿은 다음날부터 손절 ≥ 전일 저가(올리기만), X_CLOSE_CUT = 종가 < e − 값·R 이면 그 종가 전량
 #: (진입일 포함, 조건 손절 — 시간 아님). 모두 NaN = 끔.
-N_X = 48                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
+N_X = 49                                              # FWM: X_SMAX = 재진입 손절에도 같은 손절폭 상한(NaN = 끔) · X_INTRA = 장중 청산
 LINE_RE_CAP = 0.095                                   # 정정 9 선 복귀 재진입 9.5% 거르기
 R_CLIMAX = 8                                          # 정정 4 급등(클라이맥스) 매도 — :data:`vcp.REASONS` 뒤에 붙인 사유
 R_REV = 10                                            # 13세대 반전봉 청산(아래 1/3 종가)
@@ -113,7 +114,7 @@ REASONS = (*_V_REASONS, "climax", "fail_exit", "reversal")
 SLOTS, SLOT_W = 10, 0.10
 WB_PYR = 2.0 / 3.0                                    # 불타기 켬: 처음 2/3 · 추가 1/3(정정 0)
 LIVE_X = np.array([2.0, 0.5, TRAIL_MA50, 3.0, 0, PYR_OFF, np.inf, 1, 120, 0, 0.001, 0.001, 1.0, 3.0, 1.0, WB_PYR, 0, 0.0,
-                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0, 0, np.nan, np.nan, np.nan, 0, np.nan, np.nan])
+                   0, 0.15, 0.30, 4.0, 0, 2.0, 0, 0, 0, 0.03, 0.095, 0.0, 0.02, 0, np.nan, 0, 0.0, 0, 0, 0, np.nan, 0, 0, 0, np.nan, np.nan, np.nan, 0, np.nan, np.nan, 0])
 
 F_LEVEL, F_ORDER, F_H0, F_SUP, F_SLO, F_RHO, F_TOUCH, F_SPAN = (FI["level"], FI["order"], FI["h0"], FI["s_up"], FI["s_lo"],
                                                                FI["rho"], FI["touch"], FI["span"])
@@ -361,6 +362,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
     tight_level = e + px[X_TIGHT_R] * R
     smx = px[X_SMAX]                                  # 리뷰 FWM M2: 추가분에도 손절폭 상한(NaN = 끔)
     t_start = e + px[X_TRAIL_START] * R              # 진화 1세대: 추적은 고가가 진입가 + k·R 에 닿은 뒤부터(0 = 기존)
+    t_gate = px[X_TRAIL_GATE] > 0.5                   # 16b: 이동평균 추적선 ≥ 진입가일 때만
     t_close = px[X_TRAIL_CLOSE] > 0.5                 # 진화 1세대: 추적만 종가 판단(→ 다음날 시가), 손절·본전은 장중
     safe4 = px[X_SAFE] > 3.5                          # 8세대(검증 10차): 진입일 장중 고가로 본전 이동을 켜지 않는다(TCC스틸 2020-12)
     pyr_close = px[X_PYR_CLOSE] > 0.5                 # 10세대(검증 12차 — 미너비니 시험 매수): +1R 추가를 종가 확인으로
@@ -516,6 +518,8 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                             tl = hh - k_use * a
                     else:
                         tl = MA20[ci, t - 1] if trail == TRAIL_MA20 else MA50[ci, t - 1]
+                        if t_gate and tl == tl and tl < e:
+                            tl = np.nan
                     if tl == tl and tl > lx:
                         lx = tl
                         why_x = R_TRAIL
@@ -704,7 +708,7 @@ def _path_py(Op, H, L, C, MA20, MA50, ATR, TR, LIM, ci, d, e, sp, fb_line, h0, u
                     pending = R_TRAIL
             else:
                 m = MA20[ci, t] if trail == TRAIL_MA20 else MA50[ci, t]
-                if m == m and ct < m:
+                if m == m and ct < m and not (t_gate and m < e):
                     pending = R_TRAIL
         if safe3 and not lock_on and ct >= e + 3.0 * R:   # 4세대: 오늘 종가가 +3R 이상이면 다음날부터 잠금
             lock_on = True
