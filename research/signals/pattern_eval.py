@@ -10,6 +10,11 @@
   창의 연도 수 < 128 만 받는다(그 이상은 numpy 가 재귀로 나눈다).
 - 월 합·블록 부트스트랩·백분위는 ``krx_quant_core.research.evolve.kernels`` 의 njit 판(``*_nb``)을 쓴다 —
   ``ga_fast.block_boot`` + ``np.percentile`` 과 비트 동일(코어 시험).
+- :func:`screen_kernel` = 건수만 선별(재시작 풀)을 덩어리 하나에 njit 한 번. 행마다 먼저 :func:`_prunable` 이 사건을 **연도
+  조각**으로(싼 해부터) 거르며 연도 하한 ``ny[y] ≥ FLOOR_YEAR·f``·총 하한 ``n ≥ ffloor`` 의 상한(진입은 사건일에만,
+  재진입은 원 트레이드 하나에 많아야 하나)을 대조해 실현 불가가 드러나면 그 행을 버린다(``n = -1``). 버린 행은
+  :meth:`Engine.evaluate` 로도 실현 불가이고, 살아남은 행은 원래 계산 그대로다 — 선별 결과(실현 가능 행·진입 수)는 행마다
+  부르는 것과 같다(``tests/test_pattern_eval.py``·실캐시 대조).
 - numba 가 없으면 같은 소스가 파이썬으로 돈다(느리지만 같은 숫자). ``_jit`` 은 :mod:`vcp` 규약(``cache=False``) —
   numba 디스크 캐시는 다른 파일의 피호출 커널이 바뀌어도 무효화하지 않는다.
 """
@@ -23,12 +28,12 @@ from research.signals import pattern_fast as PF
 from research.signals.pattern_events import FI, II
 from research.signals.vcp import _jit
 
-__all__ = ["OUT_NAMES", "evaluate_kernel", "year_mean_np"]
+__all__ = ["OUT_NAMES", "evaluate_kernel", "screen_kernel", "year_mean_np"]
 
 _F_SUP, _F_SLO, _F_H0 = FI["s_up"], FI["s_lo"], FI["h0"]
 _F_STRAT, _F_MKT, _F_U, _F_SU, _F_E, _F_SL = FI["strat"], FI["market"], FI["u_d"], FI["su"], FI["E"], FI["sl"]
 _I_D, _I_CI, _I_I0, _I_ID, _I_IE = II["d"], II["ci"], II["i0"], II["iD"], II["iE"]
-_N_Q, _N_X, _X_DYN = PF.N_Q, PF.N_X, PF.X_DYN
+_N_Q, _N_X, _X_DYN, _X_RE = PF.N_Q, PF.N_X, PF.X_DYN, PF.X_REENTRY
 
 #: ``out`` 칸 이름(순서).
 OUT_NAMES = ("n", "n_pass", "pen", "feasible", "fit", "lower")
@@ -66,11 +71,95 @@ def _year_mean_py(v, m):
 year_mean_np = _jit(_year_mean_py)
 
 
+def _violated_py(cnt, need, re_on, ffloor):
+    """연도별 통과 상한 ``cnt`` 로 실현 가능(``ny[y] ≥ need[y]``·``n ≥ ffloor``)이 불가능한가. 진입은 사건일에만 일어나므로
+    원 트레이드 ``ny[y] ≤ cnt[y]``, 재진입(원 트레이드 하나에 많아야 하나, 그 트레이드 진입 뒤)까지 ``ny[y] ≤ 2·cnt[y] + Σ_{y'<y} cnt``."""
+    before = 0.0
+    for y in range(cnt.shape[0]):
+        c = cnt[y]
+        if need[y] > 0:
+            b = 2.0 * c + before if re_on else c
+            if b < need[y] - 1e-9:
+                return True
+        before += c
+    return (2.0 if re_on else 1.0) * before < ffloor - 1e-9
+
+
+_violated = _jit(_violated_py)
+
+
+def _prunable_py(F, Iv, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf, fw_on, fw_lo,
+                 re_on, year_of, n_years, yrow0, ffloor, yidx, yfrac, floor_year):
+    """건수만 선별 가지치기 — 사건을 연도 조각으로 나눠(재진입 끔이면 사건이 적은 해부터, 켬이면 날짜 순) 거르며, 거른 해는 통과 수,
+    아직 안 거른 해는 사건 수를 상한으로 :func:`_violated` 를 본다. 버퍼는 덮어쓴다(살아남은 행은 원래 순서로 다시 거른다)."""
+    raw = np.zeros(n_years)
+    slo = np.zeros(n_years, np.int64)
+    shi = np.zeros(n_years, np.int64)
+    k0 = aa
+    while k0 < bb:
+        y = year_of[Iv[k0, _I_D]]
+        lim = yrow0[y + 1]
+        lo, hi = k0 + 1, bb                           # 다음 해 첫 사건(사건은 표 안에서 날짜 순)
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            if Iv[mid, _I_D] < lim:
+                lo = mid + 1
+            else:
+                hi = mid
+        raw[y] = lo - k0
+        slo[y] = k0
+        shi[y] = lo
+        k0 = lo
+    need = np.zeros(n_years)
+    for i in range(yfrac.shape[0]):
+        if yfrac[i] > 0:
+            need[yidx[i]] = floor_year * yfrac[i]
+    cnt = raw.copy()
+    done = np.zeros(n_years, np.bool_)
+    while True:
+        if _violated(cnt, need, re_on, ffloor):
+            return True
+        y = -1                                        # 재진입 켬: 날짜 순(앞 해 상한이 줄어야 뒤 해가 묶인다) · 끔: 사건이 적은 해부터
+        for yy in range(n_years):
+            if done[yy] or raw[yy] == 0:
+                continue
+            if y < 0 or (not re_on and (raw[yy] < raw[y] or (raw[yy] == raw[y] and need[yy] > need[y]))):
+                y = yy
+        if y < 0:
+            return False
+        done[y] = True
+        ns = PF.filter_events(F, slo[y], shi[y], gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf)
+        mk = 0
+        for j in range(ns):
+            if fw_on:
+                ev = b_idx[j]
+                su_ = F[ev, _F_SUP]
+                sl_ = F[ev, _F_SLO]
+                if not ((su_ < 0.0) and (sl_ < fw_lo) and (su_ < sl_)):
+                    continue
+            mk += 1
+        cnt[y] = mk
+
+
+_prunable = _jit(_prunable_py)
+
+
 def _eval_py(F, Fo, Iv, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf,
              fw_on, fw_lo, xv, Op, H, L, C, MA20, MA50, ATR, TR, LIM, bs, bn, strat_cs, cost_tab,
              cost_mult, pmix, t_lo, t_end, slots, slot_w, year_of, n_years, reform,
-             month_of, ffloor, yidx, yfrac, floor_year, lam, counts_only, block, n_boot, seed, q, out):
-    """학습창 적합도 한 번. ``out`` (길이 6, :data:`OUT_NAMES`) 을 채운다. ``counts_only`` 면 fit·lower 는 NaN."""
+             month_of, ffloor, yidx, yfrac, floor_year, lam, counts_only, block, n_boot, seed, q, prune, yrow0, out):
+    """학습창 적합도 한 번. ``out`` (길이 6, :data:`OUT_NAMES`) 을 채운다. ``counts_only`` 면 fit·lower 는 NaN.
+    ``prune`` (``counts_only`` 일 때만) = :func:`_prunable` 이 실현 불가를 보이면 ``n = n_pass = -1``·``feasible = 0`` 으로 끝낸다
+    (``yrow0[y]`` = 연도 번호 ``y`` 의 첫 날 행)."""
+    if prune and _prunable(F, Iv, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf, fw_on,
+                           fw_lo, int(xv[_X_RE]) != 0, year_of, n_years, yrow0, ffloor, yidx, yfrac, floor_year):
+        out[0] = -1
+        out[1] = -1
+        out[2] = np.nan
+        out[3] = 0.0
+        out[4] = np.nan
+        out[5] = np.nan
+        return
     n = PF.filter_events(F, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0,
                          b_buf) if bb > aa else 0
     keep = np.ones(n, np.bool_)
@@ -178,3 +267,22 @@ def _eval_py(F, Fo, Iv, aa, bb, gv, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_s
 
 
 evaluate_kernel = _jit(_eval_py)
+
+
+def _screen_py(F, Fo, Iv, AA, BB, GV, lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf, fw_on, FWLO,
+               XV, Op, H, L, C, MA20, MA50, ATR, TR, LIM, bs, bn, strat_cs, cost_tab, cost_mult, pmix, t_lo, t_end,
+               slots, slot_w, year_of, n_years, reform, month_of, ffloor, yidx, yfrac, floor_year, lam, yrow0,
+               feas, n_out):
+    """건수만 선별 덩어리 — 행 ``r`` 마다 :func:`evaluate_kernel` (``counts_only``·``prune``). ``feas[r]`` = 실현 가능,
+    ``n_out[r]`` = 진입 수(버린 행은 −1)."""
+    out = np.empty(6)
+    for r in range(AA.shape[0]):
+        evaluate_kernel(F, Fo, Iv, AA[r], BB[r], GV[r], lu_ratio, b_idx, b_e, b_sp, b_fb, b_amb, b_skip0, b_s0, b_buf,
+                        fw_on, FWLO[r], XV[r], Op, H, L, C, MA20, MA50, ATR, TR, LIM, bs, bn, strat_cs, cost_tab,
+                        cost_mult, pmix, t_lo, t_end, slots, slot_w, year_of, n_years, reform, month_of, ffloor,
+                        yidx, yfrac, floor_year, lam, True, 3, 0, 0, 2.5, True, yrow0, out)
+        feas[r] = out[3] > 0.5
+        n_out[r] = np.int64(out[0])
+
+
+screen_kernel = _jit(_screen_py)

@@ -321,9 +321,10 @@ def canonical(g: dict) -> dict:
 def decode(x) -> dict:
     """CMA 벡터(연속 18 + 로짓 14 [0,1] + 이산 14 단계 인덱스) → 유전자 dict(:func:`canonical`)."""
     x = np.asarray(x, float)
+    xl = x.tolist()                                   # 가속: 스칼라 np.clip 대신 min·max(같은 값 — NaN 도 그대로)
     out: dict = {}
     for i, (name, lo, hi, off) in enumerate(CONT):
-        u = float(np.clip(x[i], 0.0, 1.0))
+        u = min(max(xl[i], 0.0), 1.0)
         if (off == "lo" and u <= OFF_ZONE) or (off == "hi" and u >= 1.0 - OFF_ZONE):
             out[name] = None
         else:
@@ -334,7 +335,7 @@ def decode(x) -> dict:
         out[name] = levels[int(np.argmax(v))]
         j += len(levels)
     for q, (name, levels) in enumerate(DISC):
-        k = int(np.clip(round(float(x[N_CONT + q])), 0, len(levels) - 1))
+        k = min(max(round(xl[N_CONT + q]), 0), len(levels) - 1)
         out[name] = levels[k]
     return canonical(out)
 
@@ -758,6 +759,7 @@ class Engine:
         self.fw_off = False                              # 리뷰 FW M6: "F1 끔" 짝(같은 config, 하락 쐐기 거르기만 끔)
         self.pmix = float(self.meta.get("p", 0.5))
         self.n_years = int(np.max(self.year_of)) + 1
+        self.yrow0 = np.searchsorted(np.asarray(self.year_of), np.arange(self.n_years + 1)).astype(np.int64)   # 연도 첫 날 행
         self.reform = self.row(PE.TICK_REFORM_DAY)
         mx = int(np.max(np.diff(self.off))) if len(self.off) > 1 else 0
         self._buf = {k: np.empty(max(mx, 1), t) for k, t in (("idx", np.int64), ("e", float), ("sp", float), ("fb", float),
@@ -986,12 +988,41 @@ class Engine:
                             self.MA50, self.ATR, self.TR, self.LIM, self.bs, self.bn, self.strat_cs, self.cost_tab,
                             float(COST_MULT), float(self.pmix), int(w.t_lo), int(w.t_end), PF.SLOTS, PF.SLOT_W,
                             self.year_of, self.n_years, int(self.reform), self.month_of, float(ffloor), yidx, yfrac,
-                            float(FLOOR_YEAR), float(LAMBDA), bool(counts_only), 3, FIT_BOOT, int(seed), 2.5, out)
+                            float(FLOOR_YEAR), float(LAMBDA), bool(counts_only), 3, FIT_BOOT, int(seed), 2.5, False,
+                            self.yrow0, out)
         r = {"n": int(out[0]), "n_pass": int(out[1]), "pen": float(out[2]), "feasible": bool(out[3])}
         if counts_only:
             return r
         r.update(fit=float(out[4]), lower=float(out[5]))
         return r
+
+    def screen_fast(self, gs: "list[dict]", w: Win) -> "tuple[np.ndarray, np.ndarray]":
+        """건수만 선별 — ``evaluate(g, w, counts_only=True)`` 의 (실현 가능, 진입 수)를 덩어리째 njit 한 번으로
+        (:func:`research.signals.pattern_eval.screen_kernel`). 실현 가능 행의 진입 수는 같고, 실현 불가 행의 진입 수는 −1 일 수 있다."""
+        n = len(gs)
+        GV, XV = np.empty((n, PF.N_G)), np.empty((n, PF.N_X))
+        AA, BB, FWLO = np.empty(n, np.int64), np.empty(n, np.int64), np.zeros(n)
+        ab: dict = {}
+        for i, g in enumerate(gs):
+            GV[i], XV[i] = gene_vec(g), exit_vec(g)
+            tid = table_of(g)
+            if tid not in ab:
+                a, b = PE.table_slice(self.off, tid)
+                dcol = self.I[a:b, PE.II["d"]]
+                ab[tid] = (a + int(np.searchsorted(dcol, w.d_lo)), a + int(np.searchsorted(dcol, w.d_hi)))
+            AA[i], BB[i] = ab[tid]
+            if FW:
+                FWLO[i] = float(g["fw_lo"])
+        ffloor, yidx, yfrac = self._pen_arrays(w)
+        B = self._buf
+        feas, nn = np.empty(n, np.bool_), np.empty(n, np.int64)
+        PEV.screen_kernel(self._Fa, self._Foa, self._Ia, AA, BB, GV, float(LIMIT_UP_RATIO), B["idx"], B["e"], B["sp"],
+                          B["fb"], B["amb"], B["skip0"], B["s0"], B["buf"], bool(FW and not self.fw_off), FWLO, XV, self.O,
+                          self.H, self.L, self.C, self.MA20, self.MA50, self.ATR, self.TR, self.LIM, self.bs, self.bn,
+                          self.strat_cs, self.cost_tab, float(COST_MULT), float(self.pmix), int(w.t_lo), int(w.t_end),
+                          PF.SLOTS, PF.SLOT_W, self.year_of, self.n_years, int(self.reform), self.month_of, float(ffloor),
+                          yidx, yfrac, float(FLOOR_YEAR), float(LAMBDA), self.yrow0, feas, nn)
+        return feas, nn
 
     def evaluate_ref(self, g: dict, w: Win, *, seed: int = FIT_SEED, counts_only: bool = False, allow=None,
                      want_monthly: bool = False) -> dict:
@@ -1173,6 +1204,10 @@ def screen_chunk(E: Engine, w: Win, fold: int, chunk: int, n: int) -> "tuple[np.
     """건수만 선별(2단계 M1·M2): 균등 추출 덩어리(seed [POOL_SEED, 폴드, 덩어리]) 중 학습창 실현 가능(벌점 0) config 의 벡터·진입 수.
     수익 숫자는 만들지 않는다. 실제·2b 가 같은 덩어리 seed 를 쓴다(자료만 다르다)."""
     X = random_x(np.random.default_rng([POOL_SEED, fold, chunk]), n)
+    if FAST_EVAL and not E.fam_on:                    # 가속: 덩어리째 njit 한 번(연도 조각 가지치기 — 결과 같음)
+        feas, nn_all = E.screen_fast([decode(x) for x in X], w)
+        keep_ = np.flatnonzero(feas)
+        return X[keep_], nn_all[keep_]
     keep, nn = [], []
     for i in range(n):
         r = E.evaluate(decode(X[i]), w, counts_only=True)
