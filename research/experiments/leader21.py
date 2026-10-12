@@ -52,22 +52,29 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
 
 
 def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,  # noqa: E741
-          raw_close: bool = False, session: str = "raw", aftermarket_fix: bool = False, unpatched: str = "nan") -> dict:
+          raw_close: bool = False, session: str = "raw", aftermarket_fix: bool = False, unpatched: str = "nan",
+          tv_wide: "np.ndarray | None" = None, cap_wide: "np.ndarray | None" = None) -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통.
 
     ``session``·``aftermarket_fix``·``unpatched`` 는 정문 인자 그대로(기본 = 기존 팔 고정값 ``"raw"``·``False``·``"nan"`` — raw 면
     unpatched 는 동작 없음). 모의매매 쌍 팔 ``*_rs``(META_EVOLUTION.md '전진 팔 *_rs 사전등록' + 보충)만 ``"regular"``·``True``·``"raw"``
     — 그 뒤의 ``krx_patch`` 분봉 보정은 멱등이라 그대로 둔다.
+
+    ``tv_wide``(종목×날짜 거래대금, 백만원)·``cap_wide``(종목×날짜 시총)를 주면 DB 에서 읽지 않고 그것을 쓴다 — 30 독립 표본(2008~2016,
+    가격 원천 = daily_bars_adj_v2)용. 기본 None = 기존 경로 그대로.
     """
     from swing_it.features.eps_asof import eps_ok
     from swing_it.storage import read_prices
-    tv = read_prices(con, session=session, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True, unpatched=unpatched)
     sess = None
-    if krx_patch:                                   # 모의매매: 2026-09-14+ KRX 애프터마켓 섞인 일봉 → 분봉 정규장 값(krx_session)
-        from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
-        sess = read_session_bars_agg(con, start=NXT_START)
-        tv = patch_prices(tv, sess, adjusted=False)
-    tvw = tv.pivot_table(index="date", columns="code", values="trade_value", aggfunc="last").reindex(index=days, columns=codes)
+    if tv_wide is None:
+        tv = read_prices(con, session=session, cols=("code", "date", "trade_value"), start="2016-08-01", parse_dates=True, unpatched=unpatched)
+        if krx_patch:                               # 모의매매: 2026-09-14+ KRX 애프터마켓 섞인 일봉 → 분봉 정규장 값(krx_session)
+            from swing_it.krx_session import NXT_START, patch_prices, read_session_bars_agg
+            sess = read_session_bars_agg(con, start=NXT_START)
+            tv = patch_prices(tv, sess, adjusted=False)
+        tvw = tv.pivot_table(index="date", columns="code", values="trade_value", aggfunc="last").reindex(index=days, columns=codes)
+    else:
+        tvw = pd.DataFrame(np.asarray(tv_wide, float).T, index=days, columns=codes)
     adv = tvw.rolling(20, min_periods=15).mean().to_numpy().T
     Cd = pd.DataFrame(C.T)
     ma = {w: _roll(Cd, w, "mean") for w in (50, 100, 150, 200)}
@@ -83,8 +90,10 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     brk = {n: C >= _roll(Cd, n, "max") - 1e-9 for n in GRID["N"]}
     # 시가총액(원 종가 × 상장주식수 as-of) → 그날 순위 · 시총 가중 시장(KOSPI 대용) 200일선 국면
     from swing_it.storage import read_shares
-    sh = read_shares(con, parse_dates=True)  # 정문(가드레일 (k)) — 예전 직접 SELECT 와 같은 행(0 이하 주식수 없음 확인)·순서
-    if raw_close:                                   # 정정 G28-4: 원 종가 × 분할 일관 주식수(krx_session.split_consistent_cap)
+    sh = read_shares(con, parse_dates=True) if cap_wide is None else None  # 정문(가드레일 (k)) — 예전 직접 SELECT 와 같은 행·순서
+    if cap_wide is not None:                        # 30 독립 표본: 부르는 쪽이 만든 시총
+        cap, n_bad = np.asarray(cap_wide, float), -1
+    elif raw_close:                                   # 정정 G28-4: 원 종가 × 분할 일관 주식수(krx_session.split_consistent_cap)
         from swing_it.krx_session import read_raw_close, split_consistent_cap
         rc = read_raw_close(con, start="2016-08-01", aftermarket_fix=aftermarket_fix)
         rcw = rc.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
