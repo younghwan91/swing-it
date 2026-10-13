@@ -46,16 +46,21 @@ ARMS["leader_M"] = {"theta": 70, "N": 20, "ma_exit": 100, "hard": 0.15, "pyramid
 ARMS["leader_P"] = {**ARMS["leader_M"], "chase_max": 0.05, "stop": "struct", "stop_max": 0.10}
 # 전진 팔(META '32 RL 단계 사전등록' RL-1): leader_P 와 같고 슬롯 순위만 RL-1 예측 R(모델 = rl32.MODEL_DIR, 해시 고정)
 ARMS["leader_P_RL"] = {**ARMS["leader_P"], "rank_score": "score_rl32"}
-PAIR = {**RS_PAIR, "leader_M": "leader_C_rs", "leader_P": "leader_M", "leader_P_RL": "leader_P"}
-DETAIL_ARMS = ("leader_M", "leader_P", "leader_P_RL")            # 장부 행에 손절선·비중·그날 청산 거래를 더하는 팔(정정 GP-1 M5) — 기존·*_rs 팔 행은 그대로
+# 전진 팔(META '정정 31-3', 31 정정 31-2 등록 바 통과 → 등록 규칙): leader_M 후보 ∧ F_ana(같은 증권사 직전 목표가 대비 순상향 ≥ 1,
+# [t−20, t−1] 에 알게 된 리포트) — 신호 계산 = research.experiments.ana31(시험과 같은 코드)
+ARMS["leader_M_ana"] = {**ARMS["leader_M"], "cand_and": "F_ana"}
+PAIR = {**RS_PAIR, "leader_M": "leader_C_rs", "leader_P": "leader_M", "leader_P_RL": "leader_P", "leader_M_ana": "leader_M"}
+DETAIL_ARMS = ("leader_M", "leader_P", "leader_P_RL", "leader_M_ana")            # 장부 행에 손절선·비중·그날 청산 거래를 더하는 팔(정정 GP-1 M5) — 기존·*_rs 팔 행은 그대로
 ARM_LEDGER = {"leader_C20": "research/paper/leader_c20_ledger.jsonl",
               **{k: "research/paper/leader_rs_ledger.jsonl" for k in RS_PAIR}, "leader_M": "research/paper/leader_m_ledger.jsonl",
-              "leader_P": "research/paper/leader_p_ledger.jsonl", "leader_P_RL": "research/paper/leader_p_rl_ledger.jsonl"}
+              "leader_P": "research/paper/leader_p_ledger.jsonl", "leader_P_RL": "research/paper/leader_p_rl_ledger.jsonl",
+              "leader_M_ana": "research/paper/leader_m_ana_ledger.jsonl"}
 PRICE_RAW = {"session": "raw", "aftermarket_fix": False, "unpatched": "nan"}   # 기존 팔 고정값(바꾸지 않는다; session="raw" 라 unpatched 는 동작 없음)
 # 쌍 팔: unpatched="raw" = 정문이 종가는 분봉 > 항등식으로 고치고, 고칠 원천 없는 고가·저가·거래량·거래대금은 원값 유지(krx_src 표시)
 # — META_EVOLUTION.md '*_rs 보충 — 정문 보정 범위 확대(첫 기록 전)'.
-ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M", "leader_P", "leader_P_RL")}
+ARM_PRICE = {k: {"session": "regular", "aftermarket_fix": True, "unpatched": "raw"} for k in (*RS_PAIR, "leader_M", "leader_P", "leader_P_RL", "leader_M_ana")}
 ARM_START = {k: "2026-10-13" for k in (*RS_PAIR, "leader_M", "leader_P", "leader_P_RL")}                     # 첫 기록 거래일 — 그 전 날짜 행은 장부에 쓰지 않는다(소급 성적 없음)
+ARM_START["leader_M_ana"] = "2026-10-14"        # 정정 31-3: 등록(10-13 장중) 다음 거래일부터 — 첫 기록 거래일 전 행은 장부에 쓰지 않는다(소급 성적 없음)
 
 
 def load_db(con, session: str = "raw", info: "dict | None" = None, unpatched: str = "nan") -> tuple:
@@ -110,6 +115,10 @@ def main() -> None:
     if cfg.get("rank_score") == "score_rl32":     # 32 RL-1: 후보 칸 예측 R(해시 검사 포함)
         from research.experiments.rl32 import score_array
         D["score_rl32"] = score_array(D, cfg, con)
+    if cfg.get("cand_and") == "F_ana":             # 정정 31-3: 시험 31 과 같은 신호 코드
+        from research.experiments.ana31 import WIN, report_events, window_sum
+        net, _ = report_events(con, days, codes)
+        D["F_ana"] = window_sum(net, WIN) >= 1
     a.ledger = a.ledger or ARM_LEDGER.get(a.arm, LEDGER)
     st: dict = {}
     eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st, paper=True)
