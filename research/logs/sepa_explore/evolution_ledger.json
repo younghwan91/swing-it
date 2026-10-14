@@ -145,5 +145,55 @@
   "headline_excess": -0.0134,
   "verdict": "VOID",
   "verified_note": "G28-2: daily_bars.close retro-adjusted for splits -> cap ranks broken; not re-run (post-hoc); G28-4/5 cap gateway fixed (split-consistent shares)"
+ },
+ {
+  "gen": "I30",
+  "label": "30 independent sample 2009-01-02..2016-08-31 (daily_bars_adj_v2 + earnings_dart_doc, 5 arms, pre-registered bars)",
+  "metric": "CAGR 2x cost (C_close) / exposure-matched cap-weighted market",
+  "headline_cagr_C": 0.0615,
+  "expo_mkt_cagr": -0.009,
+  "alpha_t_C": 0.95,
+  "drop_top5_cagr_C": -0.0159,
+  "n_trades": {
+   "A_open": 231,
+   "C_close": 231,
+   "leader_M": 1363,
+   "leader_P": 909,
+   "leader_P_RL": 904
+  },
+  "R_mean": {
+   "leader_M": -0.109,
+   "leader_P": 0.018,
+   "leader_P_RL": -0.009
+  },
+  "bars": {
+   "30_C_alpha": {
+    "b1": true,
+    "b2": false,
+    "b3": false,
+    "b4": true
+   },
+   "30s4_M": {
+    "b1": false,
+    "b2": false,
+    "b3": false,
+    "b4": false
+   },
+   "GP1_P": {
+    "b1": false,
+    "b2": false,
+    "b3": true
+   },
+   "32_RL1": {
+    "b1": false,
+    "b2": false,
+    "b3": true,
+    "diff_lo": -0.18105926505642303
+   }
+  },
+  "verdict": "FAIL (all 5 arms; C alpha bars 2,3 false; M 1-4 false; P 1,2 false; RL-1 1,2 false) — pre-verification",
+  "head": "65e27f9",
+  "run_at": "2026-10-15T03:26:58+09:00",
+  "verified_note": ""
  }
 ]
