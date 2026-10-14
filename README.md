@@ -5,11 +5,11 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
 **한국 주식(KOSPI·KOSDAQ) 리서치 저장소.** 매일의 주체별 순매매를 섹터 단위로 재서
-터미널에서 보는 kqflow 가 이 저장소의 주 화면이고, 그 옆에 가설을 개별 트레이드
+터미널에서 보는 sw-flow 가 이 저장소의 주 화면이고, 그 옆에 가설을 개별 트레이드
 분포로 심사하는 알파 심사 프레임워크가 있다.
 
 두 축의 성격은 다르다. 관측은 지금 무슨 일이 일어났는가만 재고 심사는 이 신호가
-미래 수익을 예측하는가를 묻는다. kqflow 의 모든 지표는 측정값이고 동시기(同時期)다.
+미래 수익을 예측하는가를 묻는다. sw-flow 의 모든 지표는 측정값이고 동시기(同時期)다.
 돈이 들어온 섹터가 앞으로 오른다는 주장이 아니다([§6](#6-주의--이-숫자들은-예측이-아니다)).
 
 > **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터,
@@ -18,7 +18,7 @@
 
 ## 목차
 
-1. [kqflow — 무엇을 보여주나](#1-kqflow--무엇을-보여주나)
+1. [sw-flow — 무엇을 보여주나](#1-sw-flow--무엇을-보여주나)
 2. [설치와 실행](#2-설치와-실행)
    · [데이터는 어떻게 받나](#23-데이터는-어떻게-받나--리포트-폴더를-그대로-주고받는다) — DB 없이 리포트 폴더만 받아서 보는 법
    · [아키텍처 한눈에](#24-아키텍처-한눈에) — quant-airflow ↔ DB ↔ 리포트 ↔ 화면
@@ -34,7 +34,7 @@
 
 ---
 
-## 1. kqflow — 무엇을 보여주나
+## 1. sw-flow — 무엇을 보여주나
 
 `sw-flow` 는 오늘 어느 섹터에 돈이 들어오고 나갔는지를 한 화면에 놓는다. 27개 벤더
 섹터 × 4개 구간(5·20·60·120거래일)과 이를 요약하는 `종합` × 3개 시장(전체·거래소·코스닥)
@@ -549,13 +549,17 @@ uv run python scripts/check_guardrails.py    # 경계·판정·정문·하버스
 
 | 축 | 프로젝트 | 설명 |
 |---|---|---|
-| 한국 주식 | **[quant-airflow](https://github.com/younghwan91/quant-airflow)** | 시세·수급·실적을 TimescaleDB 로 수집하는 Airflow 파이프라인 — 이 저장소가 읽는 DB 를 만든다 |
-| 한국 주식 | **[kiwoom-client](https://github.com/younghwan91/kiwoom-client)** | 키움증권 REST API Python 라이브러리 — 국내주식 엔드포인트 전수·실시간 WebSocket (`pip install kiwoom-client`) |
-| 한국 주식 | **[krx-fundamentals-client](https://github.com/younghwan91/krx-fundamentals-client)** | 국내 기업 펀더멘탈 Python 클라이언트 라이브러리 — 재무제표·투자지표·배당·종목 스크리닝 |
-| 한국 주식 | **[krx-news-client](https://github.com/younghwan91/krx-news-client)** | 한국 주식 뉴스·공시 수집 Python 클라이언트 라이브러리 |
-| 미국 주식 | **[portfolio-research](https://github.com/younghwan91/portfolio-research)** | 미국주식 팩터 엔진 — point-in-time·생존편향 보정 데이터 위에서 walk-forward 를 Deflated Sharpe·PBO 로 게이팅 |
-| 미국 주식 | **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp 의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |
-| 암호화폐 | **[binance-quant-engine](https://github.com/younghwan91/binance-quant-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
+| 🇰🇷 한국 주식 | **[kiwoom-client](https://github.com/younghwan91/kiwoom-client)** | 키움증권 REST API Python 라이브러리 — 국내주식 엔드포인트 전수·실시간 WebSocket, sync + async (`pip install kiwoom-client`) |
+| 🇰🇷 한국 주식 | **[krx-fundamentals-client](https://github.com/younghwan91/krx-fundamentals-client)** | 국내 기업 펀더멘탈 Python 클라이언트 라이브러리 — 재무제표·투자지표·배당·종목 스크리닝 (DART + KRX + 네이버) |
+| 🇰🇷 한국 주식 | **[krx-news-client](https://github.com/younghwan91/krx-news-client)** | 한국 주식 뉴스·공시 수집 Python 클라이언트 라이브러리 (DART + 한국경제 + 더벨 + 토스) |
+| 🇰🇷 한국 주식 | **[krx-quant-core](https://github.com/younghwan91/krx-quant-core)** | 한국 주식 퀀트 시스템 공통 Python 코어 — KRX 호가·가격제한폭·세션 규칙, 시행일별 거래세 비용모델, 키움 주문 가드, DART 중대공시 위험 분류, 체결 시뮬레이션, Deflated Sharpe·purged CV 통계 |
+| 🇰🇷 한국 주식 | **[fin-checkup](https://github.com/younghwan91/fin-checkup)** | 관심종목 위험 공시 텔레그램 알림 + DART·SEC 재무 건강검진 — 측정값과 사실만 전달한다 |
+| 🇰🇷 한국 주식 | **[quant-airflow](https://github.com/younghwan91/quant-airflow)** | 시세·수급·실적을 TimescaleDB 로 수집하는 Airflow 파이프라인 — 상장폐지 종목까지 담아 생존편향을 막는다 |
+| 🇺🇸 미국 주식 | **[portfolio-research](https://github.com/younghwan91/portfolio-research)** | 미국주식 팩터 엔진 — point-in-time·생존편향 보정 데이터 위에서 walk-forward 를 Deflated Sharpe·PBO 로 게이팅 (+ ETF 전술배분 TAA — 9개 사전등록, 채택 0) |
+| 🇺🇸 미국 주식 | **[macro-sector-agent](https://github.com/younghwan91/macro-sector-agent)** | 하향식 미국 산업 사이클 리서치 — "어느 산업이 잊혔나"를 묻고 기계는 제외만 한다 |
+| 🇺🇸 미국 주식 | **[automated-stock-trading-systems](https://github.com/younghwan91/automated-stock-trading-systems)** | Bensdorp 의 7개 비상관 트레이딩 시스템 백테스터 (교육용 재구현) |
+| ₿ 암호화폐 | **[binance-quant-engine](https://github.com/younghwan91/binance-quant-engine)** | 암호화폐 선물 백테스트·실행 엔진 — 룩어헤드 0, 백테스트↔실거래 일체화 |
+| ₿ 암호화폐 | **[crypto-quant-insights](https://github.com/younghwan91/crypto-quant-insights)** | 실거래 선물 시스템 검증 차트 연구 노트 — 폭락 스트레스 테스트·Kelly 레버리지·체결 간극 |
 
 ## 라이선스
 
@@ -565,5 +569,11 @@ MIT
 
 **채영환 (Younghwan Chae)** · [GitHub @younghwan91](https://github.com/younghwan91) · [LinkedIn](https://www.linkedin.com/in/younghwan-chae/)
 
-버그·질문은 [Issues](https://github.com/younghwan91/swing-it/issues) 로. 전체 오픈소스 퀀트
-스택은 [프로필](https://github.com/younghwan91)에서 볼 수 있습니다.
+전체 오픈소스 퀀트 스택은 [프로필](https://github.com/younghwan91)에서 볼 수 있습니다.
+
+## ⭐ 도움이 되셨다면 (Star)
+
+이 프레임워크가 유용했다면 우측 상단 **[⭐ Star](https://github.com/younghwan91/swing-it)** 를 눌러주세요. 검색·추천 노출이 올라가 더 많은 분들이 찾을 수 있습니다.
+
+- 🐛 버그·질문 → [Issues](https://github.com/younghwan91/swing-it/issues)
+- 📈 업데이트 소식 → [팔로우 @younghwan91](https://github.com/younghwan91)
