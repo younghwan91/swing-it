@@ -1,0 +1,608 @@
+{
+ "window": [
+  "2008-01-01",
+  "2016-08-31"
+ ],
+ "adv_min": 1000.0,
+ "bars": {
+  "listed": 0.9,
+  "delisted": 0.85,
+  "gap_pp": 0.05
+ },
+ "canary": {
+  "samsung_days": 2152,
+  "samsung_cal_days": 2152,
+  "samsung_min": 407500.0,
+  "samsung_max": 1687000.0,
+  "samsung_jumps_gt15pct": 0,
+  "samsung_jumps_gt30pct": 0,
+  "kind_delist_2008_2016": 539,
+  "kind_in_v2": 537,
+  "kind_cover": 0.9963,
+  "kind_common": 539,
+  "kind_common_cover": 0.9963,
+  "v2_delisted_codes": 935,
+  "ok": true
+ },
+ "table": [
+  {
+   "year": 2009,
+   "group": "listed",
+   "stock_days": 113770,
+   "non_dec_days": 8831,
+   "non_dec_share": 0.0776,
+   "denom": 104939,
+   "covered": 99601,
+   "coverage": 0.9491,
+   "prior_missing_share": 0.0406,
+   "no_row_share": 0.0102,
+   "pref_share": 0.0,
+   "foreign_share": 0.0,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 798,
+   "n_codes_non_dec": 61
+  },
+  {
+   "year": 2009,
+   "group": "delisted",
+   "stock_days": 57430,
+   "non_dec_days": 3939,
+   "non_dec_share": 0.0686,
+   "denom": 53491,
+   "covered": 49412,
+   "coverage": 0.9237,
+   "prior_missing_share": 0.0503,
+   "no_row_share": 0.0259,
+   "pref_share": 0.0068,
+   "foreign_share": 0.0109,
+   "no_report_or_map_share": 0.0079,
+   "n_codes": 387,
+   "n_codes_non_dec": 30
+  },
+  {
+   "year": 2010,
+   "group": "listed",
+   "stock_days": 119792,
+   "non_dec_days": 7879,
+   "non_dec_share": 0.0658,
+   "denom": 111913,
+   "covered": 104281,
+   "coverage": 0.9318,
+   "prior_missing_share": 0.0488,
+   "no_row_share": 0.0194,
+   "pref_share": 0.0,
+   "foreign_share": 0.0014,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 908,
+   "n_codes_non_dec": 58
+  },
+  {
+   "year": 2010,
+   "group": "delisted",
+   "stock_days": 46343,
+   "non_dec_days": 3118,
+   "non_dec_share": 0.0673,
+   "denom": 43225,
+   "covered": 38817,
+   "coverage": 0.898,
+   "prior_missing_share": 0.0521,
+   "no_row_share": 0.0498,
+   "pref_share": 0.0148,
+   "foreign_share": 0.0249,
+   "no_report_or_map_share": 0.0184,
+   "n_codes": 338,
+   "n_codes_non_dec": 22
+  },
+  {
+   "year": 2011,
+   "group": "listed",
+   "stock_days": 127104,
+   "non_dec_days": 7185,
+   "non_dec_share": 0.0565,
+   "denom": 119919,
+   "covered": 112151,
+   "coverage": 0.9352,
+   "prior_missing_share": 0.0416,
+   "no_row_share": 0.0232,
+   "pref_share": 0.0,
+   "foreign_share": 0.0018,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 939,
+   "n_codes_non_dec": 52
+  },
+  {
+   "year": 2011,
+   "group": "delisted",
+   "stock_days": 34973,
+   "non_dec_days": 2142,
+   "non_dec_share": 0.0612,
+   "denom": 32831,
+   "covered": 29315,
+   "coverage": 0.8929,
+   "prior_missing_share": 0.0509,
+   "no_row_share": 0.0562,
+   "pref_share": 0.019,
+   "foreign_share": 0.0338,
+   "no_report_or_map_share": 0.0154,
+   "n_codes": 290,
+   "n_codes_non_dec": 18
+  },
+  {
+   "year": 2012,
+   "group": "listed",
+   "stock_days": 143931,
+   "non_dec_days": 6896,
+   "non_dec_share": 0.0479,
+   "denom": 137035,
+   "covered": 131012,
+   "coverage": 0.956,
+   "prior_missing_share": 0.0256,
+   "no_row_share": 0.0184,
+   "pref_share": 0.0,
+   "foreign_share": 0.0017,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 1038,
+   "n_codes_non_dec": 52
+  },
+  {
+   "year": 2012,
+   "group": "delisted",
+   "stock_days": 32010,
+   "non_dec_days": 2341,
+   "non_dec_share": 0.0731,
+   "denom": 29669,
+   "covered": 27781,
+   "coverage": 0.9364,
+   "prior_missing_share": 0.0331,
+   "no_row_share": 0.0306,
+   "pref_share": 0.0061,
+   "foreign_share": 0.0103,
+   "no_report_or_map_share": 0.0023,
+   "n_codes": 237,
+   "n_codes_non_dec": 21
+  },
+  {
+   "year": 2013,
+   "group": "listed",
+   "stock_days": 141222,
+   "non_dec_days": 6209,
+   "non_dec_share": 0.044,
+   "denom": 135013,
+   "covered": 129553,
+   "coverage": 0.9596,
+   "prior_missing_share": 0.0293,
+   "no_row_share": 0.0111,
+   "pref_share": 0.0,
+   "foreign_share": 0.0029,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 1013,
+   "n_codes_non_dec": 45
+  },
+  {
+   "year": 2013,
+   "group": "delisted",
+   "stock_days": 28402,
+   "non_dec_days": 2417,
+   "non_dec_share": 0.0851,
+   "denom": 25985,
+   "covered": 24539,
+   "coverage": 0.9444,
+   "prior_missing_share": 0.0323,
+   "no_row_share": 0.0233,
+   "pref_share": 0.01,
+   "foreign_share": 0.0076,
+   "no_report_or_map_share": 0.0041,
+   "n_codes": 211,
+   "n_codes_non_dec": 17
+  },
+  {
+   "year": 2014,
+   "group": "listed",
+   "stock_days": 144175,
+   "non_dec_days": 2340,
+   "non_dec_share": 0.0162,
+   "denom": 141835,
+   "covered": 131037,
+   "coverage": 0.9239,
+   "prior_missing_share": 0.0498,
+   "no_row_share": 0.0264,
+   "pref_share": 0.0,
+   "foreign_share": 0.0037,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 1070,
+   "n_codes_non_dec": 26
+  },
+  {
+   "year": 2014,
+   "group": "delisted",
+   "stock_days": 24606,
+   "non_dec_days": 931,
+   "non_dec_share": 0.0378,
+   "denom": 23675,
+   "covered": 20835,
+   "coverage": 0.88,
+   "prior_missing_share": 0.0629,
+   "no_row_share": 0.057,
+   "pref_share": 0.0155,
+   "foreign_share": 0.0242,
+   "no_report_or_map_share": 0.0031,
+   "n_codes": 195,
+   "n_codes_non_dec": 7
+  },
+  {
+   "year": 2015,
+   "group": "listed",
+   "stock_days": 198043,
+   "non_dec_days": 3998,
+   "non_dec_share": 0.0202,
+   "denom": 194045,
+   "covered": 180532,
+   "coverage": 0.9304,
+   "prior_missing_share": 0.0507,
+   "no_row_share": 0.0189,
+   "pref_share": 0.0,
+   "foreign_share": 0.0051,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 1323,
+   "n_codes_non_dec": 35
+  },
+  {
+   "year": 2015,
+   "group": "delisted",
+   "stock_days": 31749,
+   "non_dec_days": 615,
+   "non_dec_share": 0.0194,
+   "denom": 31134,
+   "covered": 27714,
+   "coverage": 0.8902,
+   "prior_missing_share": 0.0666,
+   "no_row_share": 0.0433,
+   "pref_share": 0.0208,
+   "foreign_share": 0.0353,
+   "no_report_or_map_share": 0.0033,
+   "n_codes": 231,
+   "n_codes_non_dec": 5
+  },
+  {
+   "year": 2016,
+   "group": "listed",
+   "stock_days": 141262,
+   "non_dec_days": 2290,
+   "non_dec_share": 0.0162,
+   "denom": 138972,
+   "covered": 132936,
+   "coverage": 0.9566,
+   "prior_missing_share": 0.0241,
+   "no_row_share": 0.0193,
+   "pref_share": 0.0,
+   "foreign_share": 0.0054,
+   "no_report_or_map_share": 0.0,
+   "n_codes": 1325,
+   "n_codes_non_dec": 26
+  },
+  {
+   "year": 2016,
+   "group": "delisted",
+   "stock_days": 21860,
+   "non_dec_days": 339,
+   "non_dec_share": 0.0155,
+   "denom": 21521,
+   "covered": 20132,
+   "coverage": 0.9355,
+   "prior_missing_share": 0.044,
+   "no_row_share": 0.0205,
+   "pref_share": 0.0097,
+   "foreign_share": 0.0174,
+   "no_report_or_map_share": 0.0075,
+   "n_codes": 204,
+   "n_codes_non_dec": 3
+  }
+ ],
+ "prior_missing": [
+  {
+   "year": 2009,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 14010,
+   "prior_missing_share": 0.0314
+  },
+  {
+   "year": 2009,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 89856,
+   "prior_missing_share": 0.0426
+  },
+  {
+   "year": 2009,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 6869,
+   "prior_missing_share": 0.0367
+  },
+  {
+   "year": 2009,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 45236,
+   "prior_missing_share": 0.054
+  },
+  {
+   "year": 2010,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 14952,
+   "prior_missing_share": 0.0603
+  },
+  {
+   "year": 2010,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 94785,
+   "prior_missing_share": 0.0481
+  },
+  {
+   "year": 2010,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 5511,
+   "prior_missing_share": 0.0786
+  },
+  {
+   "year": 2010,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 35560,
+   "prior_missing_share": 0.0512
+  },
+  {
+   "year": 2011,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 17256,
+   "prior_missing_share": 0.0677
+  },
+  {
+   "year": 2011,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 99884,
+   "prior_missing_share": 0.0382
+  },
+  {
+   "year": 2011,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 4514,
+   "prior_missing_share": 0.111
+  },
+  {
+   "year": 2011,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 26471,
+   "prior_missing_share": 0.0442
+  },
+  {
+   "year": 2012,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 18449,
+   "prior_missing_share": 0.0178
+  },
+  {
+   "year": 2012,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 116069,
+   "prior_missing_share": 0.0274
+  },
+  {
+   "year": 2012,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 3933,
+   "prior_missing_share": 0.0262
+  },
+  {
+   "year": 2012,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 24829,
+   "prior_missing_share": 0.0354
+  },
+  {
+   "year": 2013,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 23196,
+   "prior_missing_share": 0.016
+  },
+  {
+   "year": 2013,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 110313,
+   "prior_missing_share": 0.0325
+  },
+  {
+   "year": 2013,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 4588,
+   "prior_missing_share": 0.0
+  },
+  {
+   "year": 2013,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 20791,
+   "prior_missing_share": 0.0404
+  },
+  {
+   "year": 2014,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 21948,
+   "prior_missing_share": 0.0177
+  },
+  {
+   "year": 2014,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 116149,
+   "prior_missing_share": 0.0574
+  },
+  {
+   "year": 2014,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 3023,
+   "prior_missing_share": 0.0023
+  },
+  {
+   "year": 2014,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 19302,
+   "prior_missing_share": 0.0768
+  },
+  {
+   "year": 2015,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 36103,
+   "prior_missing_share": 0.0533
+  },
+  {
+   "year": 2015,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 154265,
+   "prior_missing_share": 0.0513
+  },
+  {
+   "year": 2015,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 5495,
+   "prior_missing_share": 0.0672
+  },
+  {
+   "year": 2015,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 24291,
+   "prior_missing_share": 0.0701
+  },
+  {
+   "year": 2016,
+   "group": "listed",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 93349,
+   "prior_missing_share": 0.0118
+  },
+  {
+   "year": 2016,
+   "group": "listed",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 42935,
+   "prior_missing_share": 0.0522
+  },
+  {
+   "year": 2016,
+   "group": "delisted",
+   "latest_q": "Q4",
+   "stock_days_with_netinc": 14184,
+   "prior_missing_share": 0.0336
+  },
+  {
+   "year": 2016,
+   "group": "delisted",
+   "latest_q": "Q1-3",
+   "stock_days_with_netinc": 6895,
+   "prior_missing_share": 0.0682
+  }
+ ],
+ "by_year": [
+  {
+   "year": 2009,
+   "listed": 0.9491,
+   "delisted": 0.9237,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2010,
+   "listed": 0.9318,
+   "delisted": 0.898,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2011,
+   "listed": 0.9352,
+   "delisted": 0.8929,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2012,
+   "listed": 0.956,
+   "delisted": 0.9364,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2013,
+   "listed": 0.9596,
+   "delisted": 0.9444,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2014,
+   "listed": 0.9239,
+   "delisted": 0.88,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2015,
+   "listed": 0.9304,
+   "delisted": 0.8902,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  },
+  {
+   "year": 2016,
+   "listed": 0.9566,
+   "delisted": 0.9355,
+   "b_listed": true,
+   "b_delisted": true,
+   "b_gap": true,
+   "pass": true
+  }
+ ],
+ "all_pass": true,
+ "dart_doc": {
+  "rows": 69180,
+  "codes": 2418,
+  "period_max": "2015Q4",
+  "known_after_window": 118
+ }
+}

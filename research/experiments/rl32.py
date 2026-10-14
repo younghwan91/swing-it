@@ -144,7 +144,8 @@ def features(D: dict, ci: np.ndarray, t: np.ndarray, sdist: np.ndarray, con) -> 
             "tv_ratio50": D["tv"][ci, t] / tv50[ci, t], "log_adv": np.log(np.maximum(D["adv"][ci, t], 1e-9)),
             "d_hi252": C[ci, t] / hi252[ci, t] - 1, "d_lo252": C[ci, t] / lo252[ci, t] - 1,
             "r20": back(20), "r60": back(60), "r120": back(120),
-            "eps_yoy": eps_yoy(D["codes"], D["days"], ci, t, con), "breadth": breadth[t], "regime_dist": rdist[t]})
+            "eps_yoy": eps_yoy(D["codes"], D["days"], ci, t, con, source=D.get("eps_source", "earnings")),   # 30: build 와 같은 실적 원천
+            "breadth": breadth[t], "regime_dist": rdist[t]})
     return f
 
 

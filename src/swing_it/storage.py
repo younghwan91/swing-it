@@ -191,6 +191,26 @@ CREATE TABLE IF NOT EXISTS earnings_disclosures (
     rcept_no  TEXT,
     report_nm TEXT
 );
+-- DART 원문 파싱 실적(quant-airflow collectors.dart_doc, 2007~2015 12월 결산사). 원본·정정이 **별도 행**(rcept_no),
+-- knowledge_date = 그 판의 접수일(정정 행은 정정 접수일). netinc_prior = 같은 보고서의 전년 동기 비교값(없으면 NULL,
+-- 이유는 prior_basis_note). shares_* = 보고서의 주식수(shares_asof 기준). 읽기는 read_earnings(table="earnings_dart_doc",
+-- all_versions=True) 로만 — 버전·시점 선택은 eps_asof(source="earnings_dart_doc") 가 날짜별로 한다. Postgres 열의 부분집합.
+CREATE TABLE IF NOT EXISTS earnings_dart_doc (
+    code             TEXT NOT NULL,
+    period           TEXT NOT NULL,   -- '2009Q2'
+    knowledge_date   TEXT NOT NULL,   -- 접수일(원본 또는 정정)
+    rcept_no         TEXT,
+    is_correction    INTEGER,
+    basis            TEXT,            -- netinc 의 기준(cfs 연결 · ofs 별도)
+    netinc           REAL,
+    netinc_prior     REAL,
+    prior_basis_note TEXT,
+    shares_common    INTEGER,
+    shares_total     INTEGER,
+    shares_asof      TEXT,
+    source           TEXT,
+    PRIMARY KEY (code, period, knowledge_date)
+);
 CREATE TABLE IF NOT EXISTS consensus (
     code         TEXT NOT NULL,
     date         TEXT NOT NULL,   -- 스냅샷 수집일 (오늘)
@@ -358,9 +378,17 @@ _EARNINGS_READ_COLS = (
 )
 
 
+#: 실적 정문이 읽는 표. ``earnings`` = DART API(fnlttMultiAcnt, 2015 사업연도~; avail_date·knowledge_date 버전).
+#: ``earnings_dart_doc`` = DART 원문 파싱(quant-airflow, 2007~2015; 원본·정정이 별도 행, 알게 된 날 = ``knowledge_date`` 접수일,
+#: 전년 동기 = 같은 보고서의 비교값 ``netinc_prior``) — 30 독립 표본(2008~2016)의 유일한 실적 원천(META '30 보충 7~9').
+EARNINGS_TABLES = ("earnings", "earnings_dart_doc")
+#: ``earnings_dart_doc`` 의 날짜 열(``parse_dates`` 대상).
+_DART_DOC_DATE_COLS = ("knowledge_date", "shares_asof")
+
+
 def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None,
                   all_versions: bool = False, avail_from: "str | None" = None, parse_dates: bool = False,
-                  with_known: bool = False, calendar: "Any | None" = None):
+                  with_known: bool = False, calendar: "Any | None" = None, table: str = "earnings"):
     """Earnings as a long frame with **one row per (code, period)** — as-of ``asof``.
 
     ``earnings`` is versioned: a DART restatement lands as a new row keyed by
@@ -392,11 +420,23 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
             ``avail_date`` 는 제출 마감일 고정값이라 정기보고서 17.7% 가 그보다 늦게 나왔다 — as-of 키로 쓰면 미래 정보다
             (정정 G19-1). 2019-02-28 전에는 정기보고서 날짜가 없어 known 은 avail_date 로 돌아가고 event_date 는 NaT.
         calendar: ``with_known`` 의 거래일 달력(DatetimeIndex). 없으면 ``daily_bars_adjusted`` 의 날짜.
+        table: :data:`EARNINGS_TABLES` 중 하나(기본 ``"earnings"`` — 기존 경로 그대로). ``"earnings_dart_doc"`` 는
+            **``all_versions=True`` 로만** 읽는다(원본·정정 행이 따로 있고 버전 선택은 날짜별 — :mod:`swing_it.features.eps_asof`
+            의 ``source="earnings_dart_doc"``). ``parse_dates`` 면 ``knowledge_date``·``shares_asof`` 를 datetime64 로.
 
     Returns a pandas DataFrame.
     """
     import pandas as pd
 
+    if table not in EARNINGS_TABLES:
+        raise ValueError(f"실적 표가 아니다: {table!r} — {EARNINGS_TABLES}")
+    if table != "earnings":
+        if not all_versions or asof is not None or avail_from is not None or with_known:
+            raise ValueError(f"{table} 은 all_versions=True 로만 읽는다(asof·avail_from·with_known 없음) — "
+                             "버전(원본·정정) 선택은 날짜별로 eps_asof 가 한다")
+        use = tuple(cols or _EARNINGS_READ_COLS)
+        pdates = [c for c in _DART_DOC_DATE_COLS if c in use] if parse_dates else None
+        return pd.read_sql_query(f"SELECT {', '.join(use)} FROM {table}", con, parse_dates=pdates or None)  # noqa: S608 — 모듈 상수
     if with_known:
         want = tuple(cols or _EARNINGS_READ_COLS)
         need = tuple(c for c in ("code", "period", "avail_date") if c not in want)

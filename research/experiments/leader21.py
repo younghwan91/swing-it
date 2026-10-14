@@ -53,7 +53,7 @@ def prepare(cache: str, extras: bool = False, raw_close: bool = False) -> dict:
 
 def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False, extras: bool = False, krx_patch: bool = False,  # noqa: E741
           raw_close: bool = False, session: str = "raw", aftermarket_fix: bool = False, unpatched: str = "nan",
-          tv_wide: "np.ndarray | None" = None, cap_wide: "np.ndarray | None" = None) -> dict:
+          tv_wide: "np.ndarray | None" = None, cap_wide: "np.ndarray | None" = None, eps_source: str = "earnings") -> dict:
     """가격 배열(종목×날짜) → 후보·지표 묶음. 백테스트(캐시)와 모의매매(DB) 공통.
 
     ``session``·``aftermarket_fix``·``unpatched`` 는 정문 인자 그대로(기본 = 기존 팔 고정값 ``"raw"``·``False``·``"nan"`` — raw 면
@@ -61,7 +61,8 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     — 그 뒤의 ``krx_patch`` 분봉 보정은 멱등이라 그대로 둔다.
 
     ``tv_wide``(종목×날짜 거래대금, 백만원)·``cap_wide``(종목×날짜 시총)를 주면 DB 에서 읽지 않고 그것을 쓴다 — 30 독립 표본(2008~2016,
-    가격 원천 = daily_bars_adj_v2)용. 기본 None = 기존 경로 그대로.
+    가격 원천 = daily_bars_adj_v2)용. 기본 None = 기존 경로 그대로. ``eps_source`` 는 실적 원천(:mod:`swing_it.features.eps_asof`
+    ``source``; 기본 ``"earnings"`` = 기존 경로, 30 독립 표본만 ``"earnings_dart_doc"`` — 반환 ``D["eps_source"]`` 로 rl32 특성도 같은 원천).
     """
     from swing_it.features.eps_asof import eps_ok
     from swing_it.storage import read_prices
@@ -131,12 +132,12 @@ def build(days, codes, O, H, L, C, TR, cost, mkt, con, pit_shares: bool = False,
     hi20 = C >= _roll(Cd, 20, "max") - 1e-9
     base = uni & tt & TR & (rs >= min(GRID["theta"]))
     ci, s = np.nonzero(base & brk[min(GRID["N"])] | base & brk[50] | base & brk[120])
-    ok = eps_ok(codes, days, ci, s, con)
+    ok = eps_ok(codes, days, ci, s, con, source=eps_source)
     eps = np.zeros_like(base)
     eps[ci[ok], s[ok]] = True
     return {"days": days, "codes": codes, "O": O, "H": H, "L": L, "C": C, "TR": TR, "cost": cost, "mkt": mkt, "rs": rs,
             "cand": base & eps, "brk": brk, "hi20": hi20, "ma": ma, "adv": adv, "uni": uni, "crank": crank, "cap": cap, "cap_jump_bad": n_bad, "cw": cw,
-            "regime_on": regime_on, **({"raw_src_diag": raw_src_diag} if raw_close and aftermarket_fix else {}),
+            "regime_on": regime_on, "eps_source": eps_source, **({"raw_src_diag": raw_src_diag} if raw_close and aftermarket_fix else {}),
             **(_extras(days, codes, C, ma, uni, rs, cwi, regime_on, base & eps, con) if extras else {})}
 
 
