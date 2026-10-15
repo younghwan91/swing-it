@@ -3,8 +3,6 @@
 [![CI](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![GitHub stars](https://img.shields.io/github/stars/younghwan91/swing-it?style=social)](https://github.com/younghwan91/swing-it)
-[![GitHub forks](https://img.shields.io/github/forks/younghwan91/swing-it?style=social)](https://github.com/younghwan91/swing-it)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
 **한국 주식(KOSPI·KOSDAQ) 리서치 저장소.** 매일의 주체별 순매매를 섹터 단위로 재서
@@ -574,11 +572,8 @@ MIT
 
 전체 오픈소스 퀀트 스택은 [프로필](https://github.com/younghwan91)에서 볼 수 있습니다.
 
-## ⭐ 도움이 되셨다면 (Star & 기여)
+## 기여 및 이슈 제보
 
-[![Star History Chart](https://api.star-history.com/svg?repos=younghwan91/swing-it&type=Date)](https://star-history.com/#younghwan91/swing-it&Date)
-
-`swing-it`이 퀀트 리서치나 알파 검증에 유용하셨다면 우측 상단의 **[⭐ Star](https://github.com/younghwan91/swing-it)** 를 눌러주세요!
-- 감에 의존하지 않고 "랜덤 음성 대조군"과 Deflated Sharpe로 철저히 검증하는 건강한 오픈소스 퀀트 문화를 만드는 데 큰 힘이 됩니다.
-- 🐛 버그 제보 & 질문: [GitHub Issues](https://github.com/younghwan91/swing-it/issues)
+- 🐛 버그 제보, 질문, 기능 제안: [GitHub Issues](https://github.com/younghwan91/swing-it/issues)
 - 📈 업데이트 소식: [팔로우 @younghwan91](https://github.com/younghwan91)
+
