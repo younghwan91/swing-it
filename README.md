@@ -5,6 +5,11 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+  <img alt="시뮬레이션 5,000개 중 신호 없는 랜덤 전략의 절반가량이 6폴드 중 5폴드 양수를 통과한다. 그래서 판별 기준은 폴드 수가 아니라 자기 랜덤 버전의 95 백분위를 이기는가이다." src="docs/images/hero-light.png" width="100%">
+</picture>
+
 **한국 주식(KOSPI·KOSDAQ) 리서치 저장소.** 매일의 주체별 순매매를 섹터 단위로 재서
 터미널에서 보는 sw-flow 가 이 저장소의 주 화면이고, 그 옆에 가설을 개별 트레이드
 분포로 심사하는 알파 심사 프레임워크가 있다.
