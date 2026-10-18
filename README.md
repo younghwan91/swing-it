@@ -1,5 +1,8 @@
 # swing-it
 
+**한국 주식(KOSPI·KOSDAQ) 리서치 저장소.** 오늘 어느 섹터에 돈이 들어왔는지를 터미널에서
+보고, 알파 가설은 "자기 자신의 랜덤 버전을 이기는가"로 심사한다. 산출물은 전략이 아니라 판정문이다.
+
 [![CI](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
@@ -10,56 +13,64 @@
   <img alt="시뮬레이션 5,000개 중 신호 없는 랜덤 전략의 절반가량이 6폴드 중 5폴드 양수를 통과한다. 그래서 판별 기준은 폴드 수가 아니라 자기 랜덤 버전의 95 백분위를 이기는가이다." src="docs/images/hero-light.png" width="100%">
 </picture>
 
-**한국 주식(KOSPI·KOSDAQ) 리서치 저장소.** 매일의 주체별 순매매를 섹터 단위로 재서
-터미널에서 보는 sw-flow 가 이 저장소의 주 화면이고, 그 옆에 가설을 개별 트레이드
-분포로 심사하는 알파 심사 프레임워크가 있다.
+- **순수 노이즈도 "6폴드 중 5폴드 양수"를 절반가량 통과한다.** 신호가 전혀 없는 합성 전략
+  5,000개 중 55% 가 그 바를 넘는다(위 그림, `scripts/make_hero.py` 로 재현). 폴드 수는 기준이 못 된다.
+- **기준은 자기 랜덤 버전의 95 백분위다.** 랜덤 음성대조·purge/embargo·Deflated Sharpe 는 권고가
+  아니라 공용 하버스에 박혀 있고, 그 하버스를 안 쓰는 게이트는 CI 린트가 빌드를 깨뜨린다.
+- **기각이 산출물이다.** 통과든 기각이든 근거 숫자와 함께 `research/logs/*/VERDICT.md` 에 남는다.
 
-두 축의 성격은 다르다. 관측은 지금 무슨 일이 일어났는가만 재고 심사는 이 신호가
-미래 수익을 예측하는가를 묻는다. sw-flow 의 모든 지표는 측정값이고 동시기(同時期)다.
-돈이 들어온 섹터가 앞으로 오른다는 주장이 아니다([§6](#6-주의--이-숫자들은-예측이-아니다)).
+관측과 심사는 서로 다른 축이다. `sw-flow` 의 모든 지표는 동시기(同時期) 측정값이고, 돈이 들어온
+섹터가 앞으로 오른다는 주장이 아니다([§8](#8-주의--이-숫자들은-예측이-아니다)).
 
-> **데이터 수집은 이 저장소에 없다.** 수집 로직(DART·키움·KRX·네이버 커넥터,
-> TimescaleDB 적재)은 [quant-airflow](https://github.com/younghwan91/quant-airflow)로
-> 분리되어 있다. 본 저장소는 DB를 읽기 전용으로 사용한다.
+## Quick start
+
+```bash
+git clone https://github.com/younghwan91/swing-it && cd swing-it
+uv venv && uv pip install -e ".[viz,dev]"     # TimescaleDB 를 쓰면 pg extra 를 더한다
+cp .env.example .env                          # KR_QUANT_DB 접속정보 (비우면 로컬 SQLite)
+
+sw-flow   --dir <리포트 폴더>                 # 섹터 자금 흐름 — DB 없이 리포트 폴더만 있으면 뜬다 (§4.3)
+sw-ledger --dir <리포트 폴더>                 # 자금 원장
+uv run python research/experiments/prop_gate.py   # 심사 배터리 + 랜덤 음성대조 — DB·API 키 없이 1초
+```
+
+> **데이터 수집은 이 저장소에 없다.** DART·키움·KRX·네이버 커넥터와 TimescaleDB 적재는
+> [quant-airflow](https://github.com/younghwan91/quant-airflow) 의 몫이고, 여기서는 그 DB 를 읽기만 한다.
 
 ## 목차
 
-1. [sw-flow — 무엇을 보여주나](#1-sw-flow--무엇을-보여주나)
-2. [설치와 실행](#2-설치와-실행)
-   · [데이터는 어떻게 받나](#23-데이터는-어떻게-받나--리포트-폴더를-그대로-주고받는다) — DB 없이 리포트 폴더만 받아서 보는 법
-   · [아키텍처 한눈에](#24-아키텍처-한눈에) — quant-airflow ↔ DB ↔ 리포트 ↔ 화면
-3. [화면 읽는 법](#3-화면-읽는-법)
-   · [종목 선정 가이드](docs/trading-guide.md) — 섹터에서 종목까지 3단계, 실제 예제
-4. [자금 원장 — `sw-ledger`](#4-자금-원장--sw-ledger)
-5. [숫자의 정의](#5-숫자의-정의)
-6. [주의 — 이 숫자들은 예측이 아니다](#6-주의--이-숫자들은-예측이-아니다)
-7. [리포트를 스스로 검증한다](#7-리포트를-스스로-검증한다)
-8. [알파 심사 프레임워크](#8-알파-심사-프레임워크)
-9. [저장소 구조와 개발](#9-저장소-구조와-개발)
-10. [관련 프로젝트](#10-관련-프로젝트)
+1. [무엇을 하나](#1-무엇을-하나)
+2. [왜 이렇게 만들었나 — 알파 심사 프레임워크](#2-왜-이렇게-만들었나--알파-심사-프레임워크)
+3. [구조](#3-구조)
+4. [설치와 실행](#4-설치와-실행) · [리포트 폴더를 그대로 주고받는다](#43-리포트-폴더를-그대로-주고받는다)
+5. [화면 읽는 법](#5-화면-읽는-법) · [종목 선정 가이드](docs/trading-guide.md)
+6. [자금 원장 — `sw-ledger`](#6-자금-원장--sw-ledger)
+7. [숫자의 정의](#7-숫자의-정의)
+8. [주의 — 이 숫자들은 예측이 아니다](#8-주의--이-숫자들은-예측이-아니다)
+9. [리포트를 스스로 검증한다](#9-리포트를-스스로-검증한다)
+10. [개발](#10-개발)
+11. [문서](#11-문서)
+12. [관련 프로젝트](#12-관련-프로젝트--오픈소스-퀀트-스택)
 
 ---
 
-## 1. sw-flow — 무엇을 보여주나
+## 1. 무엇을 하나
 
-`sw-flow` 는 오늘 어느 섹터에 돈이 들어오고 나갔는지를 한 화면에 놓는다. 27개 벤더
-섹터 × 4개 구간(5·20·60·120거래일)과 이를 요약하는 `종합` × 3개 시장(전체·거래소·코스닥)
-× 4개 주체(기관·외국인·개인·기타법인)를 키 하나로 갈아 끼운다.
+| 명령 | 하는 일 | DB |
+|---|---|---|
+| `sw-flow` | 27개 섹터 × 4개 구간(5·20·60·120거래일) × 3개 시장 × 4개 주체의 순매매를 한 화면에. 기본 정렬은 금액이 아니라 **가속**(누적 순매수 ÷ 섹터 시총)이라 삼성전자가 있는 섹터가 자동으로 1등이 되지 않는다. `Enter` 로 섹터를 열면 그 흐름을 실제로 만든 종목이 보인다(실측: 전기/전자 386종목 중 7개가 80%) | 불요 |
+| `sw-ledger` | 같은 리포트의 회계. 누가 얼마를 넘겼고 얼마가 미분류로 남았나를 원 금액과 잔여만으로. 섹터→섹터 이동 같은 식별 불가능한 그림은 그리지 않는다 | 불요 |
+| `sw-pead` | 게이트를 통과한 알파의 재현 백테스트 | 읽기 전용 |
+| `scripts/daily_report.sh` | DB 에서 리포트 폴더(`payload.json`·`numbers.html`·`viewer.html`·`VERIFY.txt`)를 만들고 저장 직후 자기 검증 | 읽기 전용 |
+| `research/` + `swing_it.validation`·`diagnostics` | 알파 가설을 개별 트레이드 분포로 심사하는 배터리. 판정문과 시행 원장을 남긴다 | 읽기 전용(배터리 자체는 불요) |
 
 <!-- SCREENSHOT: 기본 20일 화면 (120×30) -->
 ![기본 20일 화면. 섹터 이름 오른쪽으로 가속·임펄스·1년 백분위·누적 추이 막대·구간
 수익률·미실현·풀림·G 가 늘어서 있고 가속 내림차순이다. 아래 패널에 선택 섹터의 4주체
 순매수와 순매수·순매도 상위 3개, 그 아래 정렬 열 한 줄 설명과 키 푸터가 있다.](docs/images/kqflow-table.png)
 
-*기본 화면(20거래일·전체 시장·기관, 120×30). 한 행이 한 섹터이고 가속 내림차순이다.
-폭 120 에는 여기까지 들어간다. 순매수·순매도 상위는 125칸부터 나온다(§3.2).*
-
-금액만 보면 대형 섹터가 늘 이긴다. 그래서 기본 정렬은 **가속**(구간 누적 순매수 ÷ 섹터
-시총)이다. 규모로 정규화한 유입이라 삼성전자가 있는 섹터가 자동으로 1등이 되지 않는다.
-
-`Enter` 를 누르면 그 섹터의 전 종목이 금액순으로 펼쳐진다. 섹터 합계가 어느 종목에서
-나왔는지 그 자리에서 보인다. 실측상 전기/전자 386종목 중 7개가 그 섹터 흐름의 80%를
-설명한다.
+*`sw-flow` 기본 화면(20거래일·전체 시장·기관, 120×30). 한 행이 한 섹터이고 가속 내림차순이다.
+순매수·순매도 상위 열은 125칸부터 나온다(§5.2).*
 
 <!-- SCREENSHOT: Enter 드릴다운 종목 목록 (120×30) -->
 ![드릴다운 종목 목록. 종목명·코드·순매수·누적 기여율·투신·연기금·상대수익·최근집중·
@@ -67,125 +78,48 @@
 `-` 마커가 찍혀 있다.](docs/images/kqflow-names.png)
 
 *`Enter` 드릴다운(전기/전자, 20일). 누적[%] 열의 `-` 마커 위쪽 7개가 그 섹터를 실제로
-움직인 종목이다. 386종목의 나머지는 스크롤할 0 이다.*
+움직인 종목이다. 나머지 379개는 스크롤할 0 이다.*
 
-DB 에 접속하지 않는다. 일일 배치가 만들어 둔 리포트 JSON 만 읽으므로 SSH 에서 즉시 뜨고
-화면과 HTML 표가 같은 숫자를 본다.
+두 화면은 DB 에 접속하지 않는다. 일일 배치가 만들어 둔 리포트 파일만 읽으므로 SSH 에서 즉시
+뜨고, 화면과 HTML 수치표가 같은 숫자를 본다. 표준 라이브러리 `curses` 만 쓴다.
 
-## 2. 설치와 실행
+## 2. 왜 이렇게 만들었나 — 알파 심사 프레임워크
 
-**요구사항:** Python 3.11 이상, [uv](https://docs.astral.sh/uv/). DB 없이 화면만 보려면
-(§2.3) 이걸로 끝이고, 리포트를 직접 만들려면(§2.1) PostgreSQL/TimescaleDB 접속정보가
-추가로 필요하다.
+백테스트는 거의 언제나 우상향 곡선을 그린다. 그래서 이 저장소가 남기려는 것은 전략이 아니라
+**판별 능력**이다. 후보 알파를 개별 트레이드 분포로 심사하고, 통과든 기각이든 근거 숫자와 함께
+판정문에 남긴다.
 
-```bash
-git clone https://github.com/younghwan91/swing-it
-cd swing-it
-uv venv && uv pip install -e ".[viz,dev]"     # TimescaleDB 를 쓰면 pg extra 를 더한다
-cp .env.example .env                          # KR_QUANT_DB 접속정보 (비우면 로컬 SQLite)
-```
-
-### 2.1 리포트 만들기 (DB 필요)
-
-화면은 리포트를 읽을 뿐이라 먼저 리포트가 있어야 한다. 배치 한 줄이 전부다.
+DB 도 API 키도 없이 1초 만에 재현되는 근거가 첫 화면의 그림이다.
 
 ```bash
-scripts/daily_report.sh
+uv run python research/experiments/prop_gate.py
 ```
 
-폴더 이름에 붙는 것은 데이터 기준일(`supply_demand` 의 `MAX(date)`)이다. 실행한 날짜와는
-상관없다. 휴장일에 돌면 이미 있는 폴더를 보고 건너뛴다. 기본 출력 위치는
-`<저장소>/reports/<기준일>` 이고 `latest` 심볼릭 링크가 따라 움직인다(`KR_QUANT_REPORTS`
-로 바꾼다). 생성물이지 소스가 아니므로 `.gitignore` 로 git 추적 대상에서는 뺐다. cron 에
-그대로 건다.
-
-**리포트 형식이 바뀌면 그 건너뛰기가 발목을 잡는다.** 폴더가 이미 있으면 배치는 조용히
-넘어가므로 열이 새로 생겨도 다음 거래일까지 옛 리포트가 그대로 뜬다. 화면에서는 새 열
-넷이 통째로 `—` 인 빈 칸으로 보인다(종목 목록 제목에 `옛 리포트(새 열 없음)` 가 뜬다).
-그럴 때 문을 여는 것이 `KR_QUANT_FORCE` 다.
-
-```bash
-KR_QUANT_FORCE=1 scripts/daily_report.sh     # 같은 기준일이어도 다시 만든다 (약 5~6분)
+```text
+  랜덤 음성대조 — 50 draws × 600 trades (게이트 위양성률 보정)
+  raw ≥5/6 폴드 도달: 46.0% of draws
 ```
 
-옆에 새로 지어 마지막에 바꿔 끼우므로 도중에 실패하면 옛 리포트가 그대로 남는다.
+**신호가 아예 없는 합성 데이터로 만든 전략이 6폴드 중 5폴드 양수를 46% 확률로 달성한다**
+(같은 seed 7 로 5,000 draw 까지 늘리면 55% — 첫 50 draw 가 같은 수열이라 첫 화면 그림과 같은 실험이다, `scripts/make_hero.py`). 그래서 판별 기준을 폴드 수에 두지 않고
+전략이 자기 자신의 랜덤 버전을 이기는가를 본다.
 
-배치가 하는 일을 손으로 풀면 이렇다.
+게이트는 8개 관문이다 — walk-forward 재현성 · 랜덤 음성대조 · 손 안 댄 최종 구간 · 비용 2배 ·
+취약성 · Deflated Sharpe(시행 원장 자동 집계) · purge/embargo · 유니버스 무결성. 이 규율은
+부탁이 아니라 CI 린트([`scripts/check_guardrails.py`](scripts/check_guardrails.py))로 강제된다.
+게이트가 공용 하버스를 안 쓰거나 시행 수를 원장에 안 남기면 빌드가 깨진다.
 
-```bash
-uv run python scripts/sector_flow.py    --days 260 --json payload.json
-uv run python scripts/sector_flow.py    --from-json payload.json --html viewer.html
-uv run python scripts/sector_numbers.py --payload payload.json --html numbers.html
-uv run python scripts/verify_report.py  --dir <리포트폴더> --db-check
-```
+**심사 결과: 통과한 것은 PEAD 하나, 나머지 알파 가설과 위험 오버레이는 전부 기각.**
+기각된 가설도 같은 형식의 판정문으로 남아 있어, 같은 가설을 파라미터만 바꿔 다시 돌리는 낚시를 막는다.
 
-페이로드는 한 번만 만들고 수치표·뷰어가 그것을 공유한다. 화면과 표가 같은 숫자를
-보게 하려는 것이기도 하고, 월별 시총 계산이 한 번에 수 분 걸리기 때문이기도 하다.
+> 판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 · 데이터 스키마:
+> [`docs/alpha-research.md`](docs/alpha-research.md). 규칙 원본은 [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md),
+> 통과한 유일한 알파는 [`docs/pead-strategy.md`](docs/pead-strategy.md)(재현 CLI `sw-pead`).
 
-### 2.2 화면 띄우기 (DB 불요)
+같은 태도가 관측 축에도 적용된다. 화면의 숫자는 예측이 아니라고 화면 안에서 말하고([§8](#8-주의--이-숫자들은-예측이-아니다)),
+리포트는 저장 직후 스스로 검사해 실패를 폴더에 남긴다([§9](#9-리포트를-스스로-검증한다)).
 
-```bash
-sw-flow                          # <저장소>/reports/latest 를 연다
-sw-flow --dir <리포트 폴더>       # 특정 날짜의 리포트
-sw-ledger                        # 자금 원장 (§4)
-sw-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉트용
-```
-
-표준 라이브러리 `curses` 만 쓴다. 새 의존성이 없고 40×10 짜리 창에서도 산다. 폭이
-모자라면 열이 경계에서 통째로 빠진다(숫자가 자릿수 중간에서 잘려 다른 값처럼 보이지
-않게). 원장 표만은 예외다. 71칸 미만이면 아예 안 그리고 그 사실을 적는다. 4주체와
-잔여가 한 덩어리라 일부만 보여주면 회계 항등식이 깨진 것처럼 읽힌다. `NO_COLOR` 를
-존중한다.
-
-### 2.3 데이터는 어떻게 받나 — 리포트 폴더를 그대로 주고받는다
-
-**받는 쪽에는 DB 도 수집 파이프라인도 필요 없다.** 화면 둘은 리포트 폴더의 파일만 읽는다
-(§2.2). 그래서 데이터는 계정이나 접속정보 없이 폴더 하나 단위로 오간다.
-
-만드는 쪽(DB 를 가진 사람)이 `scripts/daily_report.sh` 로 폴더를 만들고 그 폴더를 보낸다.
-
-```bash
-# 보내는 쪽 — 폴더째 압축 (2026-09-01 기준 약 1.9 MB)
-tar czf swing-it-2026-09-01.tar.gz -C <저장소>/reports 2026-09-01
-
-# 받는 쪽 — 풀고 --dir 로 연다. 설치는 clone + uv pip install -e . 까지만 하면 된다
-tar xzf swing-it-2026-09-01.tar.gz -C ~/reports
-sw-flow   --dir ~/reports/2026-09-01
-sw-ledger --dir ~/reports/2026-09-01
-```
-
-어떤 화면이 어떤 파일을 읽는지는 다르다. 하나만 보내면 다른 하나가 안 뜬다.
-
-| 파일 | 크기 | 없으면 |
-|---|---|---|
-| `numbers.html` | 2.0 MB | `sw-flow` 가 안 뜬다 (`리포트를 찾을 수 없다`). 브라우저로 열면 수치표 자체가 된다 |
-| `payload.json` | 2.9 MB | `sw-ledger` 가 안 뜬다 (`페이로드를 찾을 수 없다`) |
-| `viewer.html` | 2.9 MB | 브라우저용 차트 뷰어. 터미널 화면 둘은 이것 없이도 뜬다 |
-| `VERIFY.txt` | 11 KB | 검증 결과(§7). 없어도 화면은 뜨지만 받은 숫자가 검사를 통과했는지 알 길이 없다 |
-
-⚠️ `VERIFY_FAILED.txt` 가 같이 들어 있으면 **그 리포트는 검사에 걸린 것이다.** 파일을 지우고
-보내지 마라. 받는 쪽이 알아야 할 사실이다.
-
-받는 쪽을 `latest` 손버릇에 맞추려면 심볼릭 링크를 하나 걸거나 환경변수를 쓴다.
-
-```bash
-ln -sfn ~/reports/2026-09-01 <저장소>/reports/latest                # 이제 sw-flow 만 쳐도 된다
-export KR_QUANT_REPORTS=~/reports                                   # 만드는 쪽의 출력 위치도 이것으로 바꾼다
-```
-
-직접 만들고 싶다면 DB 가 있어야 한다. 그 DB 를 채우는 일은 이 저장소 밖,
-[quant-airflow](https://github.com/younghwan91/quant-airflow) 의 몫이다(키움·KRX 커넥터,
-TimescaleDB 적재). 접속정보는 `.env` 의 `KR_QUANT_DB` 하나다. 이 저장소는 그 DB 를
-읽기만 한다.
-
-**받은 폴더는 그날의 사진이다.** 그 기준일에 멈춘 값이고 화면 제목의
-날짜(`2026-09-01 확정`)가 그 사실을 늘 적는다. 저절로 갱신되지는 않으니, 매일 보려면
-매일 받거나 만드는 쪽 서버에 SSH 로 들어가 거기서 `sw-flow` 를 띄우는 편이 낫다.
-두 화면이 `curses` 만 쓰는 이유가 그것이다.
-
-### 2.4 아키텍처 한눈에
-
-이 저장소는 DB를 쓰지 않고 읽기만 한다. 실제 데이터 흐름은 다음과 같다.
+## 3. 구조
 
 ```mermaid
 flowchart TD
@@ -213,15 +147,102 @@ flowchart TD
     ALPHA --> PEAD["sw-pead\n(strategies/pead.py)\n게이트 통과 알파 재현 백테스트"]
 ```
 
-`sw-flow`·`sw-ledger`는 리포트 JSON/HTML만 읽어 DB에 접속하지 않고, `sw-pead`만 `storage.py`를
-거쳐 DB를 읽기 전용으로 사용한다. 저장소 폴더 구조와 개발용 명령은 [§9](#9-저장소-구조와-개발)에 있다.
+```
+src/swing_it/
+├── storage.py           # 읽기 전용 DB 접근 — 유일한 정문
+├── engine/ validation/ diagnostics/ features/ strategies/   # 알파 심사 라이브러리
+└── tui/                 # sw-flow · sw-ledger
+    ├── flow_view.py     #   렌더는 순수함수 — curses 없이 단위테스트한다
+    ├── flow_app.py      #   curses 는 화면 그리기와 키 입력만
+    ├── ledger_view.py   #   원장도 같은 규칙 — 폭 자르기·도움말 렌더러는 공용이다
+    └── ledger_app.py
+scripts/                 # sector_flow · sector_numbers · verify_report · daily_report.sh
+                         # ledger_numbers · check_guardrails · verify_merge · make_hero
+research/                # 신호 정의 · 실험 러너 · VERDICT/TRIALS 원장
+docs/                    # kqflow-formulas.pdf · alpha-research.md · GUARDRAILS.md · 전략 문서
+```
 
-## 3. 화면 읽는 법
+## 4. 설치와 실행
+
+**요구사항:** Python 3.11 이상, [uv](https://docs.astral.sh/uv/). 설치는 Quick start 의 세 줄이다.
+DB 없이 화면만 보려면(§4.3) 그걸로 끝이고, 리포트를 직접 만들려면(§4.1) PostgreSQL/TimescaleDB
+접속정보가 `.env` 의 `KR_QUANT_DB` 에 있어야 한다.
+
+### 4.1 리포트 만들기 (DB 필요)
+
+화면은 리포트를 읽을 뿐이라 먼저 리포트가 있어야 한다. 배치 한 줄이 전부고 cron 에 그대로 건다.
+
+```bash
+scripts/daily_report.sh                      # <저장소>/reports/<기준일> + latest 링크 (KR_QUANT_REPORTS 로 변경)
+KR_QUANT_FORCE=1 scripts/daily_report.sh     # 같은 기준일이어도 다시 만든다 (약 5~6분)
+```
+
+폴더 이름은 데이터 기준일(`supply_demand` 의 `MAX(date)`)이다. 휴장일에 돌면 이미 있는 폴더를
+보고 건너뛴다. 그 건너뛰기 때문에 리포트 형식이 바뀌어도 다음 거래일까지 옛 리포트가 그대로
+뜨고(새 열이 통째로 `—`, 제목에 `옛 리포트(새 열 없음)`), 그럴 때 문을 여는 것이 `KR_QUANT_FORCE` 다.
+옆에 새로 지어 마지막에 바꿔 끼우므로 도중에 실패해도 옛 리포트는 남는다.
+
+배치가 하는 일을 손으로 풀면 이렇다. 페이로드는 한 번만 만들고 수치표·뷰어가 공유한다.
+
+```bash
+uv run python scripts/sector_flow.py    --days 260 --json payload.json
+uv run python scripts/sector_flow.py    --from-json payload.json --html viewer.html
+uv run python scripts/sector_numbers.py --payload payload.json --html numbers.html
+uv run python scripts/verify_report.py  --dir <리포트폴더> --db-check
+```
+
+### 4.2 화면 띄우기 (DB 불요)
+
+```bash
+sw-flow                          # <저장소>/reports/latest 를 연다
+sw-flow --dir <리포트 폴더>       # 특정 날짜의 리포트
+sw-ledger                        # 자금 원장 (§6)
+sw-ledger --dump --width 100     # 색 없는 평문 — 파이프·리다이렉트용
+```
+
+새 의존성이 없고 40×10 짜리 창에서도 산다. 폭이 모자라면 열이 경계에서 통째로 빠진다(숫자가
+자릿수 중간에서 잘려 다른 값처럼 보이지 않게). 원장 표만은 예외로 71칸 미만이면 아예 안 그리고
+그 사실을 적는다. 4주체와 잔여가 한 덩어리라 일부만 보여주면 회계 항등식이 깨진 것처럼 읽힌다.
+`NO_COLOR` 를 존중한다.
+
+### 4.3 리포트 폴더를 그대로 주고받는다
+
+**받는 쪽에는 DB 도 수집 파이프라인도 필요 없다.** 데이터는 계정이나 접속정보 없이 폴더 하나
+단위로 오간다. 만드는 쪽이 `scripts/daily_report.sh` 로 폴더를 만들고 그 폴더를 보낸다.
+
+```bash
+# 보내는 쪽 — 폴더째 압축 (2026-09-01 기준 약 1.9 MB)
+tar czf swing-it-2026-09-01.tar.gz -C <저장소>/reports 2026-09-01
+
+# 받는 쪽 — 풀고 --dir 로 연다. 설치는 clone + uv pip install -e . 까지만 하면 된다
+tar xzf swing-it-2026-09-01.tar.gz -C ~/reports
+sw-flow   --dir ~/reports/2026-09-01
+sw-ledger --dir ~/reports/2026-09-01
+ln -sfn ~/reports/2026-09-01 <저장소>/reports/latest    # 이제 sw-flow 만 쳐도 된다
+```
+
+어떤 화면이 어떤 파일을 읽는지는 다르다. 하나만 보내면 다른 하나가 안 뜬다.
+
+| 파일 | 크기 | 없으면 |
+|---|---|---|
+| `numbers.html` | 2.0 MB | `sw-flow` 가 안 뜬다 (`리포트를 찾을 수 없다`). 브라우저로 열면 수치표 자체가 된다 |
+| `payload.json` | 2.9 MB | `sw-ledger` 가 안 뜬다 (`페이로드를 찾을 수 없다`) |
+| `viewer.html` | 2.9 MB | 브라우저용 차트 뷰어. 터미널 화면 둘은 이것 없이도 뜬다 |
+| `VERIFY.txt` | 11 KB | 검증 결과(§9). 없어도 화면은 뜨지만 받은 숫자가 검사를 통과했는지 알 길이 없다 |
+
+⚠️ `VERIFY_FAILED.txt` 가 같이 들어 있으면 **그 리포트는 검사에 걸린 것이다.** 파일을 지우고
+보내지 마라. 받는 쪽이 알아야 할 사실이다.
+
+**받은 폴더는 그날의 사진이다.** 화면 제목의 날짜(`2026-09-01 확정`)가 그 사실을 늘 적는다.
+매일 보려면 매일 받거나, 만드는 쪽 서버에 SSH 로 들어가 거기서 `sw-flow` 를 띄우는 편이 낫다.
+두 화면이 `curses` 만 쓰는 이유가 그것이다.
+
+## 5. 화면 읽는 법
 
 > 열의 뜻은 아래에 있다. 어떤 순서로 읽어 종목을 고르는지는
 > [종목 선정 가이드](docs/trading-guide.md) 를 보라(3단계와 실제 예제).
 
-### 3.1 키
+### 5.1 키
 
 | 키 | 하는 일 |
 |---|---|
@@ -241,16 +262,11 @@ flowchart TD
 않으므로 대문자 역방향은 `W`·`R` 만 되고 `A`·`S`·`G`·`M` 은 원리적으로 못 받는다
 (끝으로 가려면 End). `sw-ledger` 도 같다.
 
-화면 맨 아래 푸터는 폭에 맞춰 단계별로 줄어든다. 대문자 역방향은 안 적는다. 한 키의
-두 방향을 다 적으니 푸터가 길어져 정작 무슨 키가 있는지가 안 읽혔다. `g/G:처음/끝`
-은 남는다(`G` 는 `g` 의 역방향이 아니라 별개 동작이라 안 적으면 목록 끝으로 가는 길이
-화면에서 사라진다). 어느 단계에서도 `?` 는 남으므로 줄어든 푸터가 화면의 전부는 아니다.
-
 도움말(`?`)이 원본이고 이 README 가 그 축약본이다. 열 하나하나의 정의와 한계가
 화면 안에 있어서, 리포트를 보다가 이 숫자가 뭐냐고 물을 자리에 답이 있다.
 `sw-ledger` 도 같은 렌더러로 자기 도움말을 그린다.
 
-### 3.2 섹터 표의 열
+### 5.2 섹터 표의 열
 
 화면에 나오는 왼쪽부터의 순서다. 폭이 모자라면 오른쪽 열부터 통째로 빠지므로
 좁은 터미널에서는 아래 표의 뒤쪽이 없다. 실측한 등장 문턱(터미널 칸): 1년 49 · 추이 58 ·
@@ -287,7 +303,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 그 아래 힌트바는 지금 정렬한 열 하나의 정의를 한 줄로 적는다. 분자·분모와 단위까지만
 이고, 비유와 한계는 `?` 의 일이다.
 
-### 3.3 종목 목록의 열 (`Enter`)
+### 5.3 종목 목록의 열 (`Enter`)
 
 제목 줄이 먼저 `전기/전자 · 종목 386개 · 20일 기준 · 정렬[순매수]` 라고 어느 섹터·몇
 종목·어느 창·어느 정렬인지 적는다. 그 아래 열은 왼쪽부터 이 순서다.
@@ -336,10 +352,6 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 묶여 통째로 남거나 통째로 빠진다. 폭이 모자라 거래대금이 떨어지면 참여율도 같이
 사라진다. 덜 보여주자는 게 아니라 틀리게 읽힐 칸을 안 만든다는 규칙이다.
 
-옛 리포트로 화면을 띄우면 새 열 넷(투신·연기금·상대수익·최근집중)이 통째로 `—` 이고,
-제목에 `· 옛 리포트(새 열 없음)` 가 붙는다. 고장은 아니고 그 리포트가 이 열들이 생기기
-전에 만들어진 것이다. 다시 만드는 방법은 [§2.1](#21-리포트-만들기-db-필요) 에 있다.
-
 **`종합` 에서 `Enter` 로 들어간 종목 목록은 20일 기준이다.** 종합은 세 창을 섞은
 축이라 이 종목이 얼마를 샀나가 한 값으로 정의되지 않는다. 그래서 드릴다운은 20일
 창의 금액을 쓰고, 제목도 `20일 기준(종합)` 이라 적는다(`flow_view.py` 의
@@ -347,7 +359,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 그 구간에 들어간 뒤 `Enter` 를 눌러라. 종합 화면의 상세 패널도 같은 이유로 4주체 줄
 끝에 `· 20일 기준` 을 달고 있다.
 
-### 3.4 `종합` 구간
+### 5.4 `종합` 구간
 
 `w` 로 끝까지 돌리면 나오는 `종합` 은 20·60·120일 세 창의 G 를 등가중으로 평균낸
 화면이다. 5일 창은 빠진다. 풀림(ẍ)이 구간을 셋으로 갈라 중앙차분하는데 9거래일
@@ -367,7 +379,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 정렬·역순이 없다` 가 뜬다. 창마다 정렬 축이 달라지면 세 창을 나란히 본다는 이 화면의
 용도가 무너지기 때문이다. 금액·수익률로 줄을 세우려면 `w` 로 개별 구간에 들어가라.
 
-## 4. 자금 원장 — `sw-ledger`
+## 6. 자금 원장 — `sw-ledger`
 
 `sw-flow` 가 섹터의 동역학(임펄스·가속·포텐셜)을 보여준다면, `sw-ledger` 는 회계를
 보여준다. 누가 얼마를 넘겼고 얼마가 미분류로 남았나. 파생 지표 없이 원 금액과 잔여만 있다.
@@ -417,7 +429,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 `sw-flow` 와 같은 정의(그 구간에 거래된 종목 수)다. `v` 로 원장 · 전개 · 동시성 ·
 한계 네 화면을 돈다. 위 상관표는 `동시성` 화면이고, `d` 가 거기서 β제거를 켠다.*
 
-## 5. 숫자의 정의
+## 7. 숫자의 정의
 
 시장 관측량을 물리량에 대응시켜 정의한다. 차원을 맞추면 금액의 크기와 밀린 폭이
 갈라지고, 임펄스 대신 가속도를 쓰게 강제된다. 금액만 쓰면 사이즈 팩터를 잡는다.
@@ -440,7 +452,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 실제로 무엇을 재는지(그리고 물리 용어가 비유일 뿐 성립하는 운동방정식이 아니라는 것)를
 확인한 [kqflow 섹터 자금흐름 지표의 수식 정의](docs/kqflow-formulas.pdf) (PDF).
 
-## 6. 주의 — 이 숫자들은 예측이 아니다
+## 8. 주의 — 이 숫자들은 예측이 아니다
 
 **한계를 지표와 같이 싣는다.** 화면의 도움말(`?`)에도 같은 문구가 있다.
 
@@ -466,7 +478,7 @@ dW/dt 174 · 종목[수] 183. 앞의 넷(섹터·마커·가속·임펄스)은 4
 - **`포텐셜`·`잔여몫`·`최대일몫`·`최근집중` 은 뜻을 잃는 자리에서 값을 안 낸다.** k ≤ 0 인
   블록과 분모 1억 미만이 그렇다. 고쳐 쓰지 않고 결측으로 둔다. 빈 칸은 고장이 아니다.
 
-## 7. 리포트를 스스로 검증한다
+## 9. 리포트를 스스로 검증한다
 
 **조용히 틀린 리포트가 쌓이는 것이 검증 없이 도는 것보다 나쁘다.** 그래서 배치는 저장 직후
 같은 폴더를 검사하고([`scripts/verify_report.py`](scripts/verify_report.py)), 실패하면 그
@@ -486,70 +498,31 @@ D 계층이 이 저장소의 핵심 습관이다. **증상 하나가 아니라 �
 ⚠️ **반올림된 값으로 검산하지 않는다.** 페이로드의 k 는 소수 3자리라 그걸로 U=½kx² 를 검산하면
 멀쩡한 수식이 실패로 뜬다. 원자료에서 전정밀도로 다시 적합해 비교한다.
 
-## 8. 알파 심사 프레임워크
-
-저장소의 두 번째 축. 후보 알파를 개별 트레이드 분포로 심사하고 통과든 기각이든 근거
-숫자와 함께 판정문에 남긴다. 백테스트는 거의 언제나 우상향 곡선을 그리므로 여기서
-남는 산출물은 전략이 아니라 판별 능력이다.
-
-**심사 결과: 알파 가설 6건 중 5건 기각, 위험 오버레이 1건 기각.** 통과한 것은 PEAD 하나다.
-
-DB 도 API 키도 없이 1초 만에 재현할 수 있는 근거가 하나 있다.
+## 10. 개발
 
 ```bash
-uv run python research/experiments/prop_gate.py
+uv run --extra dev pytest -q                  # 네트워크·DB 불요
+uv run --extra dev ruff check src/ tests/ research/ scripts/ examples/
+uv run python scripts/check_guardrails.py     # 경계·판정·정문·하버스·신원 규율 검사 (CI 단계)
+uv run python scripts/verify_merge.py <워크트리>   # TUI 를 고친 뒤 — 실데이터 렌더 스모크·pty 구동·변이 검사 (수 분)
+uv run python scripts/make_hero.py            # 첫 화면 그림 재생성 → docs/images/hero-{light,dark}.png
 ```
 
-```text
-  랜덤 음성대조 — 50 draws × 600 trades (게이트 위양성률 보정)
-  raw ≥5/6 폴드 도달: 46.0% of draws
-```
+렌더는 순수함수(`flow_view.py`·`ledger_view.py`)라 curses 없이 단위테스트하고, `src` 는 `research` 를
+import 하지 않는다(린트 (a)). 실험 파이프라인 규약은 [`research/TEMPLATE.md`](research/TEMPLATE.md).
 
-**신호가 아예 없는 합성 데이터로 만든 전략이 6폴드 중 5폴드 양수를 46% 확률로 달성한다.**
-그래서 판별 기준을 폴드 수에 두지 않는다. 전략이 자기 자신의 랜덤 버전을 이기는가를 본다.
-게이트는 walk-forward 재현성 · 랜덤 음성대조 · 손 안 댄 최종 구간 · 비용 2배 · 취약성 ·
-Deflated Sharpe(시행 원장 자동 집계) · purge/embargo · 유니버스 무결성 8개 관문으로 되어 있고,
-이 규율은 부탁이 아니라 CI 린트로 강제된다. 게이트가 공용 하버스를 안 쓰거나 시행 수를
-원장에 안 남기면 빌드가 깨진다.
+## 11. 문서
 
-> **판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 9종 · 데이터 스키마:
-> [`docs/alpha-research.md`](docs/alpha-research.md)**
->
-> 규칙 원본은 [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md), 통과한 유일한 알파는
-> [`docs/pead-strategy.md`](docs/pead-strategy.md)(재현 CLI `sw-pead`).
+| 문서 | 내용 |
+|---|---|
+| [`docs/trading-guide.md`](docs/trading-guide.md) | 섹터에서 종목까지 3단계로 고르는 법, 실제 예제 |
+| [`docs/kqflow-formulas.pdf`](docs/kqflow-formulas.pdf) | §7 의 수식을 코드에서 그대로 옮겨 적고 무엇을 재는지 검토한 문서 |
+| [`docs/alpha-research.md`](docs/alpha-research.md) | 판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 · 데이터 스키마 |
+| [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md) | 연구 규율 원본 — 사전등록 템플릿·완료 정의 |
+| [`docs/pead-strategy.md`](docs/pead-strategy.md) | 게이트를 통과한 유일한 알파 (재현 CLI `sw-pead`) |
+| `research/logs/*/VERDICT.md` | 가설별 판정문 전문. 기각도 통과와 같은 형식으로 남는다 |
 
-## 9. 저장소 구조와 개발
-
-아키텍처 다이어그램은 [§2.4](#24-아키텍처-한눈에)에 있다. 폴더 구조는 다음과 같다.
-
-```
-src/swing_it/
-├── storage.py           # 읽기 전용 DB 접근 — 유일한 정문
-├── engine/ validation/ diagnostics/ features/ strategies/   # 알파 심사 라이브러리
-└── tui/                 # sw-flow · sw-ledger
-    ├── flow_view.py     #   렌더는 순수함수 — curses 없이 단위테스트한다
-    ├── flow_app.py      #   curses 는 화면 그리기와 키 입력만
-    ├── ledger_view.py   #   원장도 같은 규칙 — 폭 자르기·도움말 렌더러는 공용이다
-    └── ledger_app.py
-scripts/                 # sector_flow · sector_numbers · verify_report · daily_report.sh
-                         # ledger_numbers · check_guardrails · verify_merge
-research/                # 신호 정의 · 실험 러너 · VERDICT/TRIALS 원장
-docs/                    # kqflow-formulas.pdf · alpha-research.md · GUARDRAILS.md · 전략 문서
-```
-
-TUI 를 고친 뒤에는 [`scripts/verify_merge.py <워크트리>`](scripts/verify_merge.py) 를 돌린다.
-실데이터 렌더 스모크·pty 구동·변이 검사를 한 번에 태우는 머지 하네스다(수 분 걸린다).
-
-설치되는 CLI 는 셋이다. `sw-flow` 와 `sw-ledger` 는 리포트를 보는 터미널 뷰어(DB 미접속)
-이고, `sw-pead` 는 게이트를 통과한 유일한 알파의 재현용 백테스트(DB 읽기 전용)다.
-
-```bash
-uv run --extra dev pytest            # 네트워크·DB 불요
-uv run --extra dev ruff check .
-uv run python scripts/check_guardrails.py    # 경계·판정·정문·하버스·신원 규율 검사
-```
-
-## 10. 관련 프로젝트 — 오픈소스 퀀트 스택
+## 12. 관련 프로젝트 — 오픈소스 퀀트 스택
 
 한국·미국 주식과 암호화폐를 아우르는 오픈소스 스택입니다. 각 저장소는 독립적으로 쓸 수 있습니다.
 

@@ -3,7 +3,7 @@
 `research/experiments/prop_gate.py` 의 랜덤 음성대조(``random_entry_control``)와 같은 절차를
 numpy 로 재현한다: 진입일과 수익을 합성 풀(600 트레이드, ``_synthetic_setup(seed=1, edge=0.02)``)
 에서 서로 독립으로 복원추출해 신호를 파괴하고, 고정 6폴드(``FOLDS``)의 TEST 구간별 평균 R 부호를
-센다. seed=7 의 첫 50 draw 는 README §8 이 인용하는 실행과 같은 수열이다(카운트·p95 일치 확인).
+센다. seed=7 의 첫 50 draw 는 README §2 가 인용하는 실행과 같은 수열이다(카운트·p95 일치 확인).
 
 실행(레포 루트): ``uv run python scripts/make_hero.py``
 → docs/images/hero-light.png · docs/images/hero-dark.png
