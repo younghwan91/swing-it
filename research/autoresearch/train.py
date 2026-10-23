@@ -79,10 +79,20 @@ def _fresh(V: dict) -> np.ndarray:
     return _C["fresh"]
 
 
+def _tight_rel(V: dict) -> np.ndarray:
+    """시장 대비 수축 — 종목 수축 / KOSPI 종가 수축(어제까지 10일 폭 / 60일 폭)."""
+    if "trel" not in _C:
+        k = pd.Series(V["kx"].astype(float))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            kt = ((k.rolling(10).max() - k.rolling(10).min()) / (k.rolling(60).max() - k.rolling(60).min())).shift(1).to_numpy()
+            _C["trel"] = _tight(V) / kt[None, :]
+    return _C["trel"]
+
+
 def signals(V: dict, x: dict) -> dict:
     B = _base(V)
     with np.errstate(invalid="ignore"):
-        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight(V) <= x["tight"]) & (B["ext"] <= x["ext"]) & (_fresh(V) <= x["fresh"])
+        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight_rel(V) <= x["tight"]) & (B["ext"] <= x["ext"]) & (_fresh(V) <= x["fresh"])
     return {"cand": cand, "score": B["rs"]}
 
 
@@ -93,7 +103,7 @@ def cfg(x: dict) -> dict:
 
 def get_strategy() -> dict:
     return {"params": {"theta": ("int", 60, 95), "N": ("choice", (20, 50, 120)), "ma_exit": ("int", 50, 200),
-                       "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 0.8), "exit_kind": ("choice", ("ma", "low")),
+                       "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 1.5), "exit_kind": ("choice", ("ma", "low")),
                        "low_w": ("int", 20, 120), "ext": ("float", 0.05, 0.40),
                        "fresh": ("int", 10, 120)},
             "signals": signals, "cfg": cfg}
