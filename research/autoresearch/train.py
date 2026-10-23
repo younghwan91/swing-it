@@ -66,10 +66,23 @@ def _tight(V: dict) -> np.ndarray:
     return _C["tight"]
 
 
+def _fresh(V: dict) -> np.ndarray:
+    """새 실적 뒤 지난 거래일 수 — eps_yoy 값이 바뀐 마지막 날부터(바뀐 적 없으면 큰 값)."""
+    if "fresh" not in _C:
+        e = np.nan_to_num(V["eps_yoy"].astype(float), nan=-9e9)
+        ch = np.zeros(e.shape, bool)
+        ch[:, 1:] = e[:, 1:] != e[:, :-1]
+        T = e.shape[1]
+        idx = np.where(ch, np.arange(T)[None, :], -10 ** 6)
+        last = np.maximum.accumulate(idx, axis=1)
+        _C["fresh"] = np.arange(T)[None, :] - last
+    return _C["fresh"]
+
+
 def signals(V: dict, x: dict) -> dict:
     B = _base(V)
     with np.errstate(invalid="ignore"):
-        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight(V) <= x["tight"]) & (B["ext"] <= x["ext"])
+        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight(V) <= x["tight"]) & (B["ext"] <= x["ext"]) & (_fresh(V) <= x["fresh"])
     return {"cand": cand, "score": B["rs"]}
 
 
@@ -81,5 +94,6 @@ def cfg(x: dict) -> dict:
 def get_strategy() -> dict:
     return {"params": {"theta": ("int", 60, 95), "N": ("choice", (20, 50, 120)), "ma_exit": ("int", 50, 200),
                        "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 0.8), "exit_kind": ("choice", ("ma", "low")),
-                       "low_w": ("int", 20, 120), "ext": ("float", 0.05, 0.40)},
+                       "low_w": ("int", 20, 120), "ext": ("float", 0.05, 0.40),
+                       "fresh": ("int", 10, 120)},
             "signals": signals, "cfg": cfg}
