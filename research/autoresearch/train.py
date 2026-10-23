@@ -54,10 +54,22 @@ def _brk(V: dict, n: int) -> np.ndarray:
     return _C[("brk", n)]
 
 
+def _tight(V: dict) -> np.ndarray:
+    """수축 — 어제까지 10일 고저 폭 / 어제까지 60일 고저 폭(작을수록 변동 수축)."""
+    if "tight" not in _C:
+        H, L = V["H"], V["L"]
+        def rng(w):
+            r = _rmax(H, w) - _rmin(L, w)
+            return np.concatenate([np.full((H.shape[0], 1), np.nan), r[:, :-1]], axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            _C["tight"] = rng(10) / rng(60)
+    return _C["tight"]
+
+
 def signals(V: dict, x: dict) -> dict:
     B = _base(V)
     with np.errstate(invalid="ignore"):
-        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"])
+        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight(V) <= x["tight"])
     return {"cand": cand, "score": B["rs"]}
 
 
@@ -68,5 +80,5 @@ def cfg(x: dict) -> dict:
 
 def get_strategy() -> dict:
     return {"params": {"theta": ("int", 60, 95), "N": ("choice", (20, 50, 120)), "ma_exit": ("int", 50, 200),
-                       "hard": ("float", 0.10, 0.25)},
+                       "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 0.8)},
             "signals": signals, "cfg": cfg}
