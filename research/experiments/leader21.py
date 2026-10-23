@@ -183,8 +183,11 @@ def _extras(days, codes, C, ma, uni, rs, cwi, regime_on, cand, con) -> dict:
 
 
 def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict | None" = None,
-             paper: bool = False, start: str = START) -> "tuple[pd.Series, pd.DataFrame]":
-    """``paper`` = 모의매매 보정(검증 24차): 거래정지일 매도 미룸 · 손절 비교 허용오차 · 국면 청산 사유 표시. 백테스트 기본은 끔(재현)."""
+             paper: bool = False, start: str = START, net_mtm: bool = False) -> "tuple[pd.Series, pd.DataFrame]":
+    """``paper`` = 모의매매 보정(검증 24차): 거래정지일 매도 미룸 · 손절 비교 허용오차 · 국면 청산 사유 표시. 백테스트 기본은 끔(재현).
+
+    ``net_mtm`` = 보유 평가를 청산 비용(그날 왕복 × ``cost_mult``)을 뺀 순가치로 — autoresearch 평가기(리뷰 M4: 폴드 끝 보유분 비용 누락).
+    기본 끔 = 기존 경로 그대로."""
     days, O, H, L, C = D["days"], D["O"], D["H"], D["L"], D["C"]  # noqa: E741, F841
     t0, t1 = int(days.searchsorted(pd.Timestamp(start))), int(days.searchsorted(pd.Timestamp(end), side="right"))
     pos_cap = cfg.get("pos_cap", POS_CAP)             # 전진 팔 leader_C20: 비중 절반(pos_cap·risk) — 기본값 = 기존 상수
@@ -282,7 +285,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, end: str = END, state: "dict 
         for ci, p in pos.items():
             if np.isfinite(C[ci, t]):
                 p["last_px"] = C[ci, t]
-            mtm += p["qty"] * p["last_px"]
+            mtm += p["qty"] * p["last_px"] * ((1 - D["cost"][D["mkt"][ci], min(t, D["cost"].shape[1] - 1)] * cost_mult) if net_mtm else 1.0)
         e = cash + mtm
         eq[k] = e
         expo[k] = mtm / e if e > 0 else 0.0
