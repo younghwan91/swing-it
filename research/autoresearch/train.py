@@ -44,7 +44,7 @@ def _base(V: dict) -> dict:
         rs = pd.DataFrame(np.where(V["uni"] & np.isfinite(raw), raw, np.nan).T).rank(axis=1, pct=True).to_numpy().T * 100
         with np.errstate(invalid="ignore"):
             tt = (C > ma[50]) & (ma[50] > ma[150]) & (ma[150] > ma[200]) & (ma[200] > ma200_prev) & (C >= 0.75 * hi252) & (C >= 1.30 * lo252)
-        _C["base"] = {"rs": rs, "tt": tt}
+        _C["base"] = {"rs": rs, "tt": tt, "ext": C / ma[50] - 1.0}
     return _C["base"]
 
 
@@ -69,7 +69,7 @@ def _tight(V: dict) -> np.ndarray:
 def signals(V: dict, x: dict) -> dict:
     B = _base(V)
     with np.errstate(invalid="ignore"):
-        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight(V) <= x["tight"])
+        cand = B["tt"] & _brk(V, x["N"]) & (B["rs"] >= x["theta"]) & (_tight(V) <= x["tight"]) & (B["ext"] <= x["ext"])
     return {"cand": cand, "score": B["rs"]}
 
 
@@ -81,5 +81,5 @@ def cfg(x: dict) -> dict:
 def get_strategy() -> dict:
     return {"params": {"theta": ("int", 60, 95), "N": ("choice", (20, 50, 120)), "ma_exit": ("int", 50, 200),
                        "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 0.8), "exit_kind": ("choice", ("ma", "low")),
-                       "low_w": ("int", 20, 120)},
+                       "low_w": ("int", 20, 120), "ext": ("float", 0.05, 0.40)},
             "signals": signals, "cfg": cfg}
