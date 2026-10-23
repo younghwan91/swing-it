@@ -75,10 +75,11 @@ def signals(V: dict, x: dict) -> dict:
 
 def cfg(x: dict) -> dict:
     return {"max_pos": 10, "hard": x["hard"], "risk": 0.005, "pos_cap": 0.10, "pyramid": 1, "regime": 1,
-            "exit_kind": "ma", "exit_w": x["ma_exit"]}
+            "exit_kind": x["exit_kind"], "exit_w": x["ma_exit"] if x["exit_kind"] == "ma" else x["low_w"]}
 
 
 def get_strategy() -> dict:
     return {"params": {"theta": ("int", 60, 95), "N": ("choice", (20, 50, 120)), "ma_exit": ("int", 50, 200),
-                       "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 0.8)},
+                       "hard": ("float", 0.10, 0.25), "tight": ("float", 0.2, 0.8), "exit_kind": ("choice", ("ma", "low")),
+                       "low_w": ("int", 20, 120)},
             "signals": signals, "cfg": cfg}
