@@ -1,10 +1,11 @@
 {
- "research/autoresearch/prepare.py": "0cddf799580f03fe9d60902791662a3682cacfbd04073db5effbab5b78170d52",
+ "research/autoresearch/prepare.py": "ff2f87f9006d7910a75d1307543c0248760ea881ffea97dc42d1c2a187c84484",
  "research/experiments/leader21.py": "61d1d2f96bcb610d2446398d290880e23f66e4ddf156f66fe5583dca8e279954",
  "research/experiments/indep30.py": "b378152db0a63280c80c1f6bc37b2927fbaa2e51ed264b926a5c9a5bf2e401c5",
  "src/swing_it/features/eps_asof.py": "8775af5161035faa9cfe686732d9ec5921d2e7254244ab838c73d0c31f17fcbf",
  "src/swing_it/features/korea.py": "ca36521c59f3284be87aaaab8110670e545b3c6e3d7aef7b5272833ed82d9b03",
  "src/swing_it/storage.py": "f6bbe20878d51242271d910cbe1738c6a2723bc382ddc62939b0fcc44be3339c",
  "cache/era_A_s0.pkl": "9a6e8d951ed522ea7ef602b091ef6125c054a0b84816a0b46b5b92ba0edea396",
- "cache/era_B_s0.pkl": "1d81ace985e7c143a5c1b3367de6dfb3f2ada0dc0224882e8d9b075a9297cd13"
+ "cache/era_B_s0.pkl": "1d81ace985e7c143a5c1b3367de6dfb3f2ada0dc0224882e8d9b075a9297cd13",
+ "ext/krx_quant_core/stats/sharpe.py": "dbbbd189770a506e35fa0b8136e4d8f148861a61af35d1ef958e8d389629d5ff"
 }

@@ -46,3 +46,4 @@ research/autoresearch/run.log
 research/autoresearch/last_run.json
 research/autoresearch/RUNS.jsonl
 research/autoresearch/BEST.json
+research/autoresearch/BEST_HISTORY.jsonl

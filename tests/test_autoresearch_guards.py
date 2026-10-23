@@ -53,6 +53,10 @@ def test_uni_guard_cannot_be_bypassed_by_cand():
     "import os\n", "import pickle\n", "from prepare import COST_MULT\n", "x = open('a')\n", "y = getattr(1, 'real')\n",
     "import numpy as np\nnp.load('x.npy')\n", "import pandas as pd\npd.read_pickle('x')\n", "a = (1).__class__\n",
     "BAD = ['005930']\n", "Y = 2022\n", "S = '2020-03'\n", "def f(V):\n    return V['days'].year\n",
+    # v3(재검증 MAJOR-1): 리뷰어가 v2 를 통과시킨 우회들
+    "f = __builtins__['op' + 'en']\n", "from numpy import load\n", "from pandas import read_pickle as r\n",
+    "import numpy.lib.format\n", "import typing\n", "import pandas as pd\nh = pd.io.common.get_handle('x', 'rb')\n",
+    "import pandas as pd\nh = pd.HDFStore('x')\n", "def g():\n    yield 1\nfr = g().gi_frame.f_back\n", "import numpy as np\nx = np._core\n",
 ])
 def test_lint_rejects_escape_and_hindsight(src):
     assert P.lint_train(src)
@@ -77,6 +81,28 @@ def test_causality_catches_lookahead(tmp_path):
     honest.write_text(peek.read_text().replace("shift(-1)", "shift(1)"))
     ok, _ = P.causality({"A": D, "B": D}, {"folds": [{"era": "A", "params": {}}, {"era": "B", "params": {}}]}, str(honest))
     assert ok
+
+
+def test_causality_catches_one_day_lookahead(tmp_path):
+    D = _toy(t=300)
+    rng = np.random.default_rng(1)
+    D["C"] = np.cumprod(1 + rng.normal(0, 0.02, D["C"].shape), axis=1)
+    one = tmp_path / "one.py"
+    one.write_text("import numpy as np\nimport pandas as pd\n"
+                   "def signals(V, x):\n    nxt = pd.DataFrame(V['C'].T).shift(-1).to_numpy().T\n"
+                   "    return {'cand': V['uni'] & ~(nxt < V['C'] * 0.97), 'score': V['C']}\n"
+                   "def get_strategy():\n    return {'params': {}, 'signals': signals, 'cfg': lambda x: {}}\n")
+    res = {"folds": [{"era": "A", "params": {}}, {"era": "B", "params": {}}]}
+    ok, why = P.causality({"A": D, "B": D}, res, str(one), workers=2)
+    assert not ok, why
+
+
+def test_fold_months_include_first_month():
+    D = _toy(t=60)
+    eq = pd.Series(np.linspace(1.0, 1.2, 60), index=D["days"])
+    eq.attrs["expo"] = np.full(60, 0.5)
+    m = P.fold_stats(D, eq, "2012-01-01", "2013-01-01")["m"]
+    assert m.index[0].month == 1 and len(m) == 3
 
 
 def test_plateau_pick_prefers_plateau_over_spike():
