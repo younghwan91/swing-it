@@ -89,7 +89,7 @@
 - 이익 잠금·본전 이동·촘촘한 추적으로 승자를 일찍 자르면 원칙 위반이다(고점 반납도, 털기 손절도 사용자가 차트로 짚은 실수다).
 - EPS 상승은 필수 조건이다. GA 유전자로 끄지 않는다. 장중 매매(장중 손절·매도)가 전제다.
 - 정석 진입: 급등 뒤 **하락** 쐐기, H0 를 A 로 세고 바닥 D 에서 산다. 상승 쐐기는 오답이다.
-- 미너비니 근거는 fcs `research/logs/sepa_explore/MINERVINI_RULES.md`(쪽 번호)와 책 그래프 `/home/young/minervini-graph/`
+- 미너비니 근거는 fcs `research/logs/sepa_explore/MINERVINI_RULES.md`(쪽 번호)와 책 그래프 `~/git/swing-it/data/minervini-graph/`
   (`graphify query`)에서 찾는다. 사용자는 "왠만하면 미너비니를 따라"라고 했다.
 - 파라미터 하나를 고정하자는 제안을 반복하지 않는다. 고정·사전등록하는 것은 절차와 합격 바이고, 파라미터는 워크포워드로 굴린다.
   최적화는 확률적이다 — 한 경로의 극값·경계가 아니라 고원을 고르고, 거래별 R 분포로 본다.
