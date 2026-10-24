@@ -10,3 +10,7 @@
 # 생성 직후 verify_report.py 가 수식·데이터·계산 53항목을 점검하고,
 # 실패하면 폴더에 VERIFY_FAILED.txt 를 남긴다.
 10 18 * * 1-5 /home/young/git/swing-it/scripts/daily_report.sh >> /home/young/git/swing-it/reports/cron.log 2>&1
+
+# 전진 모의매매(fcs 브랜치, 워크트리 ~/git/.harness-wt/swing-it/feature-combined-strategy) — 평일 07:43.
+# DB 확정(06:30) 뒤 장 전에 팔마다 장부에 덧붙이고 장부만 그 브랜치에 커밋한다(push 없음).
+43 7 * * 1-5 mkdir -p /home/young/logs && /home/young/git/.harness-wt/swing-it/feature-combined-strategy/scripts/paper_daily.sh >> /home/young/logs/swing-it-paper.log 2>&1
