@@ -59,8 +59,9 @@ TRAIN = os.path.join(HERE, "train.py")
 CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/autoresearch")
 SHADOW = os.path.expanduser("~/.cache/cc-swing/autoresearch_ledger")      # 원장 사본(작업 트리를 지워도 남는다)
 RUNS, LOCKBOX, BEST, LAST = (os.path.join(HERE, f) for f in ("RUNS.jsonl", "LOCKBOX.jsonl", "BEST.json", "last_run.json"))
+SCREEN = os.path.join(HERE, "SCREEN.jsonl")              # 탐색 절반 바에서 떨어진 심사(잠금 미개봉) — 정정 3
 MANIFEST = os.path.join(HERE, "MANIFEST.json")
-PREREG_TAG = "autoresearch-prereg-3"
+PREREG_TAG = "autoresearch-prereg-4"
 GUARDED_FILES = ("research/autoresearch/prepare.py", "research/experiments/leader21.py", "research/experiments/indep30.py",
                  "src/swing_it/features/eps_asof.py", "src/swing_it/features/korea.py", "src/swing_it/storage.py")
 LOCKBOX_MAX = 3
@@ -712,6 +713,21 @@ def big_int_constants(src: str) -> "list[int]":
                    and not isinstance(n.value, bool) and n.value > 252})
 
 
+def search_bars(s0: dict, nulls: dict, top5_s: float, dsr_p: float, t_s: float) -> dict:
+    """탐색 절반만으로 정해지는 바(정정 3) — 하나라도 거짓이면 잠금 절반을 열지 않는다."""
+    return {"b1_search_positive": s0["score"] > 0 and s0["eraA_alpha"] > 0 and s0["eraB_alpha"] > 0 and s0["excess_vs_kospi_mean"] > 0,
+            "b2_beats_nulls_p95": all(len(v) and s0["score"] > float(np.quantile(v, 0.95)) for v in nulls.values()),
+            "b3_top5_removed_positive": top5_s > 0,
+            "b5_dsr_ge_095": dsr_p >= 0.95,
+            "b6_trades": s0["oos_trades_per_year"] >= 20,
+            "b7_factor_t_search": t_s > 2.0,
+            "b8_human_reviewed": True}
+
+
+def lockbox_bars(bars: dict, s1: dict, t_l: float) -> dict:
+    return {**bars, "b4_lockbox": s1["score"] > 0 and s1["folds_pos"] >= 6 and not s1["void"], "b7_factor_t_lockbox": t_l > 1.5}
+
+
 def final(workers: int, reviewed_sha: str) -> None:
     import psycopg2
     from krx_quant_core.stats.sharpe import deflated_sharpe_from_sample
@@ -743,31 +759,32 @@ def final(workers: int, reviewed_sha: str) -> None:
         nulls[kind] = [x["raw_score"] for x in sc if np.isfinite(x["raw_score"])]
         nvoid[kind] = sum(x["void"] for x in sc)
     log("널 완료")
-    Dl = {e: slice_half(full[e], 1) for e in ERAS}                   # 잠금 절반 — 메모리에서만
-    lock = walk_forward(Dl, workers)
-    s1 = summarize(lock)
-    top5_l = top_removed_score(Dl, lock)
     ms = pd.concat([m for m in search["months"] if len(m)])
     N = n_trials()
     dsr = deflated_sharpe_from_sample(ms["sel"].to_numpy(), N)
     Fs = pd.concat([factor_months(Ds[e]) for e in ERAS])
-    Fl = pd.concat([factor_months(Dl[e]) for e in ERAS])
     a_s, t_s = factor_t(search["months"], Fs)
-    a_l, t_l = factor_t(lock["months"], Fl)
-    bars = {"b1_search_positive": s0["score"] > 0 and s0["eraA_alpha"] > 0 and s0["eraB_alpha"] > 0 and s0["excess_vs_kospi_mean"] > 0,
-            "b2_beats_nulls_p95": all(len(v) and s0["score"] > float(np.quantile(v, 0.95)) for v in nulls.values()),
-            "b3_top5_removed_positive": top5_s > 0,
-            "b4_lockbox": s1["score"] > 0 and s1["folds_pos"] >= 6 and not s1["void"],
-            "b5_dsr_ge_095": float(dsr.get("prob_deflated_sharpe") or 0) >= 0.95,
-            "b6_trades": s0["oos_trades_per_year"] >= 20,
-            "b7_factor_t": t_s > 2.0 and t_l > 1.5,
-            "b8_human_reviewed": True}
+    bars = search_bars(s0, nulls, top5_s, float(dsr.get("prob_deflated_sharpe") or 0), t_s)
     out = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": sha, "evaluator": PREREG_TAG, "n_trials": N, "search": s0,
            "search_top5_removed": top5_s, "search_cost1x": c1, "nulls_p95": {k: float(np.quantile(v, 0.95)) for k, v in nulls.items() if len(v)},
-           "nulls_median": {k: float(np.median(v)) for k, v in nulls.items() if len(v)}, "nulls_void": nvoid, "lockbox": s1,
-           "lockbox_top5_removed": top5_l, "factor": {"search_alpha_m": a_s, "search_t_nw": t_s, "lockbox_alpha_m": a_l, "lockbox_t_nw": t_l},
-           "dsr_monthly_sel": dsr, "big_int_constants": big_int_constants(src), "bars": bars, "pass": all(bars.values()),
-           "folds_search": search["folds"], "folds_lockbox": lock["folds"]}
+           "nulls_median": {k: float(np.median(v)) for k, v in nulls.items() if len(v)}, "nulls_void": nvoid,
+           "factor": {"search_alpha_m": a_s, "search_t_nw": t_s}, "dsr_monthly_sel": dsr, "big_int_constants": big_int_constants(src),
+           "folds_search": search["folds"]}
+    if not all(bars.values()):                                       # 정정 3: 탐색 바가 떨어지면 잠금 절반을 열지 않는다(3회를 아낀다)
+        out.update({"bars": bars, "pass": False, "lockbox_opened": False})
+        _append(SCREEN, out)
+        print(json.dumps(out, ensure_ascii=False, indent=1, default=str))
+        return
+    Dl = {e: slice_half(full[e], 1) for e in ERAS}                   # 잠금 절반 — 메모리에서만
+    lock = walk_forward(Dl, workers)
+    s1 = summarize(lock)
+    top5_l = top_removed_score(Dl, lock)
+    Fl = pd.concat([factor_months(Dl[e]) for e in ERAS])
+    a_l, t_l = factor_t(lock["months"], Fl)
+    bars = lockbox_bars(bars, s1, t_l)
+    out.update({"lockbox": s1, "lockbox_top5_removed": top5_l, "bars": bars, "pass": all(bars.values()), "lockbox_opened": True,
+                "folds_lockbox": lock["folds"]})
+    out["factor"].update(lockbox_alpha_m=a_l, lockbox_t_nw=t_l)
     _append(LOCKBOX, out)                                                        # 잠금 사용의 증인(덧붙이기)
     print(json.dumps(out, ensure_ascii=False, indent=1, default=str))
 

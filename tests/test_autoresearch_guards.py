@@ -137,3 +137,14 @@ def test_beats_requires_paired_fold_improvement(tmp_path, monkeypatch):
     broad = [{"alpha": 0.01} for _ in range(10)]
     ok, _ = P.beats({"void": False, "score": 0.01}, broad, 0.0)
     assert ok
+
+
+def test_search_bars_gate_lockbox():
+    """정정 3: 탐색 절반 바 하나라도 거짓이면 잠금 절반을 열지 않는다 — e104063 처럼 DSR·팩터 t 만 떨어져도."""
+    s0 = {"score": 0.035, "eraA_alpha": 0.09, "eraB_alpha": 0.12, "excess_vs_kospi_mean": 0.06, "oos_trades_per_year": 36}
+    nulls = {k: [-0.1, 0.0] for k in ("rank", "thin", "params")}
+    assert all(P.search_bars(s0, nulls, 0.017, 0.96, 2.1).values())
+    assert not all(P.search_bars(s0, nulls, 0.017, 0.583, 2.1).values())
+    assert not all(P.search_bars(s0, nulls, 0.017, 0.96, 1.90).values())
+    b = P.lockbox_bars(P.search_bars(s0, nulls, 0.017, 0.96, 2.1), {"score": 0.01, "folds_pos": 5, "void": False}, 1.6)
+    assert not b["b4_lockbox"] and b["b7_factor_t_lockbox"]
