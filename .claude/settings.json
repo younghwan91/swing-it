@@ -3,7 +3,14 @@
     "deny": [
       "Edit(**/TRIALS.jsonl)",
       "Edit(**/RUNS.jsonl)",
-      "Edit(**/research/paper/*.jsonl)"
+      "Edit(**/research/paper/*.jsonl)",
+      "Edit(**/research/autoresearch/prepare.py)",
+      "Edit(**/research/autoresearch/*.jsonl)",
+      "Edit(**/research/autoresearch/MANIFEST.json)",
+      "Edit(**/research/autoresearch/BEST.json)",
+      "Read(~/.cache/cc-swing/scratch/autoresearch/**)",
+      "Bash(git tag:*)",
+      "Edit(**/research/autoresearch/last_run.json)"
     ]
   }
 }

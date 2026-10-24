@@ -41,3 +41,10 @@ research/logs/sepa_explore/ga2/TRIALS.jsonl
 
 # Orca 앱 드롭(책 PDF 등 저작권 자료가 들어온 적 있다) — 커밋 대상이 아니다
 .orca/
+research/autoresearch/results.tsv
+research/autoresearch/run.log
+research/autoresearch/last_run.json
+research/autoresearch/RUNS.jsonl
+research/autoresearch/BEST.json
+research/autoresearch/BEST_HISTORY.jsonl
+research/autoresearch/SCREEN.jsonl
