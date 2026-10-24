@@ -92,6 +92,7 @@ def main() -> None:
     ap.add_argument("--arm", default="leader_A")
     ap.add_argument("--ledger", default=None, help="기본: 팔별 장부(ARM_LEDGER), 없으면 leader21_ledger.jsonl")
     ap.add_argument("--legacy-close", action="store_true", help="정정 G28-3 전 결함 가격(daily_bars.close)으로 시총 — 비교용만")
+    ap.add_argument("--asof", default="", help="빠진 날 채우기: 쉼표로 이은 거래일(YYYY-MM-DD) — 그날까지만 시뮬레이션하고 행에 backfilled=true")
     a = ap.parse_args()
     price = ARM_PRICE.get(a.arm, PRICE_RAW)
     if a.legacy_close and a.arm in ARM_PRICE:
@@ -120,17 +121,27 @@ def main() -> None:
         net, _ = report_events(con, days, codes)
         D["F_ana"] = window_sum(net, WIN) >= 1
     a.ledger = a.ledger or ARM_LEDGER.get(a.arm, LEDGER)
+    names = pd.read_sql("select code, name from stocks", con).set_index("code")["name"].to_dict()
+    ends = [pd.Timestamp(x) for x in a.asof.split(",") if x] or [days[-1]]
+    for end in ends:                                # --asof: 그날 아침 돌렸을 행을 그날까지의 데이터로 다시 만든다(결정적·인과적 시뮬레이션)
+        if end not in days:
+            raise SystemExit(f"--asof {end.date()} 는 DB 거래일이 아니다")
+        record(a, con, D, days[: days.get_loc(end) + 1], cfg, price, px_info, names, backfilled=bool(a.asof))
+
+
+def record(a, con, D: dict, days: pd.DatetimeIndex, cfg: dict, price: dict, px_info: dict, names: dict, backfilled: bool) -> None:
+    from swing_it.storage import read_index
     st: dict = {}
     eq, tr = L.simulate(D, cfg, 1.0, end=str(days[-1].date()), state=st, paper=True)
     ret_today = float(eq.iloc[-1] / eq.iloc[-2] - 1)
-    ix = read_index(con, ["001", "101"], cols=("code", "date", "close"), start=str(days[-5].date()), with_level=False,
+    ix = read_index(con, ["001", "101"], cols=("code", "date", "close"), start=str(days[-5].date()), end=str(days[-1].date()), with_level=False,
                     order_by_date=True, parse_dates=True)
     bench = {}
     for code, nm in (("001", "kospi"), ("101", "kosdaq")):
         z = ix[ix["code"] == code].set_index("date")["close"]
+        z = z[z.index <= days[-1]]
         if len(z) >= 2 and z.index[-1] == days[-1]:
             bench[nm] = float(z.iloc[-1] / z.iloc[-2] - 1)
-    names = pd.read_sql("select code, name from stocks", con).set_index("code")["name"].to_dict()
     import subprocess  # noqa: PLC0415
     sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     row = {"date": st["last_day"], "arm": a.arm, "cfg": cfg, "git": sha, "run_at": pd.Timestamp.now().isoformat(timespec="seconds"),
@@ -142,6 +153,8 @@ def main() -> None:
            "orders_next_open": {"buy": [(c, names.get(c, "")) for c in st["buy"]], "sell": [(c, names.get(c, "")) for c in st["sell"]],
                                 "add": [(c, names.get(c, "")) for c in st["add"]]},
            "bench_ret_today": bench}
+    if backfilled:                                  # 빠진 날 채우기 — 그날 아침 실행이 아니다(장부 손실 뒤 복구, 2026-10-24)
+        row["backfilled"] = True
     if a.arm in DETAIL_ARMS:                        # 정정 GP-1 M5: 판정을 장부만으로 계산할 수 있게 — 보유별 손절선·비중, 그날 청산 거래
         for c, p in st["pos"].items():
             if "stop" in p:
