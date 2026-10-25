@@ -1197,27 +1197,42 @@ def _tickp_of(V, cd, D):
     return tp
 
 
-def test_lattice_detector_fires_on_raw_and_uniform_multiplier_passes_rounded():
-    """판정 32 위반 주입: (a) 반올림·배수 없는 V, (b) U[1,2) 배수만 — 둘 다 걸린다. (c) 격자 반올림 + log-균등 배수 — 미래 사건 라벨에서 통과."""
+def test_lattice_acceptance_fires_on_injected_violations_and_passes_rounded():
+    """판정 32·33 위반 주입: (a) 반올림·배수 없는 V, (b) U[1,2) 배수만 — 새 수용 검사(정수성 0.02·가수 순열·N>1000 층별 0.04)도 걸린다.
+    (c) 격자 반올림 + log-균등 배수 — 통과."""
     D, ev, cd = _lattice_panel(adjust=True)
     uni = np.ones(D["C"].shape, bool)
     lab = {"event": ev[:, None]}
     V = {k: D[k] for k in ("O", "H", "L", "C")}
-    V["tickp"] = _tickp_of(V, cd, {**D})                                              # 원 가격의 tickp
-    with pytest.raises(ValueError, match="격자 탐지기"):
+    V["tickp"] = _tickp_of(V, cd, {**D})
+    with pytest.raises(ValueError, match="정수성"):
         cd.check_lattice_leak(V, uni, lab)
     m = 1 + np.random.default_rng(1).random(len(ev))
     Vu = {k: D[k] * m[:, None] for k in ("O", "H", "L", "C")}
     Vu["tickp"] = V["tickp"]
-    with pytest.raises(ValueError, match="격자 탐지기"):
+    with pytest.raises(ValueError, match="정수성"):
         cd.check_lattice_leak(Vu, uni, lab)
-    D2 = {**D, "vmult": cd.price_mult(D["codes"], "salt"), "tickp": np.zeros(D["C"].shape), "kx": np.ones(len(D["days"])),
-          "kq": np.ones(len(D["days"])), "regime_on": np.ones(len(D["days"]), bool)}
+    D2 = {**D, "vmult": cd.price_mult(D["codes"], "salt")}
     Vr = {k: cd.round_to_tick(D[k], D["days"], D["mkt_real"]) * D2["vmult"][:, None] for k in ("O", "H", "L", "C")}
     Vr["tickp"] = _tickp_of(Vr, cd, D2)
-    out = cd.check_lattice_leak(Vr, uni, lab, tol=1.0)                                # 값만(장난감 300 종목 — 아래 주석)
-    assert abs(out["event_all"]["diff"]) < 0.05 and abs(out["event_all"]["diff"]) < 0.1 * abs(0.83)
-    # N > 1000 칸은 장난감에서도 라벨 간 가격 구간 구성이 달라(× 0.8731) 차이가 남는다 — 실데이터에서도 같은 현상(정정 0-3 보고)
+    out = cd.check_lattice_leak(Vr, uni, lab)
+    r = out["event_h0"]
+    assert abs(r["r_diff"]) < 0.02 and abs(r["n1000_r_diff_strat"]) < 0.04 and r["m_perm_p"] > 0.025
+    assert abs(r["n1000_r_diff_raw"]) > abs(r["n1000_r_diff_strat"])                   # 층 나누기가 구성 차를 걷어낸다
+
+
+def test_mantissa_permutation_flags_real_label_signal():
+    """가수 순열 검사가 늘 통과하는 것은 아니다: 라벨 종목에만 가수 [2,5) 간격을 주면 관측 차가 순열 분포 밖이다."""
+    from research.combined import data as cd
+    n, t = 200, 60
+    rng = np.random.default_rng(3)
+    L = (np.arange(n) < 100)[:, None] & np.ones((n, t), bool)
+    fm = np.where(L, rng.random((n, t)) < 0.6, rng.random((n, t)) < 0.3)
+    obs, q975, p = cd._perm_p(fm, np.ones((n, t), bool), L)
+    assert abs(obs) > q975 and p < 0.025
+    fm0 = np.broadcast_to(rng.random((n, 1)) < 0.4, (n, t))                          # 종목별 상수 무작위(배수 효과) — 라벨과 무관
+    obs0, q0, p0 = cd._perm_p(fm0, np.ones((n, t), bool), L)
+    assert abs(obs0) <= q0
 
 
 def test_since_keep_not_reset_by_rerun_of_counted_sha():

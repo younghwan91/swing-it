@@ -181,18 +181,20 @@ def check_price_frac_leak(C: np.ndarray, VC: np.ndarray, uni: np.ndarray, tol: f
     return out
 
 
-LATTICE_W, LATTICE_TOL, LATTICE_N = 20, 0.02, 1000
+LATTICE_W, LATTICE_N = 20, 1000
+LATTICE_TOL_R, LATTICE_TOL_STRAT, LATTICE_PERM_N, LATTICE_PERM_Q, LATTICE_PERM_SEED = 0.02, 0.04, 200, 0.975, 20261026
 
 
-def lattice_flags(V: dict, W: int = LATTICE_W) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
-    """리뷰어(3차) 격자 탐지기: t 까지 W 일 창의 O·H·L·C(V) 0 아닌 최소 간격 d 로 (i) r = d/(tickp[t]·C[t−1]) 가 정수가 아니다(|r−k| > 0.12·max(k,1)
-    또는 k < 1), (ii) d 의 가수 ∈ [2.05, 4.95) 면 표지. → (표지 bool[N,T], 계산된 칸 bool[N,T], N = C/d float[N,T])."""
+def lattice_flags(V: dict, W: int = LATTICE_W) -> "tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]":
+    """리뷰어(3차) 격자 탐지기: t 까지 W 일 창의 O·H·L·C(V) 0 아닌 최소 간격 d.
+    격자 정수성 표지 = r = d/(tickp[t]·C[t−1]) 가 정수가 아니다(|r−k| > 0.12·max(k,1) 또는 k < 1), 가수 표지 = d 의 가수 ∈ [2.05, 4.95).
+    → (정수성 표지, 가수 표지, 계산된 칸, N = C/d) 모두 [N,T]."""
     from numpy.lib.stride_tricks import sliding_window_view as swv
     P = np.stack([np.asarray(V[k], float) for k in PRICE_KEYS], -1)
     n, T, _ = P.shape
-    flag, ok, nn = np.zeros((n, T), bool), np.zeros((n, T), bool), np.full((n, T), np.nan)
+    fr, fm, ok, nn = np.zeros((n, T), bool), np.zeros((n, T), bool), np.zeros((n, T), bool), np.full((n, T), np.nan)
     if T < W + 1:
-        return flag, ok, nn
+        return fr, fm, ok, nn
     t = np.arange(W - 1, T)
     tp = np.asarray(V["tickp"], float)
     for i in range(n):
@@ -204,31 +206,85 @@ def lattice_flags(V: dict, W: int = LATTICE_W) -> "tuple[np.ndarray, np.ndarray,
             r = d / (tp[i, t] * P[i, t - 1, 3])
             k = np.round(r)
             mant = d / 10 ** np.floor(np.log10(d))
-            flag[i, t] = (np.abs(r - k) > 0.12 * np.maximum(k, 1)) | (k < 1) | ((mant >= 2.05) & (mant < 4.95))
+            fr[i, t] = (np.abs(r - k) > 0.12 * np.maximum(k, 1)) | (k < 1)
+            fm[i, t] = (mant >= 2.05) & (mant < 4.95)
             nn[i, t] = P[i, t, 3] / d
         ok[i, t] = np.isfinite(r) & np.all(np.isfinite(w), 1)
-    return flag, ok, nn
+    return fr, fm, ok, nn
 
 
-def check_lattice_leak(V: dict, uni: np.ndarray, labels: dict, tol: float = LATTICE_TOL) -> dict:
-    """빌드 수용 검사(판정 32): 라벨(미래 수정 사건 있음/없음, 폐지/생존)마다 탐지기 표지율 차 < ``tol`` — uni 칸 전체와 N = C/d > 1000 칸 둘 다.
-    어기면 ValueError(캐시를 쓰지 않는다). 값 dict 를 돌려준다."""
-    flag, ok, nn = lattice_flags(V)
+def _rate_diff(f: np.ndarray, sub: np.ndarray, L: np.ndarray) -> "tuple[float, float, int, int]":
+    a, b = sub & L, sub & ~L
+    return (float(f[a].mean()) if a.any() else float("nan"), float(f[b].mean()) if b.any() else float("nan"), int(a.sum()), int(b.sum()))
+
+
+def _strat_diff(f: np.ndarray, sub: np.ndarray, L: np.ndarray, q: np.ndarray) -> float:
+    """log10(가격/틱) 10분위 층마다 (라벨 − 그 밖) 표지율 차를 라벨 칸 수로 가중 평균."""
+    x = np.log10(q[sub])
+    if len(x) == 0:
+        return float("nan")
+    edges = np.unique(np.quantile(x, np.linspace(0, 1, 11)))
+    s = np.full(q.shape, -1)
+    s[sub] = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, max(len(edges) - 2, 0))
+    num = den = 0.0
+    for b in np.unique(s[sub]):
+        m = sub & (s == b)
+        a, o = m & L, m & ~L
+        if a.any() and o.any():
+            num += a.sum() * (f[a].mean() - f[o].mean())
+            den += a.sum()
+    return float(num / den) if den else float("nan")
+
+
+def _perm_p(f: np.ndarray, sub: np.ndarray, L: np.ndarray, n: int = LATTICE_PERM_N, seed: int = LATTICE_PERM_SEED) -> "tuple[float, float, float]":
+    """종목 단위 순열: 라벨 행을 종목끼리 섞은 표지율 차 분포 → (관측 차, |차| 의 97.5 백분위, 순열 p = P(|순열| ≥ |관측|))."""
+    fa, fb, _, _ = _rate_diff(f, sub, L)
+    obs = fa - fb
+    rng = np.random.default_rng(seed)
+    ds = []
+    for _ in range(n):
+        Lp = L[rng.permutation(L.shape[0])]
+        a, b, _, _ = _rate_diff(f, sub, Lp)
+        if np.isfinite(a) and np.isfinite(b):
+            ds.append(abs(a - b))
+    ds = np.asarray(ds)
+    return obs, float(np.quantile(ds, LATTICE_PERM_Q)) if len(ds) else float("nan"), float((ds >= abs(obs)).mean()) if len(ds) else float("nan")
+
+
+def check_lattice_leak(V: dict, uni: np.ndarray, labels: dict, halves: "np.ndarray | None" = None) -> dict:
+    """빌드 수용 검사(판정 32·33). 라벨(미래 수정 사건 있음/없음, 폐지/생존)·절반마다:
+    (r) 격자 정수성 표지율 차, uni 칸 전체 |차| < 0.02.
+    (a) 가수 표지: 종목 단위 순열 200 회(고정 시드) — 관측 |차| ≤ 순열 |차| 97.5 백분위(종목별 배수의 무작위 효과라 정보가 아니다).
+    (b) N = C/d > 1000 칸: log10(가격/틱) 10분위 층별 가중 정수성 표지율 차 |차| < 0.04(가격 구간 구성 통제). 가격/틱 = 1/tickp(V 에 있는 값).
+    어기면 ValueError(캐시를 쓰지 않는다). 층 나누지 않은 차도 기록한다."""
+    fr, fm, ok, nn = lattice_flags(V)
     ok = ok & np.asarray(uni, bool)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q = 1.0 / np.asarray(V["tickp"], float)
+    hv = np.zeros(ok.shape[0], int) if halves is None else np.asarray(halves, int)
     out, bad = {}, []
-    for sub_name, sub in (("all", ok), ("n1000", ok & (nn > LATTICE_N))):
+    for h in np.unique(hv):
+        rows = (hv == h)[:, None]
+        okh = ok & rows
+        n1k = okh & (nn > LATTICE_N) & np.isfinite(q) & (q > 0)
         for lab, L in labels.items():
             L = np.broadcast_to(np.asarray(L, bool), ok.shape)
-            a, b = sub & L, sub & ~L
-            if not a.any() or not b.any():
-                out[f"{lab}_{sub_name}"] = None
-                continue
-            fa, fb = float(flag[a].mean()), float(flag[b].mean())
-            out[f"{lab}_{sub_name}"] = {"flag_label": fa, "flag_other": fb, "diff": fa - fb, "cells": int(a.sum()), "cells_other": int(b.sum())}
-            if abs(fa - fb) >= tol:
-                bad.append(f"{lab}/{sub_name} {fa:.3f} vs {fb:.3f}")
+            key = f"{lab}_h{h}"
+            ra, rb, na, nb = _rate_diff(fr, okh, L)
+            ma, mb, _, _ = _rate_diff(fm, okh, L)
+            obs_m, q975, p_m = _perm_p(fm, okh, L)
+            n_a, n_b, _, _ = _rate_diff(fr, n1k, L)
+            strat = _strat_diff(fr, n1k, L, q)
+            out[key] = {"cells": na, "cells_other": nb, "r_diff": ra - rb, "m_diff": ma - mb, "m_perm_q975": q975, "m_perm_p": p_m,
+                        "n1000_r_diff_raw": n_a - n_b, "n1000_r_diff_strat": strat}
+            if not abs(ra - rb) < LATTICE_TOL_R:
+                bad.append(f"{key} 정수성 차 {ra - rb:+.3f}")
+            if not abs(obs_m) <= q975:
+                bad.append(f"{key} 가수 차 {obs_m:+.3f} > 순열 97.5% {q975:.3f}")
+            if not abs(strat) < LATTICE_TOL_STRAT:
+                bad.append(f"{key} N>1000 층별 차 {strat:+.3f}")
     if bad:
-        raise ValueError(f"격자 탐지기 표지율 차 ≥ {tol} — " + "; ".join(bad))
+        raise ValueError("격자 탐지기 수용 검사 실패 — " + "; ".join(bad))
     return out
 
 
@@ -351,8 +407,8 @@ def build_era(con, era: str, end: "str | None" = None, frozen: "dict | None" = N
     out["vmult"] = price_mult(codes, price_salt() if salt is None else salt)
     Vfull = view_c(out)
     fl = check_price_frac_leak(D["C"], Vfull["C"], D["uni"])
-    lat = check_lattice_leak(Vfull, D["uni"],
-                             {"event": np.abs(D["C"] - np.round(D["C"])) > 1e-6, "delisted": isdel[:, None]})
+    lat = check_lattice_leak(Vfull, D["uni"], {"event": np.abs(D["C"] - np.round(D["C"])) > 1e-6, "delisted": isdel[:, None]},
+                             halves=out["half"])
     win = np.asarray(pd.DatetimeIndex(days) >= NEWS_START)[None, :] & D["uni"]
     uc = D["uni"].sum(1)
     out["diag"] = {**D["diag"], "eps_up_share": float(up[ci, s].mean()),
