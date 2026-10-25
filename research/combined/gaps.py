@@ -36,21 +36,27 @@ def gap_arrays(O: np.ndarray, C: np.ndarray, raw_close: np.ndarray, reopen: np.n
     """야간 갭 배열. 모두 [N,T], t 는 시가 날(전일 종가 = t-1).
 
     - ``gap[t] = O[t]/C[t-1] - 1`` (수정가). ``reopen`` 칸·t=0 은 NaN.
-    - ``tickp[t] = tick(raw_close[t-1]) / raw_close[t-1]`` (원주가, 그날 t-1 의 호가표). t=0 은 NaN.
+    - ``tickp[t] = tick(raw_close[t-1]) / raw_close[t-1]`` (원주가, 주문일 t 의 호가표). t=0 은 NaN.
     - ``gap_event[t] = |gap| >= (lu[t]-1)/2`` — 제한폭 절반 이상, 상승·하락 대칭. NaN 갭은 False.
     """
     O = np.asarray(O, dtype=float)  # noqa: E741
     C = np.asarray(C, dtype=float)
     raw = np.asarray(raw_close, dtype=float)
     n, t = O.shape
+    mkt = np.asarray(mkt)
+    days = pd.DatetimeIndex(days)
+    assert mkt.shape == (n,) and set(np.unique(mkt)) <= {0, 1}, "mkt: int[N], 0=코스피 1=코스닥"
+    assert len(days) == t, "days 길이 != T"
+    assert C.shape == (n, t) and raw.shape == (n, t) and np.asarray(reopen).shape == (n, t)
+    assert np.asarray(lu).shape[-1] == t, "lu 마지막 축 != T"
     gap = np.full((n, t), np.nan)
     tickp = np.full((n, t), np.nan)
     with np.errstate(divide="ignore", invalid="ignore"):
         gap[:, 1:] = O[:, 1:] / C[:, :-1] - 1.0
         gap[~np.isfinite(gap)] = np.nan
         gap[np.asarray(reopen, dtype=bool)] = np.nan
-        tk = tick_dated_vec(raw, days, mkt)
-        tickp[:, 1:] = tk[:, :-1] / raw[:, :-1]
+        # 가격은 전일(t-1) 원주가, 호가표는 주문일(t)에 시행 중인 표
+        tickp[:, 1:] = tick_dated_vec(raw[:, :-1], days[1:], mkt) / raw[:, :-1]
     tickp[~np.isfinite(tickp)] = np.nan
     with np.errstate(invalid="ignore"):
         event = np.abs(gap) >= (np.asarray(lu, dtype=float) - 1.0) / 2.0 - 1e-9  # 부동소수 경계 허용

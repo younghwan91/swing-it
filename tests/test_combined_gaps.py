@@ -68,3 +68,35 @@ def test_tick_dated_vec_matches_repo_scalar():
             got = tick_dated_vec(prices[None, :], days, np.array([m]))[0]
             ref = [tick_dated(float(p), row, m, 1) for p in prices]
             assert got.tolist() == ref
+
+
+def test_tickp_shifts_previous_close():
+    a = _args(1, 8)
+    a["raw_close"][0, :5] = 3160.0
+    a["raw_close"][0, 5:] = 61000.0
+    r = gap_arrays(**a)["tickp"]
+    assert np.isnan(r[0, 0])
+    assert np.isclose(r[0, 5], 5 / 3160, rtol=1e-5)  # 전일(t=4) 원주가 3160
+    assert np.isclose(r[0, 6], 100 / 61000, rtol=1e-5)  # 전일(t=5) 원주가 61000 -> 100원
+
+
+def test_gap_arrays_pre_reform_kosdaq():
+    a = _args(2, 8, days=PRE, mkt=np.array([1, 0]))
+    a["raw_close"][:] = 60_000.0
+    r = gap_arrays(**a)["tickp"]
+    assert np.isclose(r[0, 3], 100 / 60000, rtol=1e-5)  # 코스닥 6만원 -> 100
+    assert np.isclose(r[1, 3], 100 / 60000, rtol=1e-5)  # 코스피 6만원 -> 100(옛 표 10만 미만)
+    a["raw_close"][:] = 600_000.0
+    r = gap_arrays(**a)["tickp"]
+    assert np.isclose(r[0, 3], 100 / 600000, rtol=1e-5)  # 코스닥 60만 -> 100
+    assert np.isclose(r[1, 3], 1000 / 600000, rtol=1e-5)  # 코스피 60만 -> 1000
+
+
+def test_tickp_reform_boundary_uses_order_day_table():
+    days = pd.DatetimeIndex(["2023-01-20", "2023-01-23", "2023-01-24", "2023-01-25", "2023-01-26"])
+    a = _args(1, 5, days=days, mkt=np.array([1]))
+    a["raw_close"][:] = 1500.0  # 옛 표(<5000) 5원, 새 표(<2000) 1원
+    r = gap_arrays(**a)["tickp"]
+    # t=2 (2023-01-24 주문): 옛 표 5원. t=3 (2023-01-25 주문, 가격은 01-24 종가): 새 표 1원
+    assert np.isclose(r[0, 2], 5 / 1500, rtol=1e-5)
+    assert np.isclose(r[0, 3], 1 / 1500, rtol=1e-5)
