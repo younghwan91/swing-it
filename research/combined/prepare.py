@@ -17,8 +17,9 @@ v4 와 다른 점(전부):
    작동 폴드 = scalp 10폴드 전부, daytrade 시험 연도 2023·2024. 대칭차·점수 모두 작동 폴드에서 잰다. ``eligible`` = 둘 다 ok.
    자격은 keep 과 무관하다(후보 고르기 select.py 의 거르개).
 8. keep(``beats_c``): 폴드 조건이 "10 중 6 개선" → "체결이 바뀐 폴드(≥ 1) 중 alpha 개선 과반". top5 조건 → 쏠림 셋 각각 BEST 의 같은 값 − 0.01 이상.
-   폴드 정렬(era·test)이 BEST 와 다르면 (False, "fold mismatch"). BEST 는 BEST_HISTORY.jsonl(작업 트리 + 사본 중 긴 쪽)의 마지막 행,
-   없으면 원장의 마지막 beats_best 평가 행이다. 둘 다 없을 때만 "첫 유효 실행"(BEST.json 을 지워도 바가 되돌아가지 않는다).
+   폴드 정렬(era·test)이 BEST 와 다르면 (False, "fold mismatch"). BEST = 마지막 keep: 원장의 마지막 beats_best 평가 행이 마지막 accept 보다
+   뒤면 그 행, 아니면 BEST_HISTORY.jsonl(작업 트리 + 사본 중 긴 쪽) 마지막 행. 둘 다 없을 때만 "첫 유효 실행"(BEST.json 을 지워도 바가
+   되돌아가지 않는다).
 9. 시행 상한(``trial_state``): 고유 train sha 150, 또는 첫 keep(= beats_best True 평가 행 — --accept 를 건너뛰어도 센다) 뒤 고유 sha 30개 연속
    keep 없음. 상한이면 ``evaluate`` 는 계산·무결성 검사 전에 거부한다. 원장은 작업 트리 + ~/.cache 사본 중 긴 쪽(v4 와 같음).
    crash 도 원장에 crash 행으로 남겨 시행으로 센다(v4 는 세지 않았다). crash 때는 격리 실행의 stdout 을 버리고 stderr 끝 20줄만 보인다.
@@ -28,6 +29,9 @@ v4 와 다른 점(전부):
 11. 미래정보 검사(``causality_c``)는 절단 하나·전체 신호 하나마다 **새 프로세스**(spawn, maxtasksperchild=1)에서 디스크 캐시(또는 넘겨받은
     배열)로 돈다 — 평가 프로세스에 숨긴 상태(모듈 속성 등)가 절단 계산으로 넘어가지 못한다. 그리고 새 프로세스의 전체 신호가 평가에 쓴 신호와
     해시로 같아야 한다(호출 횟수·숨긴 상태로 신호를 바꾸는 train 은 void). 쏠림·비용 1배 재실행 신호도 원래 실행과 같아야 한다.
+    검사 파라미터 = 폴드에서 고른 값 + 학습 점 표본(폴드마다 8개, 시드 고정 — 미래로 고원 선택을 조종하는 train 차단; v4 는 고른 값만).
+    cfg(x) 는 signals 를 부른 적 없는 새 프로세스에서만 계산해(``fresh_cfgs``) 학습 점·채점·모든 재실행에 쓴다. 평가 프로세스의 cfg 가
+    그 값과 다르면 void(signals 가 숨긴 전체 기간 V 를 cfg 가 읽는 길 차단; v4 는 cfg 를 검사하지 않았다).
     실패 메시지는 "fail: " 로 시작한다. 계산 본체는 ``run_all``(격리 안 ``--inner`` 가 부른다 — 테스트 가능).
     워크포워드 학습 점 풀은 fork 그대로다: 부모는 그 시대의 전체 V 만 보므로 거기서 숨긴 상태는 train 이 이미 보는 것 이상을 주지 못하고,
     점수 실행(A → B 순)의 시대 A 는 B 를 보기 전에 끝난다. 그 뒤 재실행의 시대 간 오염은 위 신호 해시 비교가 잡는다.
@@ -107,6 +111,7 @@ NEWS_YEARS = (2023, 2024)
 TOP_DAYS, TOP_TRADE_FRAC = 10, 0.01
 CONC_KEYS = ("top1pct", "top_stock", "top10d")
 CRASH_TAIL = 20
+TRAIN_CHECK_PER_FOLD = 8                                                  # 미래정보 검사에 넣는 학습 점(폴드마다)
 REF_PARAMS = {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "exit_kind": "ma", "low_w": 20}   # leader_paper ARMS["leader_C"]
 BASELINE_TRAIN_SHA = "9d9ed460ff597f1d"                                   # 기준선 train.py sha256 앞 16자(테스트가 대조)
 _SANDBOX_HIDE_FIXED = tuple(os.path.expanduser(p) for p in (
@@ -226,11 +231,53 @@ def trade_key(tr: pd.DataFrame) -> str:
     return hashlib.sha1(json.dumps(pairs).encode()).hexdigest()[:12]
 
 
+_CFG_MEMO: dict = {}
+
+
+def _cfg_task(args):
+    """spawn 작업자: signals 를 한 번도 부르지 않은 새 프로세스·새 모듈에서 cfg(x) 만 계산한다."""
+    train_path, xs = args
+    S = load_strategy(train_path)
+    return [S["cfg"](x) for x in xs]
+
+
+def _xkey(x: dict) -> str:
+    return json.dumps(x, sort_keys=True, default=str)
+
+
+def fresh_cfgs(train_path: str, xs: list) -> "list[dict]":
+    """cfg(x) — signals 를 부른 적 없는 새 프로세스에서 계산한 값(train sha·x 로 기억). 채점·재실행은 이 값만 쓴다.
+    signals 가 모듈 전역 등에 숨긴 전체 기간 V 를 cfg 가 읽는 길(리뷰 IMPORTANT A)을 막는다."""
+    sha = hashlib.sha256(open(train_path, "rb").read()).hexdigest()[:16]
+    need = list({_xkey(x): x for x in xs if (sha, _xkey(x)) not in _CFG_MEMO}.values())
+    if need:
+        with mp.get_context("spawn").Pool(1, maxtasksperchild=1) as pool:
+            out = pool.map(_cfg_task, [(train_path, need)])[0]
+        for x, c in zip(need, out, strict=True):
+            _CFG_MEMO[(sha, _xkey(x))] = dict(c)
+    return [dict(_CFG_MEMO[(sha, _xkey(x))]) for x in xs]
+
+
+def training_points(spec: dict, fi: int, ei: int) -> "tuple[list[dict], np.ndarray]":
+    """폴드 fi(시대 순번 ei)의 학습 점 — 워크포워드와 미래정보 검사가 같은 점을 쓴다."""
+    return sample_params(spec, N_EVAL, SEED + 101 * fi + 7 * ei)
+
+
+def check_points(spec: dict, n_folds: int, ei: int, k: int = TRAIN_CHECK_PER_FOLD) -> "list[dict]":
+    """미래정보 검사에 넣을 학습 점 표본 — 폴드마다 k 개, 시드 고정(고원 선택을 미래로 조종하는 train 차단, 리뷰 IMPORTANT B)."""
+    out = []
+    for fi in range(n_folds):
+        pts, _ = training_points(spec, fi, ei)
+        idx = np.random.default_rng(SEED + 503 * fi + 11 * ei).choice(len(pts), size=min(k, len(pts)), replace=False)
+        out += [pts[int(i)] for i in sorted(idx)]
+    return out
+
+
 def _train_point(args):
-    fi, j, x = args
+    fi, j, x, cfg = args
     D, S, lo, hi = _G["D"], _G["S"], _G["folds"][fi][0], _G["folds"][fi][1]
     try:
-        eq, tr = simulate_c(D, S["signals"](_G["V"], x), S["cfg"](x), lo, hi)
+        eq, tr = simulate_c(D, S["signals"](_G["V"], x), cfg, lo, hi)
         st = fold_stats(D, eq, lo, hi)
         n = int((tr["entry"] >= lo).sum()) if len(tr) else 0
         return fi, j, (st["alpha"] if n >= MIN_TRAIN_TRADES_PER_YEAR * st["years"] else -1.0)
@@ -248,7 +295,7 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
     if neutral is not None and neutral not in REPO_KEYS:
         raise ValueError(f"neutral={neutral!r}")
     eras = ERAS if eras is None else eras
-    res = {"folds": [], "trades": [], "months": [], "daily": [], "sig_hash": []}
+    res = {"folds": [], "trades": [], "months": [], "daily": [], "sig_hash": [], "cfg_mismatch": []}
     for ei, (era, E) in enumerate(eras.items()):
         D = D_by_era[era]
         S = load_strategy(train_path)
@@ -261,9 +308,10 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
         else:
             tasks, pts_all = [], {}
             for fi in range(len(E["folds"])):
-                pts, U = sample_params(S["params"], N_EVAL, SEED + 101 * fi + 7 * ei)
+                pts, U = training_points(S["params"], fi, ei)
                 pts_all[fi] = (pts, U)
                 tasks += [(fi, j, x) for j, x in enumerate(pts)]
+            tasks = [(*t, c) for t, c in zip(tasks, fresh_cfgs(train_path, [t[2] for t in tasks]), strict=True)]
             S["signals"](_G["V"], tasks[0][2])                       # 부모에서 train.py 캐시를 데운다(fork 공유)
             with mp.get_context("fork").Pool(max(1, workers)) as pool:
                 out = pool.map(_train_point, tasks, chunksize=1)
@@ -272,10 +320,13 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
                 pts, U = pts_all[fi]
                 y = np.array([v for f, _, v in sorted(out, key=lambda r: (r[0], r[1])) if f == fi])
                 chosen.append(pts[plateau_pick(U, y)])
+        cfgs = fresh_cfgs(train_path, chosen)
         for fi, (_, lo, hi) in enumerate(E["folds"]):
-            x = chosen[fi]
+            x, cfg = chosen[fi], cfgs[fi]
             sig = S["signals"](_G["V"], x)
             res["sig_hash"].append(sig_hash(sig))
+            if clamp_cfg(S["cfg"](x)) != clamp_cfg(cfg):                # signals 를 부른 뒤의 cfg 가 새 프로세스 cfg 와 다르면 상태 의존
+                res["cfg_mismatch"].append(len(res["folds"]))
             if null and null[0] == "rank":
                 sig = {**sig, "score": rng.random(D["C"].shape)}
             elif null and null[0] == "thin":                         # 후보 솎기: 시험 구간 월별 통과율 그대로
@@ -287,11 +338,11 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
                     j = mon == mm
                     pr[j] = c[:, j].sum() / max(base[:, j].sum(), 1)
                 sig = {"cand": base & (rng.random(D["C"].shape) < pr[None, :]), "score": rng.random(D["C"].shape)}
-            eq, tr = simulate_c(D, sig, S["cfg"](x), lo, hi, exclude=exclude, mask=None if mask is None else mask.get(era),
+            eq, tr = simulate_c(D, sig, cfg, lo, hi, exclude=exclude, mask=None if mask is None else mask.get(era),
                                 cost_mult=cost_mult)
             tr = tr[(tr["entry"] >= lo) & (tr["entry"] < hi)] if len(tr) else tr
             if len(tr):                                              # 진입일 청산선까지 거리(종가 대비) — '좁은 실질 손절' 감시
-                c = clamp_cfg(S["cfg"](x))
+                c = clamp_cfg(cfg)
                 line = exit_line(D, c["exit_kind"], c["exit_w"])
                 ci = pd.Index(D["codes"]).get_indexer(tr["code"])
                 ti = D["days"].get_indexer(pd.to_datetime(tr["entry"]))
@@ -420,19 +471,23 @@ def _cause_task(args):
 
 def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int = 4, n_cut: int = 12,
                 sources: "dict | None" = None, eras: "dict | None" = None) -> "tuple[bool, str]":
-    """허용 0, 시대마다 절단 n_cut 곳(시험 폴드 시작 + 무작위), 그 시대 폴드 파라미터 전부, 절단 · 절단 뒤 시간 섞기 두 방식.
-    전체 신호도 절단 신호도 새 프로세스에서 만든다(평가 프로세스의 숨긴 상태 차단). ``sources`` = {시대: 캐시 경로}(없으면 배열을 넘긴다).
+    """허용 0, 시대마다 절단 n_cut 곳(시험 폴드 시작 + 무작위), 절단 · 절단 뒤 시간 섞기 두 방식.
+    검사하는 파라미터 = 그 시대 폴드 파라미터 전부 + 학습 점 표본(폴드마다 ``TRAIN_CHECK_PER_FOLD``, 시드 고정 — 고원 선택 조종 차단).
+    전체 신호도 절단 신호도 새 프로세스에서 만든다(평가 프로세스의 숨긴 상태 차단).
+    ``sources`` = {시대: 캐시 pickle 경로} — 작업자가 디스크에서 읽는다. 없으면 시대 dict 전체를 작업마다 pickle 로 넘긴다(맞지만 느리고
+    작업자 수만큼 메모리를 쓴다 — 큰 시대(select.py 의 C 등)는 경로가 있으면 넘긴다. 메모리에만 있는 잠금 절반은 경로 없이 넘겨도 된다).
     ``res["sig_hash"]`` 가 있으면 새 프로세스 전체 신호가 평가에 쓴 신호와 같아야 한다."""
     eras = ERAS if eras is None else eras
+    spec = load_strategy(train_path)["params"]                       # 학습 점 표본용(get_strategy 만 — signals 는 부르지 않는다)
     tasks, xs_by = [], {}
-    for era, E in eras.items():
+    for ei, (era, E) in enumerate(eras.items()):
         D = D_by_era[era]
         src = sources[era] if sources else D
         T = D["C"].shape[1]
         xs = []
-        for f in res["folds"]:
-            if f["era"] == era and f["params"] not in xs:
-                xs.append(f["params"])
+        for x in [f["params"] for f in res["folds"] if f["era"] == era] + check_points(spec, len(E["folds"]), ei):
+            if x not in xs:
+                xs.append(x)
         xs_by[era] = xs
         tasks.append((era, src, -1, "full", xs, train_path))
         starts = [int(D["days"].searchsorted(pd.Timestamp(lo))) for _, lo, _ in E["folds"]]
@@ -470,6 +525,8 @@ def run_all(D_by_era: dict, workers: int, train_path: str = TRAIN, sources: "dic
     log("워크포워드 끝")
     s = summarize_c(res)
     ok, why = causality_c(D_by_era, res, train_path, workers=max(1, workers // 2), sources=sources, eras=eras)
+    if ok and res.get("cfg_mismatch"):
+        ok, why = False, f"fail: cfg 가 signals 뒤 상태에 따라 바뀐다(폴드 {res['cfg_mismatch']}) — 채점은 새 프로세스 cfg"
     log("미래정보 검사 끝")
     conc = {k: float("nan") for k in CONC_KEYS}
     abl = {"scalp": None, "daytrade": None, "eligible": False}
@@ -586,12 +643,16 @@ def trial_state() -> dict:
 
 
 def best_record() -> "dict | None":
-    """BEST 바 — BEST_HISTORY(작업 트리·사본 중 긴 쪽) 마지막 행, 없으면 원장의 마지막 beats_best 평가 행, 둘 다 없으면 None."""
-    hist = _read_jsonl(BEST_HISTORY)
-    if hist:
+    """BEST 바 = 마지막 keep. 원장 순서로 마지막 beats_best 평가 행이 마지막 --accept 행보다 뒤면 그 평가 행(accept 안 된 keep —
+    상한 규칙과 같은 keep 정의), 아니면 BEST_HISTORY(작업 트리·사본 중 긴 쪽) 마지막 행. 둘 다 없으면 None(첫 유효 실행)."""
+    rows, hist = _read_jsonl(RUNS), _read_jsonl(BEST_HISTORY)
+    ib = max((i for i, r in enumerate(rows) if r.get("beats_best") is True and "folds" in r), default=None)
+    ia = max((i for i, r in enumerate(rows) if r.get("accept")), default=None)
+    if hist and (ib is None or (ia is not None and ia > ib)):
         return hist[-1]
-    keeps = [r for r in _read_jsonl(RUNS) if r.get("beats_best") is True and "folds" in r]
-    return keeps[-1] if keeps else None
+    if ib is not None:
+        return rows[ib]
+    return hist[-1] if hist else None
 
 
 def _fold_id(f: dict) -> tuple:

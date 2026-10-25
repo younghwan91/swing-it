@@ -335,6 +335,89 @@ def test_concentration_rerun_detects_state(tmp_path, monkeypatch):
         np.typecodes.pop("zz_calls_c4", None)
 
 
+CFG_STASH = ("import numpy as np\nimport pandas as pd\n_K = {}\n"
+             "def signals(V, x):\n    _K['c'] = V['C']\n    return {'cand': V['uni'] & (V['C'] > 0), 'score': V['C']}\n"
+             "def cfg(x):\n    if 'c' in _K:\n        hi = float(np.nanmean(_K['c'][:, -1]) > float(np.nanmean(_K['c'][:, 0])))\n"
+             "        return {'hard': 0.10 + 0.20 * hi, 'pyramid': 0}\n    return {'hard': 0.20, 'pyramid': 0}\n"
+             "def get_strategy():\n    return {'params': {}, 'signals': signals, 'cfg': cfg}\n")
+
+
+def test_cfg_reading_signal_stash_is_neutralised_and_voided(tmp_path, monkeypatch):
+    """signals 가 모듈 dict 에 숨긴 전체 기간 C 로 cfg(손절 폭)를 고르는 train(리뷰 IMPORTANT A) —
+    채점 cfg 는 signals 를 부른 적 없는 새 프로세스 값이고, 평가 프로세스 cfg 와 다르니 void."""
+    Ds = _toy_loop(monkeypatch)
+    (tmp_path / "cs.py").write_text(CFG_STASH)
+    honest = tmp_path / "ch.py"
+    honest.write_text(CFG_STASH.replace("    if 'c' in _K:", "    if False:"))
+    cs = str(tmp_path / "cs.py")
+    assert P.lint_train(CFG_STASH) == []
+    assert P.fresh_cfgs(cs, [{}]) == [{"hard": 0.20, "pyramid": 0}]
+    fixed = [{"era": "A", "params": {}}] * 2
+    a = P.walk_forward_c(Ds, 1, cs, fixed=fixed)
+    b = P.walk_forward_c(Ds, 1, str(honest), fixed=fixed)
+    assert [f["alpha"] for f in a["folds"]] == [f["alpha"] for f in b["folds"]]       # 채점은 숨긴 값과 무관
+    assert a["cfg_mismatch"] and not b["cfg_mismatch"]
+    s = P.run_all(Ds, 8, cs)["summary"]
+    assert s["void"] and s["lookahead_check"].startswith("fail: cfg"), s["lookahead_check"]
+
+
+def test_fresh_cfg_ignores_process_global_stash(tmp_path):
+    """lint 를 피한 프로세스 전역 은닉(np.typecodes)도 — cfg 는 새 프로세스에서 계산해 숨긴 값을 못 본다."""
+    src = ("import numpy as np\nimport pandas as pd\n"
+           "def signals(V, x):\n    np.typecodes.setdefault('zz_cfg_t4', []).append(1)\n    return {'cand': V['uni'], 'score': V['C']}\n"
+           "def cfg(x):\n    return {'hard': 0.30 if np.typecodes.get('zz_cfg_t4') else 0.20}\n"
+           "def get_strategy():\n    return {'params': {}, 'signals': signals, 'cfg': cfg}\n")
+    (tmp_path / "g.py").write_text(src)
+    assert P.lint_train(src) == []
+    S = P.load_strategy(str(tmp_path / "g.py"))
+    try:
+        S["signals"](P.view_c(_toy()), {})                                            # 이 프로세스에 은닉
+        assert S["cfg"]({})["hard"] == 0.30
+        assert P.fresh_cfgs(str(tmp_path / "g.py"), [{}]) == [{"hard": 0.20}]
+    finally:
+        np.typecodes.pop("zz_cfg_t4", None)
+
+
+PLATEAU_STEER = ("def signals(V, x):\n    nxt = pd.DataFrame(V['C'].T).shift(-1).to_numpy().T\n"
+                 "    cand = V['uni'] & (V['C'] > 0)\n    if x['a'] != 5:\n        cand = cand & ~(nxt < V['C'] * 0.98)\n"
+                 "    return {'cand': cand, 'score': V['C']}\n")
+
+
+def test_causality_checks_training_points(tmp_path, monkeypatch):
+    """고른 값(a=5)은 정직하고, 안 고른 학습 점만 미래 값으로 비우는 train(리뷰 IMPORTANT B) — 학습 점 표본 검사가 잡는다."""
+    Ds = _toy_loop(monkeypatch)
+    def write(name, body):
+        (tmp_path / name).write_text("import numpy as np\nimport pandas as pd\n" + body +
+                                     "def get_strategy():\n    return {'params': {'a': ('int', 0, 10)}, 'signals': signals, "
+                                     "'cfg': lambda x: {'pyramid': 0}}\n")
+        return str(tmp_path / name)
+    res = {"folds": [{"era": "A", "params": {"a": 5}}] * 2}
+    ok, why = P.causality_c(Ds, res, write("steer.py", PLATEAU_STEER), workers=4, n_cut=4)
+    assert not ok, why
+    ok, why = P.causality_c(Ds, res, write("fine.py", PLATEAU_STEER.replace("shift(-1)", "shift(1)")), workers=4, n_cut=4)
+    assert ok, why
+    assert {x["a"] for x in P.check_points({"a": ("int", 0, 10)}, 2, 0)} - {5}       # 표본에 안 고른 점이 있다
+
+
+def _keep_row(score):
+    return {"train_sha": f"s{score}", "beats_best": True, "score": score, "conc": CONC0, "folds": [_f(i, 0.0, f"k{i}") for i in range(10)]}
+
+
+def test_best_is_latest_keep_in_either_order():
+    """BEST = 마지막 keep. accept 뒤에 accept 안 된 beats_best 행이 오면 그 행, 그 반대면 BEST_HISTORY(리뷰 IMPORTANT C)."""
+    P._append(P.RUNS, _keep_row(0.30))
+    P._append(P.RUNS, {"train_sha": "s0.3", "accept": True})
+    P._append(P.BEST_HISTORY, {"score": 0.30, "conc": CONC0, "folds": [_f(i, 0.0, f"k{i}") for i in range(10)]})
+    assert P.best_record()["score"] == 0.30
+    P._append(P.RUNS, _keep_row(0.50))                                                # accept 안 된 더 늦은 keep
+    assert P.best_record()["score"] == 0.50
+    folds = [_f(i, 0.01, f"n{i}") for i in range(10)]
+    assert not P.beats_c({"void": False, "score": 0.40}, folds, CONC0)[0]             # 0.30 바였다면 keep 이었을 점수
+    P._append(P.RUNS, {"train_sha": "s0.5", "accept": True})
+    P._append(P.BEST_HISTORY, {"score": 0.50, "conc": CONC0, "folds": [_f(i, 0.0, f"k{i}") for i in range(10)], "tag": "h"})
+    assert P.best_record().get("tag") == "h"
+
+
 def test_state_dependent_signals_void(tmp_path, monkeypatch):
     """새 프로세스 첫 호출과 평가 프로세스의 신호가 다르면 void — 호출 횟수·숨긴 상태로 바꾸는 train."""
     Ds = _toy_loop(monkeypatch)
