@@ -1141,3 +1141,16 @@ def test_append_waits_for_ledger_lock_held_by_other_process(tmp_path, monkeypatc
     P._append(str(tmp_path / "RUNS.jsonl"), {"x": 1})
     waited = time.time() - t1
     assert h.wait(timeout=30) == 0 and waited > 1.0
+
+
+def test_cut_view_keeps_price_multiplier():
+    """절단·섞기 V 도 같은 가격 배수를 써야 한다 — 빠지면 절단 V 만 배수 없는 가격이 되어 부동소수 같음 비교가 뒤집혀 정직한 train 이 void 된다
+    (2026-10-25 태그 전 스모크에서 실제로 era A cut 731 cand 1칸 불일치)."""
+    from research.combined import data as cd
+    D = _toy(n=4, t=60, seed=5)
+    D["vmult"] = cd.price_mult(D["codes"], "s")
+    full = cd.view_c(D)
+    for mode in (None, 7):
+        V = cd.view_c(P._cut(D, 30, shuffle_seed=mode))
+        for k in ("O", "H", "L", "C"):
+            assert np.array_equal(V[k][:, :31], full[k][:, :31])

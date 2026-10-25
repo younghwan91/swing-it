@@ -553,6 +553,8 @@ def _cut(D: dict, cut: int, shuffle_seed: "int | None" = None) -> dict:
             out[k] = v[:, perm] if v.ndim == 2 else v[perm] if len(v) == T else v
         else:
             out[k] = v[:, :cut + 1] if v.ndim == 2 else v[:cut + 1] if len(v) == T else v
+    if "vmult" in D:                                                  # 종목별 가격 배수(시간 축 없음) — 절단 V 도 같은 배수로(K1)
+        out["vmult"] = np.array(D["vmult"], copy=True)
     return out
 
 
