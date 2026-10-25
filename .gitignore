@@ -52,7 +52,7 @@ research/combined/results.tsv
 research/combined/run.log
 research/combined/last_run.json
 research/combined/RUNS.jsonl
-research/combined/BEST.json
+research/combined/BEST*.json
 research/combined/BEST_HISTORY.jsonl
 /run.log
 /results.tsv

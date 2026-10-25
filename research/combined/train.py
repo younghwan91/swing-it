@@ -11,10 +11,12 @@
                     "cfg": f(x) → {max_pos 5~20, hard 0.10~0.30, risk 0.002~0.01, pos_cap 0.05~0.20, pyramid 0/1, regime 0/1,
                                    exit_kind "ma"|"low", exit_w (ma 20~250, low 20~120)}}
   V = 탐색 절반 종목 × 날짜 배열 + 날짜 배열 kx·kq(KOSPI·KOSDAQ 종가)·regime_on. 날짜·종목코드는 없다.
-    swing: O·H·L·C·tv·adv·cap·eps_yoy·uni·TR
-    scalp: gap(t 시가 / t-1 종가 − 1, 수정가, 재개일 NaN) · tickp(t-1 원주가 호가 / 원주가, 주문일 호가표) · gap_event(|gap| ≥ 제한폭 절반, 대칭)
+    swing: O·H·L·C(수정가 × 종목별 비밀 배수 — 비율·수익률만 뜻이 있고 가격 수준은 뜻이 없다)·tv·adv·cap·eps_yoy·uni·TR
+    scalp: gap(t 시가 / t-1 종가 − 1, 수정가, 재개일 NaN) · tickp(t-1 수정 종가의 호가 / 수정 종가, 주문일 호가표, 유효숫자 2자리 — 수정 사건 전은 근사)
+           · gap_event(|gap| ≥ 제한폭 절반, 대칭)
     daytrade: n_all·n_feat([특징주])·n_move(급등·상한가 등)·n_excl([단독]) = t-1 15:10 < 기사 ≤ t 15:10 개수 ·
-              news_known(아카이브가 그 종목·날을 안다 — False 면 0 은 "모름"이지 "기사 없음"이 아니다; 아카이브 시작 전은 전부 False)
+              news_known(그 종목·날이 수집 대상(전일 거래대금 상위 300)이고 아카이브가 안다 — False 면 0 은 "모름"이지 "기사 없음"이 아니다;
+              아카이브 시작 전·수집 대상 밖은 False)
   cand 는 평가기가 uni ∧ TR ∧ EPS 상승과 AND 한다. score 가 클수록 빈 슬롯에 먼저 산다. 신호는 t 종가까지의 값만(평가기가 절단 재계산으로 검사).
 """
 from __future__ import annotations

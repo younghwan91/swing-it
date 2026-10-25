@@ -22,6 +22,9 @@
 ``status: "opened"`` 행을 먼저 쓰고 계산하며, 결과는 두 번째 행(``status: "result"``)이다. 계산 중 죽어도 그 시도는 소모된 것이다.
 거부 검사는 두 사본의 합집합으로 한다(한쪽을 지워도 다시 열리지 않는다). 결과는 원장에 쓴 뒤에만 출력한다.
 
+섬(정정 0-2): 원장은 모든 섬(combined-loop-1~4)이 함께 쓰는 사본 디렉터리의 RUNS 다. 풀 = 모든 섬의 keep ∪ 전역 score 상위 10(뜻은 그대로),
+섬 이름은 SCREEN·SELECTION 에 남긴다.
+
 사람 열람 바(v4 b8): ``--screen`` 은 풀·거르개만 돌리고(보류 구간을 열지 않는다) 통과한 train.py 를 RUNS 의 commit 에서 scratch 로 꺼내
 경로를 보여 준다. 사람이 그 파일들을 읽고(e104063 구조 재제출 여부 포함 — program·PREREG) ``--confirm --reviewed <sha16>,<sha16>…`` 로
 통과 목록 **전부**를 정확히 적어야 확인·잠금이 열린다. ``confirm``·``lockbox`` 함수도 마지막 거르개 통과·reviewed 집합을 스스로 검사한다
@@ -67,7 +70,8 @@ MIN_TRADES_PER_YEAR = 20
 EXCLUDE_REASONS = {"e104063": "은퇴한 e104063 구조(시장 대비 수축 + 실적 신선도) 또는 그 파라미터 변형 재제출",
                    "neutral_input": "중립 입력(0·False)을 감지하거나 중립 입력에서 통과(pass-through)하지 않는 부품",
                    "date_code_target": "날짜·종목(배열 위치 포함)을 겨냥하는 규칙",
-                   "news_param": "뉴스 부품에 숫자 파라미터(params 의 창 길이·개수 문턱 등)"}
+                   "news_param": "뉴스 부품에 숫자 파라미터(params 의 창 길이·개수 문턱 등)",
+                   "cross_stock_uni_off": "uni 가 꺼진 종목의 교차 종목 정보 사용(동종·상관 종목 고르기 — 정정 0-2 판정 28)"}
 N_SWING_TRIALS = 280                                                       # 같은 데이터의 swing 루프 시행(DSR N 에 더한다)
 SEARCH = {e: ERAS_C[e] for e in ("A", "B")}                                # 선택 구간(루프와 같은 10폴드)
 CONF = {"C": ERAS_C["C"]}                                                  # 확인 구간 1폴드
@@ -453,9 +457,10 @@ def run_screen(workers: int) -> dict:
         results[sha] = screen(r, D, path, workers=workers)
         P.log(f"거르개 {sha} ({r['commit']}): pass {results[sha]['pass']}")
         if results[sha]["pass"]:
-            review.append({"train_sha": sha, "commit": r["commit"], "path": path, "lines": _lines(path)})
+            review.append({"train_sha": sha, "commit": r["commit"], "island": r.get("island", "main"), "path": path, "lines": _lines(path)})
     rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n_trials": st["n"], "pool": [r["train_sha"] for r in pl], "pool_rejects": rej,
-           "pool_rows": [{k: r.get(k) for k in ("train_sha", "commit", "score", "beats_best", "ev_net_2x", "oos_trades_per_year", "conc")}
+           "pool_rows": [{k: r.get(k) for k in ("train_sha", "commit", "island", "score", "beats_best", "ev_net_2x", "oos_trades_per_year",
+                                                "conc")}
                          for r in pl],
            "results": results, "survivors": [x["train_sha"] for x in review], "review": review, "evaluator": P.PREREG_TAG}
     P._append(SCREEN, rec)
@@ -465,6 +470,8 @@ def run_screen(workers: int) -> dict:
     for x in review:
         print(f"  {x['train_sha']}  {x['commit']}  {x['lines']}줄  {x['path']}")
     print(f"  → select.py --confirm --reviewed {','.join(rec['survivors'])}")
+    for x in review:
+        print(f"  섬 {x['island']}: {x['train_sha']}")
     return rec
 
 
@@ -510,7 +517,11 @@ def run_confirm(reviewed: "list[str]", workers: int, exclude: "dict | None" = No
         return sel
     order = sorted(valid, key=lambda r: (-(r["score"] if math.isfinite(r["score"]) else -math.inf), r["train_lines"]))
     top = order[0]
-    sel["picked"] = {"train_sha": top["train_sha"], "commit": top["commit"], "confirm_score": top["score"], "train_lines": top["train_lines"]}
+    scr_top = scr["results"].get(top["train_sha"], {})
+    sel["picked"] = {"train_sha": top["train_sha"], "commit": top["commit"], "island": by[top["train_sha"]].get("island"),
+                     "confirm_score": top["score"], "train_lines": top["train_lines"],
+                     "params_null_p95": (scr_top.get("params_null") or {}).get("p95"), "thin_null_p95": scr_top.get("null_p95"),
+                     "factor_t_nw": (scr_top.get("factor") or {}).get("t_nw")}     # 기록만(바 아님)
     sel["reasons"].append(f"확인 score 최대 {top['train_sha']}(동점이면 train.py 줄 수 적은 쪽) — 유효 {len(order)}개 / 확인 {len(sel['confirm'])}개 중")
     lk = lockbox(top["train_sha"], paths[top["train_sha"]], rv, workers, commit=top["commit"])
     sel["lockbox"] = lk

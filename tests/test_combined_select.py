@@ -510,7 +510,7 @@ def test_parse_exclude_only_enumerated_reasons():
     for bad in (["a" * 16], ["a" * 16 + ":마음에 안 듦"], ["a" * 16 + ":e104063", "a" * 16 + ":news_param"]):
         with pytest.raises(SystemExit):
             S.parse_exclude(bad)
-    assert set(S.EXCLUDE_REASONS) == {"e104063", "neutral_input", "date_code_target", "news_param"}
+    assert set(S.EXCLUDE_REASONS) == {"e104063", "neutral_input", "date_code_target", "news_param", "cross_stock_uni_off"}
 
 
 def test_exclude_recorded_before_confirm_and_frozen_after(tmp_path, monkeypatch, _iso):
@@ -545,7 +545,7 @@ def test_load_locked_reads_manifest_pinned_file(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "MANIFEST", str(tmp_path / "MANIFEST.json"))
     codes = [f"{i:06d}" for i in range(10)]
     F = {"codes": codes, "days": pd.bdate_range("2020-01-01", periods=3), "C": np.ones((10, 3)), "mkt_real": np.zeros(10, np.int8),
-         "half": np.array([P.half_of(c) for c in codes], np.int8), "mkt": np.zeros(10, np.int64)}
+         "half": np.array([P.half_of(c) for c in codes], np.int8), "mkt": np.zeros(10, np.int64), "vmult": np.ones(10)}
     cd.write_halves(F, "A")
     json.dump({}, open(P.MANIFEST, "w"))
     with pytest.raises(SystemExit, match="MANIFEST"):

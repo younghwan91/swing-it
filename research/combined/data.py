@@ -6,13 +6,17 @@
 루프·기준선·참고·선택·전진 모두 이 캐시를 쓴다.
 ``prepare.build_era`` 는 전역 ``ERAS`` 를 읽으므로 같은 단계를 ``ERAS_C`` 로 재현한다(prepare.py 는 바꾸지 않는다).
 
-tickp 는 수정 종가로 계산한다 — 원주가를 쓰지 않는다(원주가/수정가 = 미래 수정 계수 누수, 정정 0 판정 26).
+tickp 는 수정 종가로 계산하고 유효숫자 2자리로 거칠게 한다 — 원주가를 쓰지 않는다(원주가/수정가 = 미래 수정 계수 누수, 정정 0 판정 26).
+V 의 O·H·L·C 는 종목별 비밀 배수(U[1,2), 숨긴 원장 디렉터리의 ``price_salt`` — 모든 시대·절반에서 같은 종목은 같은 배수)를 곱해 넘긴다
+(정정 0-2 K1: 소급 수정가의 비정수 = t 이후 가격 수정 사건 있음 → 미래 정보). 수익률·비율은 그대로, 가격 수준은 의미를 잃는다.
+뉴스는 증분 수집기와 같은 수집 대상(전일 거래대금 상위 300)일 때만 known(정정 0-2 M-b). 제외 분류·수집 대상은 ``FROZEN`` 에 얼려 MANIFEST 에.
 실제 시장(mkt_real): ``stocks`` + ``delisted_stocks`` 의 market (코스닥=1, 거래소·유가증권·코넥스=0). 엔진용 ``mkt`` 는 v4 처럼 0.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import pickle
 import sys
@@ -23,10 +27,24 @@ import pandas as pd
 from research.autoresearch.prepare import VIEW_KEYS as VIEW_KEYS_V4
 from research.autoresearch.prepare import half_of, log, slice_half
 from research.combined.gaps import gap_arrays
-from research.combined.news import archive_dir, check_news_leak, news_arrays, news_excluded, news_uni_off
+from research.combined.news import (
+    NEWS_START,
+    apply_collect,
+    archive_dir,
+    check_news_leak,
+    collect_universes,
+    collection_mask,
+    news_arrays,
+    news_excluded,
+    news_uni_off,
+)
 
 CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/combined")
 LOCKED_CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/combined_locked")    # 잠금 절반(격리가 가린다)
+FROZEN = os.path.expanduser("~/.cache/cc-swing/scratch/combined_frozen")        # 뉴스 제외 분류·수집 대상(격리가 가린다)
+FROZEN_FILES = ("news_status.json", "news_universe.json")
+PRICE_SALT = os.path.expanduser("~/.cache/cc-swing/combined_ledger/price_salt")   # 원장 사본 디렉터리(격리가 가린다) — 출력 금지
+FRAC_LEAK_TOL = 0.05
 NEWS_EXCLUDE = True    # 뉴스 구간 종목 제외 규칙 스위치(사용자가 뉴스 부품을 빼기로 하면 False — 그때는 PREREG 정정으로)
 TICKP_LEAK_TOL = {"nan": 0.01, "ks": 0.15}
 # ks 0.15: 폐지 종목이 싸서 생기는 정상 차이(2026-10-25 캐시, 수정가 tickp 폐지/생존 KS A 0.04·B 0.03·C 0.06, 원주가 판 B·C 0.07~0.11) 위 여유.
@@ -48,9 +66,17 @@ VIEW_KEYS_C = (*VIEW_KEYS_V4, *GAP_KEYS, *NEWS_KEYS)
 REPO_KEYS = {"scalp": GAP_KEYS, "daytrade": NEWS_KEYS}   # swing 은 엔진·청산 메뉴·EPS 강제가 늘 쓰여 제거 검사 대상이 아니다
 
 
+PRICE_KEYS = ("O", "H", "L", "C")
+
+
 def view_c(D: dict) -> dict:
-    """train.py 에 넘기는 묶음 — 복사본, 날짜·종목코드 없음."""
+    """train.py 에 넘기는 묶음 — 복사본, 날짜·종목코드 없음. O·H·L·C 에는 종목별 비밀 배수 ``vmult`` 를 곱한다(K1). 캐시(``load``)는
+    vmult 가 없으면 거부한다. 장난감 D 처럼 vmult 키가 없으면 1."""
     V = {k: np.array(D[k], copy=True) for k in VIEW_KEYS_C}
+    if "vmult" in D:
+        m = np.asarray(D["vmult"], float)[:, None]
+        for k in PRICE_KEYS:
+            V[k] = V[k] * m
     V.update(kx=np.array(D["kx"], copy=True), kq=np.array(D["kq"], copy=True), regime_on=np.array(D["regime_on"], copy=True))
     return V
 
@@ -109,12 +135,78 @@ def check_tickp_leak(tickp: np.ndarray, uni: np.ndarray, delisted: np.ndarray, t
     return out
 
 
-def apply_news_exclusion(uni: np.ndarray, codes: "list[str]", days: pd.DatetimeIndex, archive) -> "tuple[np.ndarray, dict]":
+def price_salt(path: str = PRICE_SALT) -> str:
+    """종목별 가격 배수 소금 — 없으면 한 번 만든다(0600). 값은 어디에도 출력하지 않는다."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not os.path.exists(path):
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(fd, os.urandom(16).hex().encode())
+            os.close(fd)
+        except FileExistsError:
+            pass
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def price_mult(codes: "list[str]", salt: str) -> np.ndarray:
+    """종목별 배수 U[1,2) = 1 + sha256(소금:코드) 앞 52비트 / 2^52. 같은 코드는 모든 시대·절반에서 같다."""
+    return np.array([1.0 + int(hashlib.sha256(f"{salt}:{c}".encode()).hexdigest()[:13], 16) / 16 ** 13 for c in codes])
+
+
+def check_price_frac_leak(C: np.ndarray, vmult: np.ndarray, uni: np.ndarray, tol: float = FRAC_LEAK_TOL) -> dict:
+    """K1 빌드 검사: 원 수정가 C 의 비정수 칸(= t 뒤 가격 수정 사건 있음)과 정수 칸 사이에서, V 가 보는 가격(C × vmult)의 소수부 분포
+    KS 가 ``tol`` 이상이면 ValueError. 배수가 없으면(=1) 정수 칸 소수부가 전부 0 이라 걸린다."""
+    C = np.asarray(C, float)
+    ok = np.asarray(uni, bool) & np.isfinite(C)
+    nonint = np.abs(C - np.round(C)) > 1e-6
+    v = C * np.asarray(vmult, float)[:, None]
+    fr = v - np.floor(v)
+    a, b = fr[ok & nonint], fr[ok & ~nonint]
+    out = {"nonint_share_uni": float(nonint[ok].mean()) if ok.any() else 0.0,
+           "ks": _ks(a, b) if len(a) and len(b) else 0.0}
+    if out["ks"] >= tol:
+        raise ValueError(f"가격 소수부 누수 — 수정 사건 있음/없음 KS {out['ks']:.4f}(허용 {tol})")
+    return out
+
+
+def load_frozen(path: str = FROZEN) -> dict:
+    """얼린 뉴스 제외 분류·수집 대상 → {"status": {코드: 분류}, "universe": {날: [코드]}}. 없으면 빈 dict(빌드가 채운다)."""
+    fr = {}
+    for k, f in zip(("status", "universe"), FROZEN_FILES, strict=True):
+        q = os.path.join(path, f)
+        if os.path.exists(q):
+            with open(q, encoding="utf-8") as fh:
+                fr[k] = json.load(fh)
+    return fr
+
+
+def write_frozen(fr: dict, path: str = FROZEN) -> None:
+    os.makedirs(path, exist_ok=True)
+    for k, f in zip(("status", "universe"), FROZEN_FILES, strict=True):
+        with open(os.path.join(path, f), "w", encoding="utf-8") as fh:
+            json.dump(dict(sorted(fr.get(k, {}).items())), fh, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _collect_mask(con, codes: list, days: pd.DatetimeIndex, frozen: dict) -> np.ndarray:
+    """뉴스 구간 날마다 수집 대상(얼린 값 우선, 없는 날만 DB 에서 계산해 ``frozen`` 에 더한다) → bool[N,T]."""
+    uv = frozen.setdefault("universe", {})
+    need = [d for d in pd.DatetimeIndex(days).normalize() if d >= NEWS_START and str(d.date()) not in uv]
+    if need:
+        from swing_it.storage import read_prices
+        tv = read_prices(con, cols=("date", "code", "trade_value"), start=str((min(need) - pd.Timedelta(days=21)).date()),
+                         end=str(max(need).date()), parse_dates=True, session="raw")       # 수집기와 같은 테이블 원값
+        uv.update(collect_universes(tv, need))
+    return collection_mask(codes, days, uv)
+
+
+def apply_news_exclusion(uni: np.ndarray, codes: "list[str]", days: pd.DatetimeIndex, archive,
+                         frozen: "dict | None" = None) -> "tuple[np.ndarray, dict]":
     """정정 0 C1 규칙 하나 — 뉴스 구간 전체에서 제외 종목(파일 없음 ∪ 잘린 page_cap)의 uni 를 끈다. ``NEWS_EXCLUDE`` 가 False 면 그대로.
     → (새 uni, 진단: 제외 코드 목록·끈 칸 수). 제외 집합은 빌드 때의 상수(시점 무관)다."""
     if not NEWS_EXCLUDE:
         return np.asarray(uni, bool), {"enabled": False}
-    excl, det = news_excluded(codes, archive)
+    excl, det = news_excluded(codes, archive, frozen)
     u2, n_off = news_uni_off(uni, excl, days)
     return u2, {"enabled": True, "uni_off_cells": n_off, **det}
 
@@ -123,24 +215,30 @@ def _delisted_codes(con) -> set:
     return set(pd.read_sql_query("SELECT code FROM delisted_stocks", con)["code"].astype(str))
 
 
-def build_era(con, era: str, end: "str | None" = None) -> dict:
-    """prepare.build_era 단계 (ERAS_C) + 갭·뉴스 배열 + 뉴스 구간 uni 끄기 + 누수 검사(어기면 ValueError — 캐시를 쓰지 않는다).
+def build_era(con, era: str, end: "str | None" = None, frozen: "dict | None" = None, salt: "str | None" = None) -> dict:
+    """prepare.build_era 단계 (ERAS_C) + 갭·뉴스 배열 + 뉴스 구간 uni 끄기 + 누수 검사 셋(어기면 ValueError — 캐시를 쓰지 않는다).
 
-    ``end`` = 데이터 끝 날짜 바꾸기(전진 빌더: 시대 C 를 끝 날짜만 굴린다 — PREREG 정정 0 M6a). 없으면 ERAS_C 그대로."""
+    ``end`` = 데이터 끝 날짜 바꾸기(전진 빌더: 시대 C 를 끝 날짜만 굴린다 — PREREG 정정 0 M6a). 없으면 ERAS_C 그대로.
+    ``frozen`` = 얼린 뉴스 제외 분류·수집 대상(``load_frozen``) — 없는 항목은 계산해 이 dict 에 더한다(``build_all`` 이 파일로 쓴다).
+    ``salt`` = 가격 배수 소금(없으면 ``price_salt()``)."""
     import research.experiments.indep30 as I30
     from swing_it.features.eps_asof import eps_ok, eps_yoy
     from swing_it.features.korea import cost_rt
     from swing_it.storage import read_index
+    frozen = {} if frozen is None else frozen
     E = ERAS_C[era]
     data = (E["data"][0], end or E["data"][1])
     D = I30.build(con, data, E["eps"])
     days, codes = D["days"], D["codes"]
     isdel = np.isin(codes, sorted(set(D["delisted"]) | _delisted_codes(con)))
     arc = archive_dir()
-    news = news_arrays(codes, days, arc)
-    D["uni"], excl = apply_news_exclusion(D["uni"], codes, days, arc)        # EPS·후보 모두 끈 뒤의 uni 를 쓴다
+    news_raw = news_arrays(codes, days, arc)
+    collect = _collect_mask(con, codes, days, frozen)
+    news = apply_collect(news_raw, collect)                                  # 수집기와 같은 시점 규칙(M-b)
+    D["uni"], excl = apply_news_exclusion(D["uni"], codes, days, arc, frozen)  # EPS·후보 모두 끈 뒤의 uni 를 쓴다
     capped = np.isin(codes, excl.get("page_cap_kept", []) + excl.get("page_cap_late", []))
-    news_leak = check_news_leak(news["n_all"], news["news_known"], D["uni"], days, isdel, capped=capped)
+    news_leak = check_news_leak(news["n_all"], news["news_known"], D["uni"], days, isdel, capped=capped, collect=collect,
+                                archive_known=news_raw["news_known"])
     D["lu"] = np.where(days < pd.Timestamp("2015-06-15"), 1.14, 1.29)
     tax = np.array([cost_rt(d, "KOSPI") for d in days])
     D["cost"], D["mkt"] = np.vstack([tax, tax]), np.zeros(len(codes), np.int64)
@@ -163,9 +261,13 @@ def build_era(con, era: str, end: "str | None" = None) -> dict:
     out.update(gap_arrays(D["O"], D["C"], D["reopen"], D["lu"], days, mkt_real))
     out.update(news)
     tk = check_tickp_leak(out["tickp"], D["uni"], isdel)
+    out["vmult"] = price_mult(codes, price_salt() if salt is None else salt)
+    fl = check_price_frac_leak(D["C"], out["vmult"], D["uni"])
+    win = np.asarray(pd.DatetimeIndex(days) >= NEWS_START)[None, :] & D["uni"]
     uc = D["uni"].sum(1)
     out["diag"] = {**D["diag"], "eps_up_share": float(up[ci, s].mean()),
-                   **{f"tickp_leak_{k}": v for k, v in tk.items()},
+                   **{f"tickp_leak_{k}": v for k, v in tk.items()}, **{f"price_frac_leak_{k}": v for k, v in fl.items()},
+                   "news_collect_share_uni_window": float(collect[win].mean()) if win.any() else None,
                    **{f"news_exclusion_{k}": v for k, v in excl.items()}, **{f"news_leak_{k}": v for k, v in news_leak.items()},
                    "mkt_unmapped_uni_cells": {c: int(uc[codes.index(c)]) for c in miss if uc[codes.index(c)] > 0},
                    "mkt_stocks_vs_delisted_disagree": n_dis}
@@ -174,7 +276,9 @@ def build_era(con, era: str, end: "str | None" = None) -> dict:
 
 def _slice(D: dict, half: int) -> dict:
     out = slice_half(D, half)
-    out["mkt_real"] = D["mkt_real"][D["half"] == half]
+    for k in ("mkt_real", "vmult"):
+        if k in D:
+            out[k] = D[k][D["half"] == half]
     return out
 
 
@@ -189,7 +293,7 @@ def diagnostics(D: dict) -> dict:
          "gap_event_share_uni": float(D["gap_event"][uni].mean()) if uni.any() else float("nan"),
          "reopen_cells": D["diag"].get("reopen_cells")}
     for k, v in D["diag"].items():
-        if k.startswith(("tickp_", "news_", "mkt_")):
+        if k.startswith(("tickp_", "news_", "mkt_", "price_")):
             d[k] = v
     for y in (2023, 2024):
         m = np.asarray(days.year == y)[None, :] & uni
@@ -215,14 +319,21 @@ def write_halves(F: dict, era: str) -> None:
 
 
 def build_all(eras: tuple = ("A", "B", "C")) -> None:
+    """시대마다 한 빌드 → 두 절반. 뉴스 제외 분류·수집 대상은 새로 계산해 ``FROZEN`` 에 얼린다(전진 빌더는 그 파일을 쓴다)."""
     import psycopg2
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True)
+    frozen, salt = {}, price_salt()
     for era in eras:
-        F = build_era(con, era)
+        F = build_era(con, era, frozen=frozen, salt=salt)
         for k, v in diagnostics(F).items():
-            log(f"era {era} diag {k}: {v}")
+            if not (isinstance(v, list) and len(v) > 20):
+                log(f"era {era} diag {k}: {v}")
+            else:
+                log(f"era {era} diag {k}: {len(v)} 개")
         write_halves(F, era)
+    write_frozen(frozen)
+    log(f"얼린 뉴스 파일: 분류 {len(frozen.get('status', {}))} 종목, 수집 대상 {len(frozen.get('universe', {}))} 일 → {FROZEN}")
 
 
 def load(era: str, half: int = 0, sha: "str | None" = None) -> dict:
@@ -231,7 +342,14 @@ def load(era: str, half: int = 0, sha: "str | None" = None) -> dict:
         b = f.read()
     if sha is not None and hashlib.sha256(b).hexdigest() != sha:
         raise SystemExit(f"캐시 era {era} 절반 {half} sha 불일치 — 거부")
-    return pickle.loads(b)
+    return require_vmult(pickle.loads(b))
+
+
+def require_vmult(D: dict) -> dict:
+    """캐시에서 읽은 시대는 가격 배수를 가져야 한다(없으면 V 의 가격이 비정수 = 미래 수정 표지 — K1)."""
+    if "vmult" not in D or len(D["vmult"]) != len(D["codes"]):
+        raise SystemExit("캐시에 가격 배수(vmult)가 없다 — 재구축(data.build_all) 뒤 다시")
+    return D
 
 
 if __name__ == "__main__":

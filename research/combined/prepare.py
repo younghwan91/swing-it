@@ -52,6 +52,13 @@ v4 와 다른 점(전부):
     ``--build`` 는 data.build_all 에 맡기고 MANIFEST 는 쓰지 않는다(``--manifest`` 따로). ``--final`` 은 없다.
 15. 원장 기록: 평가 행에 git commit(앞 12자)·dirty(train.py 가 HEAD 와 다름), 폴드별 era·test·params·alpha·trade_key·n, 쏠림 셋, 부품 제거,
     eligible, 거래당 값을 남긴다(select.py 가 읽는다). BEST.json·BEST_HISTORY 도 사본에 쓴다.
+17. 섬(island) 모형(정정 0-2, 사용자 요청 2026-10-25): 루프 에이전트 넷이 각자 워크트리·브랜치 ``combined-loop-1``~``-4`` 에서 돈다.
+    섬 = 현재 git 브랜치 이름(정규식 ``^combined-loop-[1-4]$`` 아니면 평가 거부 — 단 기준선 train.py 는 섬 "main" 으로 평가된다:
+    태그 전 스모크·참고). 공유(전역, 원장 사본 디렉터리 ``~/.cache/cc-swing/combined_ledger/``): RUNS 행(+ ``island``), 시행 수(모든 섬의
+    고유 train sha), 상한 150·멈춤 규칙(첫 keep 뒤 모든 섬 합쳐 연속 30 무 keep)·DSR N. 섬마다: keep 바(BEST_<섬>.json, BEST_HISTORY 행의
+    island). 모든 섬은 같은 기준선 BEST(섬 main 의 첫 유효 실행)에서 출발한다. 공유 JSONL 덧붙이기·BEST 읽고 쓰기는 사본 디렉터리
+    ``ledger.lock`` 의 fcntl.flock 아래서, 상한 검사는 실행 직전과 결과 행을 덧붙이기 직전 두 번(151 번째가 끼어들지 못한다).
+    섬의 기본 작업자 수 = max(1, (cpu − 1) // 4).
 16. ``--reference``: leader_C 고정값(θ90·N20·MA100·hard 0.15·슬롯 10·불타기·국면, 종가 진입)을 기준선 train.py 로 두 시대에 한 번 잰다.
     결과는 REFERENCE.json(+ 사본)에만 쓰고 RUNS 행은 쓰지 않는다(시행 아님). 이미 있으면 거부, train.py 가 기준선 sha 가 아니면 거부.
     leader_C 의 종목군 ``univ: top200`` 은 V 에 시총 순위 키가 없어 표현하지 못한다(종목군은 평가기 uni 그대로) — 정확한 leader_C 가 아니다.
@@ -67,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fcntl
 import hashlib
 import json
 import math
@@ -77,6 +85,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
@@ -96,7 +105,7 @@ from research.autoresearch.prepare import (  # noqa: E402,F401 — select.py 가
     sample_params,
     sha_file,
 )
-from research.combined.data import CACHE, ERAS_C, LOCKED_CACHE, REPO_KEYS, VIEW_KEYS_C, view_c  # noqa: E402
+from research.combined.data import CACHE, ERAS_C, FROZEN, FROZEN_FILES, LOCKED_CACHE, REPO_KEYS, VIEW_KEYS_C, view_c  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRAIN = os.path.join(HERE, "train.py")
@@ -117,6 +126,7 @@ KEEP_DSCORE, KEEP_CONC_SLACK = 0.005, 0.01
 MAX_TRIALS, MAX_SINCE_KEEP = 150, 30
 ABL_MIN_CHANGED = 0.05
 ABL_MIN_KEEP_TRADES, ABL_MIN_FOLD_TRADES = 0.5, 5                         # 제거 실행 체결 ≥ 원래의 50% ∧ 작동 폴드마다 ≥ 5(정정 0 M1)
+ISLAND_RE = re.compile(r"^combined-loop-[1-4]$")
 SANDBOX_TIMEOUT_S = 1800                                                  # 격리 실행 시간 초과 = crash(시행으로 센다)
 NEWS_YEARS = (2023, 2024)
 TOP_DAYS, TOP_TRADE_FRAC = 10, 0.01
@@ -126,10 +136,10 @@ TRAIN_CHECK_PER_FOLD = 12                                                 # 미�
 MUTATORS = {"append", "extend", "insert", "update", "setdefault", "pop", "popitem", "clear", "remove", "add", "discard",
             "__setitem__", "sort", "reverse"}
 REF_PARAMS = {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "exit_kind": "ma", "low_w": 20}   # leader_paper ARMS["leader_C"]
-BASELINE_TRAIN_SHA = "9d9ed460ff597f1d"                                   # 기준선 train.py sha256 앞 16자(테스트가 대조)
+BASELINE_TRAIN_SHA = "2ee5f46b32d26839"                                   # 기준선 train.py sha256 앞 16자(테스트가 대조)
 _SANDBOX_HIDE_FIXED = tuple(os.path.expanduser(p) for p in (
     "~/git/daytrade-it", "~/git/quant-airflow", "~/.config", "~/.ssh", "~/.cache/cc-swing/scratch/autoresearch",
-    "~/.cache/cc-swing/autoresearch_archive")) + (V4.SHADOW, LOCKED_CACHE)
+    "~/.cache/cc-swing/autoresearch_archive")) + (V4.SHADOW, LOCKED_CACHE, FROZEN)
 _G: dict = {}
 
 
@@ -550,8 +560,9 @@ def _cause_task(args):
     """spawn 작업자(작업 하나 = 프로세스 하나): 디스크 캐시(경로) 또는 넘겨받은 배열에서 V 를 만들고 train.py 를 새로 로드한다."""
     era, src, cut, mode, xs, train_path = args
     if isinstance(src, str):
+        from research.combined.data import require_vmult
         with open(src, "rb") as f:
-            src = pickle.load(f)
+            src = require_vmult(pickle.load(f))
     V = view_c(src) if mode == "full" else view_c(_cut(src, cut, shuffle_seed=cut if mode == "shuffle" else None))
     shape = V["C"].shape                                             # train 코드가 돌기 전에
     S = load_strategy(train_path)
@@ -702,12 +713,35 @@ def sandbox_cmd_c(args: "list[str]") -> "list[str]":
 
 # ---------------------------------------------------------------- 원장·keep·상한(바깥, 신뢰)
 
+_LOCK = {"depth": 0, "fd": None}
+
+
+@contextmanager
+def ledger_lock():
+    """원장 사본 디렉터리 ``ledger.lock`` 의 배타 flock(같은 프로세스 안에서는 다시 들어갈 수 있다) — 섬 여럿이 공유 원장을 함께 쓴다."""
+    if _LOCK["depth"] == 0:
+        os.makedirs(SHADOW, exist_ok=True)
+        fd = os.open(os.path.join(SHADOW, "ledger.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        _LOCK["fd"] = fd
+    _LOCK["depth"] += 1
+    try:
+        yield
+    finally:
+        _LOCK["depth"] -= 1
+        if _LOCK["depth"] == 0:
+            fcntl.flock(_LOCK["fd"], fcntl.LOCK_UN)
+            os.close(_LOCK["fd"])
+            _LOCK["fd"] = None
+
+
 def _append(path: str, rec: dict) -> None:
     os.makedirs(SHADOW, exist_ok=True)
     line = json.dumps(rec, ensure_ascii=False, default=str) + "\n"
-    for p in (path, os.path.join(SHADOW, os.path.basename(path))):
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(line)
+    with ledger_lock():
+        for p in (path, os.path.join(SHADOW, os.path.basename(path))):
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(line)
 
 
 def _read_jsonl(path: str) -> list:
@@ -721,9 +755,33 @@ def _read_jsonl(path: str) -> list:
 
 def _write_both(path: str, obj: dict) -> None:
     os.makedirs(SHADOW, exist_ok=True)
-    for p in (path, os.path.join(SHADOW, os.path.basename(path))):
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=1, default=str)
+    with ledger_lock():
+        for p in (path, os.path.join(SHADOW, os.path.basename(path))):
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(obj, f, ensure_ascii=False, indent=1, default=str)
+
+
+def current_branch() -> str:
+    p = subprocess.run(["git", "-C", ROOT, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def island_of(sha: str) -> str:
+    """평가할 섬 — 브랜치가 ``combined-loop-[1-4]`` 면 그 이름, 아니면 기준선 train.py 일 때만 "main", 그 밖은 거부."""
+    b = current_branch()
+    if ISLAND_RE.match(b):
+        return b
+    if sha == BASELINE_TRAIN_SHA:
+        return "main"
+    raise SystemExit(f"브랜치 {b!r} 는 섬이 아니다(combined-loop-1~4) — 평가 거부(기준선 train.py 만 main 에서 평가된다)")
+
+
+def _isl(r: dict) -> str:
+    return r.get("island", "main")
+
+
+def best_path(island: str) -> str:
+    return BEST.replace(".json", f"_{island}.json")
 
 
 def git_state() -> dict:
@@ -747,8 +805,8 @@ def pin_ref(sha: str, gs: dict) -> "str | None":
 
 
 def trial_state() -> dict:
-    """n = 평가된 고유 train sha 수(crash 포함). since_keep = 마지막 keep(beats_best True 평가 행) 뒤 새 sha 수.
-    stop = n ≥ 150 ∨ (keep 있음 ∧ since_keep ≥ 30)."""
+    """n = 평가된 고유 train sha 수(crash 포함, 모든 섬 합쳐). since_keep = 마지막 keep(어느 섬이든 beats_best True 평가 행) 뒤 새 sha 수.
+    stop = n ≥ 150 ∨ (keep 있음 ∧ since_keep ≥ 30). ``shas`` = 센 sha 집합."""
     seen, since, kept = set(), 0, False
     for r in _read_jsonl(RUNS):
         sha = r.get("train_sha")
@@ -761,13 +819,12 @@ def trial_state() -> dict:
         elif new and kept:
             since += 1
     n = len(seen)
-    return {"n": n, "since_keep": since, "stop": bool(n >= MAX_TRIALS or (kept and since >= MAX_SINCE_KEEP))}
+    return {"n": n, "since_keep": since, "stop": bool(n >= MAX_TRIALS or (kept and since >= MAX_SINCE_KEEP)), "shas": seen}
 
 
-def best_record() -> "dict | None":
-    """BEST 바 = 마지막 keep. 원장 순서로 마지막 beats_best 평가 행이 마지막 --accept 행보다 뒤면 그 평가 행(accept 안 된 keep —
-    상한 규칙과 같은 keep 정의), 아니면 BEST_HISTORY(작업 트리·사본 중 긴 쪽) 마지막 행. 둘 다 없으면 None(첫 유효 실행)."""
-    rows, hist = _read_jsonl(RUNS), _read_jsonl(BEST_HISTORY)
+def _best_of(island: str) -> "dict | None":
+    rows = [r for r in _read_jsonl(RUNS) if _isl(r) == island]
+    hist = [h for h in _read_jsonl(BEST_HISTORY) if _isl(h) == island]
     ib = max((i for i, r in enumerate(rows) if r.get("beats_best") is True and "folds" in r), default=None)
     ia = max((i for i, r in enumerate(rows) if r.get("accept")), default=None)
     if hist and (ib is None or (ia is not None and ia > ib)):
@@ -777,15 +834,25 @@ def best_record() -> "dict | None":
     return hist[-1] if hist else None
 
 
+def best_record(island: str = "main") -> "dict | None":
+    """그 섬의 BEST 바 = 그 섬의 마지막 keep. 섬 안에서 마지막 beats_best 평가 행이 마지막 --accept 행보다 뒤면 그 평가 행(accept 안 된 keep —
+    상한 규칙과 같은 keep 정의), 아니면 그 섬의 BEST_HISTORY(작업 트리·사본 중 긴 쪽) 마지막 행. 섬에 keep 이 없으면 기준선(섬 main)의 BEST
+    — 모든 섬이 같은 기준선에서 출발한다. 그것도 없으면 None(첫 유효 실행)."""
+    b = _best_of(island)
+    if b is None and island != "main":
+        b = _best_of("main")
+    return b
+
+
 def _fold_id(f: dict) -> tuple:
     return f.get("era"), [str(x) for x in (f.get("test") or [])]
 
 
-def beats_c(s: dict, folds: list, conc: dict) -> "tuple[bool, str]":
-    """keep: 체결이 바뀐 폴드 ≥ 1, 그중 alpha 개선 과반, Δscore ≥ 0.005, 쏠림 셋 각각 ≥ BEST 의 같은 값 − 0.01."""
+def beats_c(s: dict, folds: list, conc: dict, island: str = "main") -> "tuple[bool, str]":
+    """keep: 체결이 바뀐 폴드 ≥ 1, 그중 alpha 개선 과반, Δscore ≥ 0.005, 쏠림 셋 각각 ≥ (그 섬) BEST 의 같은 값 − 0.01."""
     if s["void"]:
         return False, "void"
-    b = best_record()
+    b = best_record(island)
     if b is None:
         return True, "첫 유효 실행"
     if len(folds) != len(b["folds"]) or any(_fold_id(f) != _fold_id(g) for f, g in zip(folds, b["folds"])):
@@ -816,6 +883,9 @@ def integrity(check_cache: bool = True, check_locked: bool = False) -> None:
         if p.startswith("cache/"):
             if check_cache and sha_file(os.path.join(CACHE, p[6:])) != h:
                 raise SystemExit(f"캐시 {p} sha 불일치 — 평가 거부")
+        elif p.startswith("frozen/"):
+            if check_cache and sha_file(os.path.join(FROZEN, p[7:])) != h:
+                raise SystemExit(f"얼린 뉴스 파일 {p} sha 불일치 — 평가 거부")
         elif p.startswith("locked/"):
             if check_locked and sha_file(os.path.join(LOCKED_CACHE, p[7:])) != h:
                 raise SystemExit(f"잠금 캐시 {p} sha 불일치 — 거부")
@@ -833,6 +903,7 @@ def write_manifest() -> None:
     man = {p: sha_file(os.path.join(ROOT, p)) for p in GUARDED_FILES}
     man.update({f"cache/era_{e}_s0.pkl": sha_file(os.path.join(CACHE, f"era_{e}_s0.pkl")) for e in CACHE_ERAS})
     man.update({f"locked/era_{e}_s1.pkl": sha_file(os.path.join(LOCKED_CACHE, f"era_{e}_s1.pkl")) for e in CACHE_ERAS})
+    man.update({f"frozen/{f}": sha_file(os.path.join(FROZEN, f)) for f in FROZEN_FILES})
     man.update({f"ext/{p}": sha_file(V4._ext_path(p)) for p in V4.EXT_GUARDED})
     json.dump(man, open(MANIFEST, "w"), indent=1)
     log(f"MANIFEST.json 기록 — {len(man)} 항목")
@@ -846,7 +917,7 @@ def _fmt(k: str, v) -> str:
     return f"{k + ':':22s} {v:.6f}" if isinstance(v, float) else f"{k + ':':22s} {v}"
 
 
-def _sandboxed(args: "list[str]", cur: str, stdin: str = ""):
+def _sandboxed(args: "list[str]", cur: str, stdin: str = "", island: str = "main"):
     """격리 실행 → 결과 dict. 실패·시간 초과(``SANDBOX_TIMEOUT_S``)면 crash 행을 원장에 남기고(시행으로 센다) stderr 끝 20줄만 보이고
     끝낸다(stdout 은 버린다)."""
     try:
@@ -857,64 +928,88 @@ def _sandboxed(args: "list[str]", cur: str, stdin: str = ""):
         rc, line, err = "timeout", [], err + f"\n시간 초과({SANDBOX_TIMEOUT_S}s) — crash"
     if rc != 0 or not line:
         _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": rc,
-                       **git_state(), "evaluator": PREREG_TAG})
+                       **git_state(), "island": island, "evaluator": PREREG_TAG})
         print("---\nscore:                 crash\n" + "\n".join(err.splitlines()[-CRASH_TAIL:]))
         raise SystemExit(rc if isinstance(rc, int) and rc else 1)
     sys.stderr.write("\n".join(x for x in p.stderr.splitlines() if re.match(r"^\[\s*\d+s\] ", x) or x.startswith("경고")) + "\n")
     return json.loads(line[-1][len("@@RESULT@@"):])
 
 
+def _stop_msg(st: dict) -> str:
+    return f"상한 도달 — 평가 거부 (고유 시행 {st['n']}, 마지막 keep 뒤 {st['since_keep']})"
+
+
 def evaluate(workers: int) -> dict:
-    st = trial_state()                                                # 상한 검사가 맨 먼저(계산·무결성보다 앞)
+    with ledger_lock():
+        st = trial_state()                                            # 상한 검사가 맨 먼저(계산·무결성보다 앞)
     if st["stop"]:
-        raise SystemExit(f"상한 도달 — 평가 거부 (고유 시행 {st['n']}, 마지막 keep 뒤 {st['since_keep']})")
+        raise SystemExit(_stop_msg(st))
+    cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
+    isl = island_of(cur)                                              # 섬이 아닌 브랜치는 기준선만
     integrity()
     os.makedirs(SHADOW, exist_ok=True)                                # 있어야 격리에서 가린다
     t0 = time.time()
-    cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
     pin_ref(cur, git_state())                                         # crash 여도 commit 을 붙잡는다
-    r = _sandboxed(["--inner", "--workers", str(workers)], cur, stdin=f"{causality_seed(TRAIN)}\n")
+    r = _sandboxed(["--inner", "--workers", str(workers)], cur, stdin=f"{causality_seed(TRAIN)}\n", island=isl)
     s, folds, conc, abl = r["summary"], r["folds"], r["conc"], r["ablation"]
     if s["train_sha"] != cur:
         _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "why": "sha mismatch",
-                       **git_state(), "evaluator": PREREG_TAG})
+                       **git_state(), "island": isl, "evaluator": PREREG_TAG})
         raise SystemExit("격리 실행이 다른 train.py 를 평가했다 — 거부")
-    s["beats_best"], s["beats_detail"] = beats_c(s, folds, conc)
+    with ledger_lock():                                               # 상한 재검사 + keep 판정 + 덧붙이기를 한 자물쇠 안에서
+        st = trial_state()
+        if st["stop"] and cur not in st["shas"]:
+            raise SystemExit(_stop_msg(st) + " — 실행 중 다른 섬이 상한을 채웠다, 이 결과는 기록하지 않는다")
+        s["beats_best"], s["beats_detail"] = beats_c(s, folds, conc, isl)
+        s["island"] = isl
+        _eval_append(s, folds, conc, abl, cur, isl, t0)
+        st = trial_state()
+    s["trials"], s["stop"] = st["n"], st["stop"]
+    _report(s, folds, conc, abl)
+    return s
+
+
+def _eval_append(s: dict, folds: list, conc: dict, abl: dict, cur: str, isl: str, t0: float) -> None:
     s.update({f"{k}_removed": conc[k] for k in CONC_KEYS})
     s.update(ablation_scalp=abl["scalp"], ablation_daytrade=abl["daytrade"], eligible=abl["eligible"])
-    rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, **git_state(), "score": s["score"], "raw_score": s["raw_score"],
+    rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, **git_state(), "island": isl, "score": s["score"],
+           "raw_score": s["raw_score"],
            "void": s["void"], "beats_best": s["beats_best"], "lookahead": s["lookahead_check"], "conc": conc, "ablation": abl,
            "eligible": abl["eligible"], "oos_trades": s["oos_trades"], "oos_trades_per_year": s["oos_trades_per_year"],
            "payoff_ratio": s["payoff_ratio"], "ev_net_2x": s["ev_net_2x"], "ev_net_1x": s["ev_net_1x"], "news_folds_score": s["news_folds_score"],
            "folds": [{k: f[k] for k in ("era", "test", "params", "alpha", "trade_key", "n")} for f in folds],
            "evaluator": PREREG_TAG, "elapsed_s": round(time.time() - t0, 1)}
     _append(RUNS, rec)
-    st = trial_state()
-    s["trials"], s["stop"] = st["n"], st["stop"]
+
+
+def _report(s: dict, folds: list, conc: dict, abl: dict) -> None:
     json.dump({"summary": s, "folds": folds, "conc": conc, "ablation": abl}, open(LAST, "w"), ensure_ascii=False, indent=1, default=str)
     shown = ("score", "void", "beats_best", "beats_detail", "lookahead_check", "folds_pos", "oos_trades", "payoff_ratio", "ev_net_2x",
              "ev_net_1x", "top1pct_removed", "top_stock_removed", "top10d_removed", "news_folds_score", "ablation_scalp",
-             "ablation_daytrade", "eligible", "trials", "stop")
+             "ablation_daytrade", "eligible", "island", "trials", "stop")
     print("---")                                                           # 폴드별 값은 숨긴다
     for k in shown:
         print(_fmt(k, s[k]))
-    return s
 
 
 def accept() -> None:
-    """BEST 갱신 — 원장(RUNS)의 마지막 평가 기록이 현재 train.py 의 beats_best=True 일 때만. BEST.json·BEST_HISTORY 는 사본에도."""
+    """그 섬의 BEST 갱신 — 원장(RUNS)에서 그 섬의 마지막 평가 기록이 현재 train.py 의 beats_best=True 일 때만. BEST_<섬>.json·BEST_HISTORY
+    (island 필드)는 사본에도. 읽고 쓰기는 원장 자물쇠 안에서."""
     integrity(check_cache=False)
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
-    evals = [r for r in _read_jsonl(RUNS) if "folds" in r]
-    if not evals or evals[-1]["train_sha"] != cur or not evals[-1]["beats_best"]:
-        raise SystemExit("원장의 마지막 평가가 현재 train.py 의 beats_best=True 가 아니다 — 갱신 거부")
-    r = evals[-1]
-    best = {"score": r["score"], "conc": r["conc"], "train_sha": cur, "commit": r.get("commit"), "evaluator": r["evaluator"],
-            "eligible": r["eligible"], "folds": [{k: f[k] for k in ("era", "test", "alpha", "trade_key")} for f in r["folds"]]}
-    _write_both(BEST, best)
-    _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "accept": True, "score": r["score"]})
-    _append(BEST_HISTORY, best)
-    print(f"BEST 갱신: score {r['score']:.4f}")
+    isl = island_of(cur)
+    with ledger_lock():
+        evals = [r for r in _read_jsonl(RUNS) if "folds" in r and _isl(r) == isl]
+        if not evals or evals[-1]["train_sha"] != cur or not evals[-1]["beats_best"]:
+            raise SystemExit(f"섬 {isl} 원장의 마지막 평가가 현재 train.py 의 beats_best=True 가 아니다 — 갱신 거부")
+        r = evals[-1]
+        best = {"score": r["score"], "conc": r["conc"], "train_sha": cur, "commit": r.get("commit"), "evaluator": r["evaluator"],
+                "island": isl, "eligible": r["eligible"],
+                "folds": [{k: f[k] for k in ("era", "test", "alpha", "trade_key")} for f in r["folds"]]}
+        _write_both(best_path(isl), best)
+        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "accept": True, "island": isl, "score": r["score"]})
+        _append(BEST_HISTORY, best)
+    print(f"BEST 갱신(섬 {isl}): score {r['score']:.4f}")
 
 
 def reference(workers: int) -> None:
@@ -937,6 +1032,12 @@ def reference(workers: int) -> None:
     print(f"REFERENCE 기록: {REFERENCE}")
 
 
+def default_workers(branch: "str | None" = None) -> int:
+    """섬 넷이 16코어를 나눠 쓴다 — 섬 브랜치면 max(1, (cpu − 1) // 4), 아니면 cpu − 1."""
+    n = os.cpu_count() or 2
+    return max(1, (n - 1) // 4) if ISLAND_RE.match(current_branch() if branch is None else branch) else max(1, n - 1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true", help="캐시 A·B·C(data.build_all, KR_QUANT_DB)")
@@ -945,8 +1046,10 @@ def main() -> None:
     ap.add_argument("--reference", action="store_true", help="leader_C 고정값 참고 한 번(시행 아님)")
     ap.add_argument("--inner", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--inner-reference", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    ap.add_argument("--workers", type=int, default=None, help="기본: 섬 브랜치면 max(1,(cpu−1)//4), 아니면 cpu−1")
     a = ap.parse_args()
+    if a.workers is None:
+        a.workers = default_workers()
     _G["t0"] = time.time()
     if a.build:
         from research.combined.data import build_all

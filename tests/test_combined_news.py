@@ -149,15 +149,23 @@ def _done(d, code, status, since="2023-03-16"):
 
 def test_news_excluded_is_a_build_time_code_set(tmp_path):
     _write(tmp_path, "000001", [("2023-03-16T09:00:00", "a")])                  # 정상
+    _done(tmp_path, "000001", "done")
+    _write(tmp_path, "0007C0", [("2023-03-16T09:00:00", "e")])                  # .done 없음 — 파일 없음과 같이 뺀다(M-b)
     _write(tmp_path, "000002", [("2024-08-01T09:00:00", "b")])                  # page_cap, 잘림(첫 기사 늦음)
     _done(tmp_path, "000002", "page_cap")
     _write(tmp_path, "000003", [("2023-03-16T11:00:00", "c")])                  # page_cap 이지만 수집 시작일에 닿음
     _done(tmp_path, "000003", "page_cap")
     _write(tmp_path, "000004", [("2024-08-01T09:00:00", "d")])                  # 늦게 시작해도 page_cap 아님(상장 등) — 빼지 않는다
     _done(tmp_path, "000004", "done")
-    ex, det = N.news_excluded(["000001", "000002", "000003", "000004", "999999"], tmp_path)
-    assert ex.tolist() == [False, True, False, False, True]
-    assert det == {"nofile": ["999999"], "page_cap_late": ["000002"], "page_cap_kept": ["000003"]}
+    codes = ["000001", "000002", "000003", "000004", "999999", "0007C0"]
+    fr = {}
+    ex, det = N.news_excluded(codes, tmp_path, fr)
+    assert ex.tolist() == [False, True, False, False, True, True]
+    assert det == {"nofile": ["999999"], "no_done": ["0007C0"], "page_cap_late": ["000002"], "page_cap_kept": ["000003"]}
+    (tmp_path / "999999.jsonl").write_text("")                                  # 아카이브가 자라도(전진) 얼린 분류가 이긴다
+    _done(tmp_path, "999999", "done")
+    assert N.news_excluded(codes, tmp_path, fr)[0].tolist() == ex.tolist()
+    assert N.news_excluded(codes, tmp_path)[0][4] == False  # noqa: E712 — 얼린 분류 없이 다시 재면 바뀐다(그래서 얼린다)
 
 
 def test_uni_off_whole_window_not_time_dependent():
@@ -215,3 +223,54 @@ def test_archive_fresh_requires_article_at_or_after_cutoff(tmp_path):
     _write(tmp_path, "000003", [("2026-10-22T15:10:00", "c")])
     assert N.archive_fresh(tmp_path, "2026-10-22") and not N.archive_fresh(tmp_path, "2026-10-23")
     assert N.archive_max_ts(tmp_path) == pd.Timestamp("2026-10-22 15:10")
+
+
+# ---------------------------------------------------------------- 정정 0-2 M-b: 수집 대상(수집기와 같은 정의)
+
+def test_select_collect_universe_matches_collector_rule():
+    rows = [(f"{i:06d}", 1000.0 - i) for i in range(400)]
+    rows += [("069500", 5000.0), ("000500", 1000.0 - 500)]
+    u = N.select_collect_universe(rows)
+    assert len(u) == 299 and "069500" not in u and u[0] == "000000"                  # 069500 이 상위 300 안 → 299
+    tie = [("000002", 7.0), ("000001", 7.0), ("000003", 9.0)]
+    assert N.select_collect_universe(tie) == ["000003", "000001", "000002"]          # 동률은 코드 오름차순
+    rows2 = [(f"{i:06d}", 1000.0 - i) for i in range(400)]
+    assert len(N.select_collect_universe(rows2)) == 300                               # 069500 없으면 300
+
+
+def test_collect_universes_use_previous_trading_day_and_positive_value():
+    tv = pd.DataFrame({"date": pd.to_datetime(["2023-03-14"] * 3 + ["2023-03-15"] * 3),
+                       "code": ["A", "B", "C", "A", "B", "C"], "trade_value": [3.0, 2.0, 0.0, 1.0, 5.0, 9.0]})
+    old = N.COLLECT_SIZE
+    try:
+        N.COLLECT_SIZE = 2
+        u = N.collect_universes(tv, pd.DatetimeIndex(["2023-03-15", "2023-03-16", "2023-03-18"]))
+    finally:
+        N.COLLECT_SIZE = old
+    assert u == {"2023-03-15": ["A", "B"], "2023-03-16": ["C", "B"], "2023-03-18": ["C", "B"]}   # 그날 값은 쓰지 않는다
+    with pytest.raises(ValueError, match="앞 거래일"):
+        N.collect_universes(tv, pd.DatetimeIndex(["2023-03-14"]))
+
+
+def test_news_known_only_on_collected_days(tmp_path):
+    _write(tmp_path, "000001", [("2023-03-16T09:00:00", "[특징주] a"), ("2023-03-17T09:00:00", "[특징주] b"), ("2023-03-20T09:00:00", "c")])
+    days = pd.DatetimeIndex(["2023-03-14", "2023-03-16", "2023-03-17", "2023-03-20"])
+    uv = {"2023-03-14": ["000001"], "2023-03-16": ["000001"], "2023-03-17": ["000002"], "2023-03-20": ["000001"]}
+    cm = N.collection_mask(["000001", "000002"], days, uv)
+    assert cm.tolist() == [[False, True, False, True], [False, False, True, False]]   # 구간 전(03-14)은 대상이어도 False
+    full = N.news_arrays(["000001", "000002"], days, tmp_path)
+    r = N.news_arrays(["000001", "000002"], days, tmp_path, collect=cm)
+    assert full["news_known"][0].tolist() == [False, True, True, True]
+    assert r["news_known"][0].tolist() == [False, True, False, True]                  # 03-17 은 수집 대상 밖 → 모름
+    assert r["n_feat"][0].tolist() == [0, 1, 0, 0] and full["n_feat"][0].tolist() == [0, 1, 1, 0]   # 모름 칸 개수 0
+    assert not r["news_known"][1].any()                                               # 대상이어도 파일 없으면 모름
+    with pytest.raises(ValueError, match="모양"):
+        N.apply_collect(full, cm[:, :2])
+
+
+def test_collector_complete_reads_ledger(tmp_path):
+    led = tmp_path / "ledger.jsonl"
+    assert not N.collector_complete(led, "2026-10-23")
+    led.write_text(json.dumps({"status": "failed", "days": {"2026-10-23": {"complete": True}}}) + "\n"
+                   + json.dumps({"status": "ok", "days": {"2026-10-22": {"complete": True}, "2026-10-23": {"complete": False}}}) + "\n")
+    assert N.collector_complete(led, "2026-10-22") and not N.collector_complete(led, "2026-10-23")   # 실패 실행·미완은 안 센다

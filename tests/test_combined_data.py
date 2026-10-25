@@ -86,7 +86,7 @@ def _half_toy():
     assert set(half) == {0, 1}
     t = 5
     return {"codes": codes, "days": pd.bdate_range("2020-01-01", periods=t), "C": np.arange(20 * t, dtype=float).reshape(20, t),
-            "half": half, "mkt": np.zeros(20, np.int64), "mkt_real": np.zeros(20, np.int8), "era": "Z"}
+            "half": half, "mkt": np.zeros(20, np.int64), "mkt_real": np.zeros(20, np.int8), "era": "Z", "vmult": np.linspace(1, 1.9, 20)}
 
 
 def test_locked_half_written_to_separate_dir_and_sha_checked(tmp_path, monkeypatch):
@@ -99,7 +99,8 @@ def test_locked_half_written_to_separate_dir_and_sha_checked(tmp_path, monkeypat
     assert os.path.dirname(p0) == cd.CACHE and os.path.dirname(p1) == cd.LOCKED_CACHE      # 루프 격리는 CACHE 만 다시 보인다
     s0, s1 = cd.load("Z", 0), cd.load("Z", 1, sha=hashlib.sha256(open(p1, "rb").read()).hexdigest())
     assert set(s0["codes"]).isdisjoint(s1["codes"]) and sorted(s0["codes"] + s1["codes"]) == F["codes"]
-    assert (s1["half"] == 1).all() and s1["mkt_real"].shape == (len(s1["codes"]),)
+    assert (s1["half"] == 1).all() and s1["mkt_real"].shape == s1["vmult"].shape == (len(s1["codes"]),)
+    assert np.array_equal(s1["vmult"], F["vmult"][F["half"] == 1])                   # 배수는 종목과 함께 잘린다
     with pytest.raises(SystemExit, match="sha"):
         cd.load("Z", 1, sha="0" * 64)
 
@@ -126,6 +127,7 @@ def test_build_era_end_override_rolls_only_end(monkeypatch):
 def test_news_exclusion_single_switch(tmp_path, monkeypatch):
     import json
     (tmp_path / "000001.jsonl").write_text(json.dumps({"id": 1, "title": "a", "createdAt": "2023-03-16T09:00:00"}) + "\n")
+    (tmp_path / "000001.done").write_text(json.dumps({"status": "done"}))
     days = pd.bdate_range("2023-03-01", periods=30)
     uni = np.ones((2, 30), bool)
     u2, det = cd.apply_news_exclusion(uni, ["000001", "999999"], days, tmp_path)

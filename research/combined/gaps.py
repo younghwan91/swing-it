@@ -5,6 +5,7 @@
 (절단 검사로 못 잡는다). 수정 종가로 계산한 tickp 는 V 의 C 의 결정적 함수라 정보를 더하지 않는다.
 대가: 수정 사건 전 구간에서는 호가 비율이 근사다(수정가 60,905 vs 원주가 3,160 이면 실제 15.8bp 를 1.6bp 로 본다 — scalp VERDICT §5 의 교훈과 맞바꿈).
 엔진의 체결 비용은 이와 무관하게 정가 ``cost_rt`` × 2 다.
+tickp 는 **유효숫자 2자리**로 거칠게 낸다(정정 0-2 K1) — 정밀한 tick/C 로는 수정 종가 C 를 되살려 V 의 가격 배수를 벗겨 낼 수 있다.
 호가표는 날짜별: 2023-01-25 이후 ``swing_it.features.korea.tick_size_vec``(통합 표), 그 전은 시장별 옛 표
 (``research.signals.pattern_events.tick_dated`` 와 같은 값 — 테스트가 대조한다).
 """
@@ -34,12 +35,22 @@ def tick_dated_vec(price: np.ndarray, days: pd.DatetimeIndex, mkt: np.ndarray) -
     return np.where(is_new, new, old)
 
 
+def coarse2(x: np.ndarray) -> np.ndarray:
+    """유효숫자 2자리 반올림(0·NaN 은 그대로)."""
+    x = np.asarray(x, float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q = 10.0 ** (np.floor(np.log10(np.abs(x))) - 1)
+        out = np.round(x / q) * q
+    return np.where(np.isfinite(x) & (x != 0), out, x)
+
+
 def gap_arrays(O: np.ndarray, C: np.ndarray, reopen: np.ndarray,  # noqa: E741
                lu: np.ndarray, days: pd.DatetimeIndex, mkt: np.ndarray) -> dict:
     """야간 갭 배열. 모두 [N,T], t 는 시가 날(전일 종가 = t-1).
 
     - ``gap[t] = O[t]/C[t-1] - 1`` (수정가). ``reopen`` 칸·t=0 은 NaN.
-    - ``tickp[t] = tick(C[t-1]) / C[t-1]`` (수정 종가, 주문일 t 의 호가표). t=0 은 NaN. 원주가는 받지 않는다(미래 수정 계수 누수).
+    - ``tickp[t] = coarse2(tick(C[t-1]) / C[t-1])`` (수정 종가, 주문일 t 의 호가표, 유효숫자 2자리). t=0 은 NaN.
+      원주가는 받지 않는다(미래 수정 계수 누수).
     - ``gap_event[t] = |gap| >= (lu[t]-1)/2`` — 제한폭 절반 이상, 상승·하락 대칭. NaN 갭은 False.
     """
     O = np.asarray(O, dtype=float)  # noqa: E741
@@ -60,6 +71,7 @@ def gap_arrays(O: np.ndarray, C: np.ndarray, reopen: np.ndarray,  # noqa: E741
         # 가격은 전일(t-1) 수정 종가, 호가표는 주문일(t)에 시행 중인 표
         tickp[:, 1:] = tick_dated_vec(C[:, :-1], days[1:], mkt) / C[:, :-1]
     tickp[~np.isfinite(tickp)] = np.nan
+    tickp = coarse2(tickp)
     with np.errstate(invalid="ignore"):
         event = np.abs(gap) >= (np.asarray(lu, dtype=float) - 1.0) / 2.0 - 1e-9  # 부동소수 경계 허용
     return {"gap": gap.astype(np.float32), "tickp": tickp.astype(np.float32),

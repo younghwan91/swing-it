@@ -5,6 +5,18 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 사전등록·합격 바는 `PREREG.md`, 설계는 `docs/superpowers/specs/2026-10-25-combined-autoresearch-design.md` 다.
 시작 전에 이 파일, `PREREG.md`, `prepare.py`(읽기만), `train.py` 를 읽는다.
 
+## 섬(island) — 루프 에이전트 넷이 나란히 돈다(PREREG 정정 0-2)
+- 너는 섬 하나다. 네 워크트리의 브랜치 이름이 섬 이름이다: `combined-loop-1` ~ `combined-loop-4`. 다른 브랜치에서는 평가가 거부된다.
+- **다른 섬의 워크트리·브랜치·results.tsv 를 읽지 않는다.** 원장(RUNS)은 섬들이 함께 쓰지만 너는 출력 줄만 본다.
+- **시행 상한·멈춤은 전역이다:** 고유 train sha 150 은 네 섬 합계, 연속 30 무 keep 도 모든 섬 합계다. 다른 섬 때문에 "상한 도달"이 뜰 수 있다.
+- **keep 바는 섬마다다:** `beats_best` 는 네 섬의 BEST(처음엔 모든 섬 공통 기준선) 대비다. `--accept` 도 네 섬의 BEST 만 올린다.
+- 작업자 수 기본값은 max(1, (cpu − 1) // 4) 다(섬 넷이 16코어를 나눈다). `--workers` 를 키우지 않는다.
+- 섬마다 출발 초점이 다르다. 어느 섬이든 **세 레포 부품이 모두 일해야(eligible) 후보가 된다** — 초점만 다르고 끝은 같다.
+  - 섬 1: 돌파 후보 안에서 scalp 야간 갭 지속성 순위(gap·tickp·gap_event).
+  - 섬 2: daytrade 뉴스 거부([특징주])·"이미 반영됐나" 검사.
+  - 섬 3: swing 골격 위에서 청산·국면·불타기 구조.
+  - 섬 4: 자유 조합.
+
 ## 파일
 - `prepare.py` — 고정 평가기이자 진입점. 워크포워드(학습 2년 → 시험 1년, 시대 A 2011~2015 5폴드 · 시대 B 2020~2024 5폴드),
   학습 구간 라틴 하이퍼큐브 48점 → 고원 선택, 엔진 체결(**신호일 종가 진입**), 비용 2배, 미래정보 검사, 쏠림 진단, 부품 제거 검사, keep 판정,
@@ -16,8 +28,8 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 ## 실험 한 번
 1. `train.py` 를 아이디어 하나로 고친다 → `git commit -m "exp: <한 줄>"` (`train.py` 만 add)
 2. `uv run python research/combined/prepare.py > run.log 2>&1` (작업 트리 루트; 30분 넘으면 죽이고 crash)
-3. `grep -E "^(score|void|beats_best|beats_detail|lookahead_check|folds_pos|oos_trades|payoff_ratio|ev_net_2x|ev_net_1x|top1pct_removed|top_stock_removed|top10d_removed|news_folds_score|ablation_scalp|ablation_daytrade|eligible|trials|stop):" run.log`
-   비었으면 `tail -n 50 run.log` — 쉬운 오류면 고쳐 다시, 아니면 crash 로 적고 넘어간다. "허용 목록 위반" 이면 train.py 를 고친다.
+3. `grep -E "^(score|void|beats_best|beats_detail|lookahead_check|folds_pos|oos_trades|payoff_ratio|ev_net_2x|ev_net_1x|top1pct_removed|top_stock_removed|top10d_removed|news_folds_score|ablation_scalp|ablation_daytrade|eligible|island|trials|stop):" run.log`
+   (`island:` 줄은 네 섬 이름이다.) 비었으면 `tail -n 50 run.log` — 쉬운 오류면 고쳐 다시, 아니면 crash 로 적고 넘어간다. "허용 목록 위반" 이면 train.py 를 고친다.
    "상한 도달 — 평가 거부" 면 루프가 끝난 것이다(아래 '멈춤'). **crash 도 시행 하나로 센다**(원장에 crash 행). crash 때는 stderr 끝 20줄만 보인다.
 4. `results.tsv` 에 한 줄 덧붙인다(모든 시도 — discard·crash 포함).
 5. **keep 은 평가기가 판정한다:** `beats_best: True` 면 `uv run python research/combined/prepare.py --accept` 로 기준을 올리고 커밋을 남긴다.
@@ -44,10 +56,12 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 ## "세 레포 부품"과 eligible
 - **swing:** leader21 골격(추세 템플릿·RS·N일 돌파·청산 메뉴·하드 손절·불타기·국면), 수축·실적 신선도 같은 특성. EPS 상승은 평가기가 강제한다.
 - **scalp:** 야간 갭 지속성(gap, 비용항 tickp 를 빼고, 창 w/2·w·2w)을 돌파 후보 안 순위 키나 거르개로. 제한폭 절반 이상 갭(gap_event)은 대칭으로 뺀다.
-  `tickp` 는 **수정 종가** 기준 호가 비율(`tick(C[t-1])/C[t-1]`)이다 — 원주가를 주면 미래 수정 계수가 새서 수정가로 바꿨다(PREREG 정정 0).
+  `tickp` 는 **수정 종가** 기준 호가 비율(`tick(C[t-1])/C[t-1]`, 유효숫자 2자리)이다 — 원주가를 주면 미래 수정 계수가 새서 수정가로 바꿨다(PREREG 정정 0).
   수정 사건 전에는 실제 호가 비율과 다르다. 엔진 체결 비용은 정가 cost_rt × 2 그대로다.
 - **daytrade:** [특징주] 헤드라인 거부(n_feat, 신호일 전후 창), 기사 뒤 이미 반영됐는지(일봉 가격 이동) 검사. `news_known` 이 False 면 개수 0 은 "모름"이다.
   뉴스 구간(2023-03-15~)에서 아카이브가 없거나 잘린 종목은 평가기가 uni 를 꺼 둔다(PREREG 정정 0) — 그 종목은 그 구간에 후보가 아니다.
+  `news_known` 은 그날 **수집 대상**(전일 거래대금 상위 300, 전진 수집기와 같은 정의)일 때만 True 다 — 대상 밖 날은 0 이 "모름"이다.
+  창 길이 동안 기사를 세는 규칙은 그 창의 known 칸만 센다(대상 밖 날의 0 을 "기사 없음"으로 읽지 않는다).
 - `eligible: True` = scalp·daytrade 부품 제거 검사가 둘 다 ok(그 부품이 실제로 체결과 점수를 바꾼다). 장식으로 읽기만 하는 부품은 걸린다.
 - **자격 없는 keep 도 keep 이다.** 자격은 keep 판정에 쓰이지 않는다 — 다음 시도의 디딤돌이다. 기준선(`train.py` 처음 상태)은 갭·뉴스를 안 써서 자격이 없다.
   다만 후보는 자격 있는 시도에서만 나오니, 세 레포 부품이 모두 일하는 구조로 가야 한다.
@@ -71,6 +85,11 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
   np·pd 등 모듈에 닿는 객체를 바꾸는 메서드(append·update·setdefault·pop·sort …)도 금지다(`np.sort(a)` 같은 함수 호출은 된다).
 - 스스로 잰 구간 성적을 예외 메시지·출력으로 내보내기(성공 때 stderr 는 평가기 로그만, 학습 점 실패는 예외 종류만 보인다).
 - 사후 지식: 아는 승자 종목·업종·연도를 겨냥하는 규칙(날짜·코드를 받지 않는다 — 배열 위치로 같은 짓을 하지 않는다).
+- **가격 수준 문턱**(`C > 1000` 같은 절대 가격, 가격 끝자리·정수 여부): V 의 O·H·L·C 는 종목별 비밀 배수가 곱해져 수준이 뜻이 없다.
+  비율·수익률·이동평균 대비만 쓴다(소급 수정가의 소수부가 미래 수정 사건을 알리던 통로를 막은 것 — PREREG 정정 0-2).
+  배수 때문에 "정확히 같음"(평평한 가격의 이동평균끼리 `>`·`==`)은 부동소수 오차로 뒤집힐 수 있다 — 엄격한 같음에 기대지 않는다.
+- **uni 가 꺼진 종목의 교차 종목 정보**: 뉴스 구간에서 uni 가 꺼진 종목(아카이브 없음·잘림 — 미래 폐지·미래 인기의 표지)의 값으로
+  다른 종목을 고르는 규칙(동종·상관 종목 고르기, "고유동인데 uni 꺼짐" 세기). 사람 열람 제외 사유 `cross_stock_uni_off`.
 - 미래 정보: t 신호는 t 종가(뉴스는 t 15:10)까지의 값만(평가기가 절단 재계산으로 검사 — 걸리면 void).
 - 숫자 맞추기: 상수를 손으로 바꿔 점수를 올리지 않는다 — 숫자는 `params` 범위로 내고 평가기에 맡긴다. 범위를 한 점으로 좁히는 것도 손 맞추기다.
 - **뉴스 부품에는 숫자 파라미터를 두지 않는다.** `params` 에 뉴스 관련 이름(창 길이·개수 문턱 등)을 두지 않는다 — 2023 폴드의 학습 창에는 뉴스가 없어

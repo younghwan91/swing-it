@@ -26,7 +26,8 @@ def _iso(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "SHADOW", str(tmp_path / "shadow"))
     monkeypatch.setattr(P, "BEST_HISTORY", str(tmp_path / "BEST_HISTORY.jsonl"))
     monkeypatch.setattr(P, "REFERENCE", str(tmp_path / "REFERENCE.json"))
-    monkeypatch.setattr(P, "pin_ref", lambda sha, gs: None)                       # 진짜 레포에 refs 를 만들지 않는다(전용 시험은 _REAL_PIN)
+    monkeypatch.setattr(P, "pin_ref", lambda sha, gs: None)
+    monkeypatch.setattr(P, "current_branch", lambda: "combined-loop-1")             # 평가는 섬 브랜치에서(섬 시험은 따로 바꾼다)                       # 진짜 레포에 refs 를 만들지 않는다(전용 시험은 _REAL_PIN)
     V4._EXIT.clear()
     yield
     V4._EXIT.clear()
@@ -823,8 +824,9 @@ def test_eras_keyword_runs_other_era_without_global_swap(tmp_path):
 # ---------------------------------------------------------------- 정정 0: 잠금 캐시 격리·MANIFEST, 시간 초과, refs, 모양 고정
 
 def test_locked_cache_hidden_in_sandbox():
-    from research.combined.data import LOCKED_CACHE
+    from research.combined.data import FROZEN, LOCKED_CACHE
     assert LOCKED_CACHE in P.sandbox_hide() and not LOCKED_CACHE.startswith(P.CACHE + os.sep)
+    assert FROZEN in P.sandbox_hide() and not FROZEN.startswith(P.CACHE + os.sep)    # 얼린 제외 목록 = 미래 폐지 표지
     cmd = P.sandbox_cmd_c(["--inner"])
     binds = [a for a, _ in _pairs(cmd, "--ro-bind")]
     assert not any(b.startswith(LOCKED_CACHE) for b in binds)
@@ -848,10 +850,16 @@ def test_manifest_and_integrity_cover_locked_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "MANIFEST", str(man))
     monkeypatch.setattr(P, "CACHE", str(cache))
     monkeypatch.setattr(P, "LOCKED_CACHE", str(locked))
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    for f in P.FROZEN_FILES:
+        (frozen / f).write_text("{}")
+    monkeypatch.setattr(P, "FROZEN", str(frozen))
     monkeypatch.setattr(V4, "EXT_GUARDED", ())
     P.write_manifest()
     m = json.load(open(man))
     assert {f"locked/era_{e}_s1.pkl" for e in P.CACHE_ERAS} <= set(m) and {f"cache/era_{e}_s0.pkl" for e in P.CACHE_ERAS} <= set(m)
+    assert {f"frozen/{f}" for f in P.FROZEN_FILES} <= set(m)
     _git(root, "init", "-q")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "prereg")
@@ -861,6 +869,9 @@ def test_manifest_and_integrity_cover_locked_cache(tmp_path, monkeypatch):
     P.integrity()                                                                    # 루프 평가는 잠금 캐시를 해시하지 않는다
     with pytest.raises(SystemExit, match="잠금 캐시"):
         P.integrity(check_locked=True)
+    (frozen / P.FROZEN_FILES[0]).write_text('{"000001": "ok"}')                      # 얼린 뉴스 분류를 바꾸면 루프 평가도 거부
+    with pytest.raises(SystemExit, match="얼린"):
+        P.integrity()
 
 
 def test_sandbox_timeout_is_a_crash_trial(tmp_path, monkeypatch, capsys):
@@ -949,3 +960,184 @@ def test_evaluate_pins_commit_even_on_crash(tmp_path, monkeypatch):
         P.evaluate(1)
     cur = P.hashlib.sha256(open(P.TRAIN, "rb").read()).hexdigest()[:16]
     assert seen == [(cur, {"commit", "dirty"})]
+
+
+# ---------------------------------------------------------------- 정정 0-2 K1: 가격 배수(미래 수정 사건 표지 제거)
+
+def test_price_mult_salted_deterministic_in_range(tmp_path):
+    from research.combined import data as cd
+    salt = cd.price_salt(str(tmp_path / "led" / "price_salt"))
+    assert oct(os.stat(tmp_path / "led" / "price_salt").st_mode & 0o777) == "0o600"
+    assert cd.price_salt(str(tmp_path / "led" / "price_salt")) == salt                 # 한 번만 만든다
+    codes = [f"{i:06d}" for i in range(500)]
+    m = cd.price_mult(codes, salt)
+    assert ((m >= 1) & (m < 2)).all() and len(set(m)) == 500 and m.std() > 0.2
+    assert np.array_equal(cd.price_mult(codes[::-1], salt), m[::-1])                  # 종목마다 같은 배수(시대·절반 무관)
+    assert not np.allclose(cd.price_mult(codes, salt + "x"), m)                       # 소금 없이는 모른다
+
+
+def test_view_scales_prices_only_and_baseline_trades_invariant(tmp_path, monkeypatch):
+    from research.combined import data as cd
+    D = _toy(n=6, t=780, start="2022-01-03", seed=3)
+    V0 = cd.view_c(D)
+    D2 = {**D, "vmult": cd.price_mult(D["codes"], "s")}
+    V = cd.view_c(D2)
+    for k in ("O", "H", "L", "C"):
+        assert np.allclose(V[k], V0[k] * D2["vmult"][:, None]) and not np.allclose(V[k], V0[k])
+    assert np.allclose(V["C"][:, 1:] / V["C"][:, :-1], V0["C"][:, 1:] / V0["C"][:, :-1])   # 수익률 그대로
+    for k in set(V) - {"O", "H", "L", "C"}:
+        assert np.array_equal(V[k], V0[k], equal_nan=True)
+    monkeypatch.setattr(P, "ERAS", {"A": {"folds": TOY_FOLDS}})
+    fixed = [{"era": "A", "params": dict(P.REF_PARAMS)}] * 2
+    r0 = P.walk_forward_c({"A": D}, 1, P.TRAIN, fixed=fixed)
+    r1 = P.walk_forward_c({"A": D2}, 1, P.TRAIN, fixed=fixed)
+    assert [f["trade_key"] for f in r0["folds"]] == [f["trade_key"] for f in r1["folds"]] and sum(f["n"] for f in r0["folds"]) > 0
+
+
+def test_price_frac_leak_check_fires_without_multiplier():
+    from research.combined import data as cd
+    rng = np.random.default_rng(0)
+    n, t = 40, 200
+    C = np.round(rng.uniform(1_000, 50_000, (n, t)) / 50) * 50                       # 수정 사건 없음: 정수(호가 격자)
+    C[n // 2:] = C[n // 2:] * 0.8731                                                  # 뒤에 분할·증자: 소급 수정 → 비정수
+    uni = np.ones((n, t), bool)
+    with pytest.raises(ValueError, match="소수부"):
+        cd.check_price_frac_leak(C, np.ones(n), uni)                                  # 위반 주입: 배수 없음
+    out = cd.check_price_frac_leak(C, cd.price_mult([f"{i:06d}" for i in range(n)], "salt"), uni)
+    assert out["ks"] < cd.FRAC_LEAK_TOL and 0.45 < out["nonint_share_uni"] < 0.55
+
+
+def test_cache_without_multiplier_refused(tmp_path, monkeypatch):
+    from research.combined import data as cd
+    monkeypatch.setattr(cd, "CACHE", str(tmp_path))
+    import pickle
+    with open(tmp_path / "era_Z_s0.pkl", "wb") as f:
+        pickle.dump({"codes": ["000001"], "C": np.ones((1, 3))}, f)
+    with pytest.raises(SystemExit, match="vmult"):
+        cd.load("Z")
+    with pytest.raises(SystemExit, match="vmult"):
+        P._cause_task(("Z", str(tmp_path / "era_Z_s0.pkl"), -1, "full", [], P.TRAIN))   # 미래정보 검사 작업자도
+
+
+# ---------------------------------------------------------------- 정정 0-2: 섬(island) 모형
+
+def _row(sha, island, beats=False, score=0.0, **kw):
+    return {"train_sha": sha, "island": island, "folds": [_f(i, score, f"{sha}{i}") for i in range(10)], "beats_best": beats,
+            "score": score, "conc": CONC0, **kw}
+
+
+def test_island_from_branch_and_refusal(monkeypatch):
+    for b in ("combined-loop-1", "combined-loop-4"):
+        monkeypatch.setattr(P, "current_branch", lambda b=b: b)
+        assert P.island_of("f" * 16) == b
+    for b in ("combined-loop-5", "feature-combined-strategy", "combined-loop-1x", ""):
+        monkeypatch.setattr(P, "current_branch", lambda b=b: b)
+        with pytest.raises(SystemExit, match="섬이 아니다"):
+            P.island_of("f" * 16)
+        assert P.island_of(P.BASELINE_TRAIN_SHA) == "main"                           # 기준선(스모크·참고)만 main
+    monkeypatch.setattr(P, "current_branch", lambda: "feature-combined-strategy")
+    tr = P.TRAIN
+    monkeypatch.setattr(P, "TRAIN", tr)
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: pytest.fail("거부는 무결성·계산보다 앞"))
+    monkeypatch.setattr(P, "BASELINE_TRAIN_SHA", "0" * 16)
+    with pytest.raises(SystemExit, match="섬이 아니다"):
+        P.evaluate(1)
+    assert not os.path.exists(P.RUNS)
+
+
+def test_default_workers_split_four_ways():
+    n = os.cpu_count() or 2
+    assert P.default_workers("combined-loop-2") == max(1, (n - 1) // 4)
+    assert P.default_workers("feature-combined-strategy") == max(1, n - 1)
+
+
+def test_per_island_bar_starts_from_baseline():
+    P._append(P.RUNS, _row("base", "main", beats=True, score=0.10))
+    P._append(P.RUNS, _row("i1a", "combined-loop-1", beats=True, score=0.30))
+    assert P.best_record("combined-loop-1")["train_sha"] == "i1a"
+    assert P.best_record("combined-loop-2")["train_sha"] == "base"                    # 다른 섬의 keep 은 이 섬의 바가 아니다
+    s = {"void": False, "score": 0.20}
+    conc = dict(CONC0)
+    f2 = [_f(i, 0.5, f"new{i}") for i in range(10)]
+    assert P.beats_c(s, f2, conc, "combined-loop-2")[0] is True                       # 기준선 0.10 대비 keep
+    assert P.beats_c(s, f2, conc, "combined-loop-1")[0] is False                      # 섬 1 의 0.30 대비 아님
+
+
+def test_accept_per_island(monkeypatch):
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    cur = P.hashlib.sha256(open(P.TRAIN, "rb").read()).hexdigest()[:16]
+    P._append(P.RUNS, _row(cur, "combined-loop-1", beats=True, score=0.2, evaluator="t", eligible=False))
+    P._append(P.RUNS, _row("other", "combined-loop-2", beats=False, score=0.1))      # 다른 섬 행이 뒤에 와도 막지 않는다
+    P.accept()
+    assert os.path.exists(P.best_path("combined-loop-1")) and not os.path.exists(P.BEST)
+    assert P._read_jsonl(P.BEST_HISTORY)[-1]["island"] == "combined-loop-1"
+    monkeypatch.setattr(P, "current_branch", lambda: "combined-loop-2")
+    with pytest.raises(SystemExit, match="combined-loop-2"):
+        P.accept()
+
+
+def test_global_cap_across_islands_and_recheck_before_append(monkeypatch):
+    for i in range(149):
+        P._append(P.RUNS, {"train_sha": f"s{i}", "island": f"combined-loop-{1 + i % 4}", "folds": [], "beats_best": False})
+    st = P.trial_state()
+    assert st["n"] == 149 and not st["stop"]                                          # 섬을 합쳐 센다
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    cur = P.hashlib.sha256(open(P.TRAIN, "rb").read()).hexdigest()[:16]
+
+    def other_island_fills_cap(args, c, stdin="", island="main"):
+        P._append(P.RUNS, {"train_sha": "late", "island": "combined-loop-3", "folds": [], "beats_best": False})
+        return {"summary": {"train_sha": c}, "folds": [], "conc": {}, "ablation": {}}
+    monkeypatch.setattr(P, "_sandboxed", other_island_fills_cap)
+    with pytest.raises(SystemExit, match="상한"):
+        P.evaluate(1)
+    assert cur not in {r["train_sha"] for r in P._read_jsonl(P.RUNS)} and P.trial_state()["n"] == 150   # 151 번째가 끼지 못했다
+
+
+_APPENDER = """
+import sys
+sys.path[:0] = [{root!r}, {src!r}]
+from research.combined import prepare as P
+P.SHADOW = {shadow!r}
+for i in range({n}):
+    P._append({runs!r}, {{"who": {who!r}, "i": i, "pad": "x" * 2000}})
+"""
+
+
+def test_flock_concurrent_appends_from_two_processes(tmp_path):
+    runs, shadow = str(tmp_path / "RUNS.jsonl"), str(tmp_path / "shadow")
+    procs = [subprocess.Popen([sys.executable, "-c", _APPENDER.format(root=P.ROOT, src=os.path.join(P.ROOT, "src"), shadow=shadow, n=300,
+                                                                       runs=runs, who=w)]) for w in ("a", "b")]
+    assert all(p.wait(timeout=120) == 0 for p in procs)
+    for path in (runs, os.path.join(shadow, "RUNS.jsonl")):
+        rows = [json.loads(x) for x in open(path, encoding="utf-8")]                 # 줄이 섞이면 json 이 깨진다
+        assert len(rows) == 600 and {(r["who"], r["i"]) for r in rows} == {(w, i) for w in "ab" for i in range(300)}
+    a = [json.loads(x)["who"] for x in open(runs, encoding="utf-8")]
+    b = [json.loads(x)["who"] for x in open(os.path.join(shadow, "RUNS.jsonl"), encoding="utf-8")]
+    assert a == b                                                                    # 두 사본의 순서가 같다(자물쇠가 두 쓰기를 묶는다)
+
+
+_HOLDER = """
+import sys, time
+sys.path[:0] = [{root!r}, {src!r}]
+from research.combined import prepare as P
+P.SHADOW = {shadow!r}
+with P.ledger_lock():
+    open({flag!r}, "w").write("held")
+    time.sleep(2.0)
+"""
+
+
+def test_append_waits_for_ledger_lock_held_by_other_process(tmp_path, monkeypatch):
+    """다른 섬 프로세스가 자물쇠를 쥐고 있으면 덧붙이기는 기다린다(자물쇠를 빼면 바로 써서 이 시험이 깨진다)."""
+    import time
+    shadow, flag = str(tmp_path / "shadow"), str(tmp_path / "flag")
+    monkeypatch.setattr(P, "SHADOW", shadow)
+    h = subprocess.Popen([sys.executable, "-c", _HOLDER.format(root=P.ROOT, src=os.path.join(P.ROOT, "src"), shadow=shadow, flag=flag)])
+    t0 = time.time()
+    while not os.path.exists(flag):
+        assert time.time() - t0 < 60 and h.poll() is None
+        time.sleep(0.02)
+    t1 = time.time()
+    P._append(str(tmp_path / "RUNS.jsonl"), {"x": 1})
+    waited = time.time() - t1
+    assert h.wait(timeout=30) == 0 and waited > 1.0

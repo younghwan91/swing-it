@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from research.combined.gaps import gap_arrays, tick_dated_vec
+from research.combined.gaps import coarse2, gap_arrays, tick_dated_vec
 from research.signals.pattern_events import tick_dated
 
 POST = pd.bdate_range("2024-03-04", periods=8)  # 2023-01-25 이후
@@ -39,8 +39,8 @@ def test_tickp_is_adjusted_close_function_no_raw_input():
     a["O"] = a["C"] * 1.01
     r = gap_arrays(**a)["tickp"]
     ref = tick_dated_vec(a["C"][:, :-1], a["days"][1:], a["mkt"]) / a["C"][:, :-1]
-    assert np.allclose(r[:, 1:], ref, rtol=1e-6) and np.isnan(r[:, 0]).all()
-    assert np.isclose(r[0, 3], 100 / 60905, rtol=1e-5)       # ≈1.6bp — 수정 사건 전 구간은 근사(공개된 맞바꿈)
+    assert np.allclose(r[:, 1:], coarse2(ref), rtol=1e-6) and np.isnan(r[:, 0]).all()
+    assert np.isclose(r[0, 3], 0.0016, rtol=1e-9)              # 100/60905 ≈ 1.6bp, 유효숫자 2자리 — 수정 사건 전 구간은 근사(공개된 맞바꿈)
     b = {**a, "O": a["O"] * 1.05}                             # 시가가 달라도 tickp 는 C 만 본다
     assert np.array_equal(gap_arrays(**b)["tickp"], gap_arrays(**a)["tickp"], equal_nan=True)
 
@@ -88,20 +88,20 @@ def test_tickp_shifts_previous_close():
     a["C"][0, 5:] = 61000.0
     r = gap_arrays(**a)["tickp"]
     assert np.isnan(r[0, 0])
-    assert np.isclose(r[0, 5], 5 / 3160, rtol=1e-5)  # 전일(t=4) 종가 3160
-    assert np.isclose(r[0, 6], 100 / 61000, rtol=1e-5)  # 전일(t=5) 종가 61000 -> 100원
+    assert np.isclose(r[0, 5], coarse2(5 / 3160), rtol=1e-9)  # 전일(t=4) 종가 3160
+    assert np.isclose(r[0, 6], coarse2(100 / 61000), rtol=1e-9)  # 전일(t=5) 종가 61000 -> 100원
 
 
 def test_gap_arrays_pre_reform_kosdaq():
     a = _args(2, 8, days=PRE, mkt=np.array([1, 0]))
     a["C"][:] = 60_000.0
     r = gap_arrays(**a)["tickp"]
-    assert np.isclose(r[0, 3], 100 / 60000, rtol=1e-5)  # 코스닥 6만원 -> 100
-    assert np.isclose(r[1, 3], 100 / 60000, rtol=1e-5)  # 코스피 6만원 -> 100(옛 표 10만 미만)
+    assert np.isclose(r[0, 3], coarse2(100 / 60000), rtol=1e-9)  # 코스닥 6만원 -> 100
+    assert np.isclose(r[1, 3], coarse2(100 / 60000), rtol=1e-9)  # 코스피 6만원 -> 100(옛 표 10만 미만)
     a["C"][:] = 600_000.0
     r = gap_arrays(**a)["tickp"]
-    assert np.isclose(r[0, 3], 100 / 600000, rtol=1e-5)  # 코스닥 60만 -> 100
-    assert np.isclose(r[1, 3], 1000 / 600000, rtol=1e-5)  # 코스피 60만 -> 1000
+    assert np.isclose(r[0, 3], coarse2(100 / 600000), rtol=1e-9)  # 코스닥 60만 -> 100
+    assert np.isclose(r[1, 3], coarse2(1000 / 600000), rtol=1e-9)  # 코스피 60만 -> 1000
 
 
 def test_tickp_reform_boundary_uses_order_day_table():
@@ -110,5 +110,15 @@ def test_tickp_reform_boundary_uses_order_day_table():
     a["C"][:] = 1500.0  # 옛 표(<5000) 5원, 새 표(<2000) 1원
     r = gap_arrays(**a)["tickp"]
     # t=2 (2023-01-24 주문): 옛 표 5원. t=3 (2023-01-25 주문, 가격은 01-24 종가): 새 표 1원
-    assert np.isclose(r[0, 2], 5 / 1500, rtol=1e-5)
-    assert np.isclose(r[0, 3], 1 / 1500, rtol=1e-5)
+    assert np.isclose(r[0, 2], coarse2(5 / 1500), rtol=1e-9)
+    assert np.isclose(r[0, 3], coarse2(1 / 1500), rtol=1e-9)
+
+
+def test_tickp_coarse_two_significant_digits_hides_price_level():
+    """정정 0-2 K1: 정밀한 tick/C 는 C 를 되살려 V 의 가격 배수를 벗겨 낸다 — 유효숫자 2자리로 거칠게 하면 이웃 가격이 같은 값이 된다."""
+    a = _args(3, 3, days=POST[:3])
+    a["C"][:] = np.array([[3160.0], [3190.0], [3130.0]])
+    r = gap_arrays(**a)["tickp"]
+    assert r[0, 1] == r[1, 1] == r[2, 1] == np.float32(0.0016)
+    x = np.array([0.00158227, 0.000123456, 1.0, 0.0, np.nan])
+    assert np.allclose(coarse2(x)[:4], [0.0016, 0.00012, 1.0, 0.0]) and np.isnan(coarse2(x)[4])
