@@ -1,0 +1,17 @@
+{
+ "research/combined/prepare.py": "67b81926f159fc618840e966d1864b0d7cd50d4faee248877373919cec7386ca",
+ "research/combined/data.py": "bc8119c0cc7204b49129e33cf0bbb1ffe18c5d8f21891d4960bd1ea994f3d542",
+ "research/combined/gaps.py": "49c94869690ca244666b6553a60e96228ed3e4698a72722d68669cc51fe761ff",
+ "research/combined/news.py": "f7441fb4a71a7db7c77af3f458d8246a9528ed58995197d8ea902f59c250848d",
+ "research/combined/select.py": "9c47b4f8d25c39ba0782816493d6bea9ac404f3466be50247862db880ee6c212",
+ "research/autoresearch/prepare.py": "640bd52d0cd72da791022e2ac72bb47e264f7c08e899fa06c84fbaf8f2bd4ea6",
+ "research/experiments/leader21.py": "61d1d2f96bcb610d2446398d290880e23f66e4ddf156f66fe5583dca8e279954",
+ "research/experiments/indep30.py": "b378152db0a63280c80c1f6bc37b2927fbaa2e51ed264b926a5c9a5bf2e401c5",
+ "src/swing_it/features/eps_asof.py": "8775af5161035faa9cfe686732d9ec5921d2e7254244ab838c73d0c31f17fcbf",
+ "src/swing_it/features/korea.py": "ca36521c59f3284be87aaaab8110670e545b3c6e3d7aef7b5272833ed82d9b03",
+ "src/swing_it/storage.py": "f6bbe20878d51242271d910cbe1738c6a2723bc382ddc62939b0fcc44be3339c",
+ "cache/era_A_s0.pkl": "22fdba7f77507fb0260b9a4151e9f7660585c7a17b0300940cdd5965c7048bb0",
+ "cache/era_B_s0.pkl": "a316320cac265ff836bb6a26385d99e110e08f073fe407089f259c14bcab86cc",
+ "cache/era_C_s0.pkl": "b9f4b177997ab5fad59d5543406acd7680de855e7dce13689cacbc7e6ace1ed3",
+ "ext/krx_quant_core/stats/sharpe.py": "dbbbd189770a506e35fa0b8136e4d8f148861a61af35d1ef958e8d389629d5ff"
+}
