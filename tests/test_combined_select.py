@@ -557,3 +557,17 @@ def test_load_locked_reads_manifest_pinned_file(tmp_path, monkeypatch):
     json.dump({"locked/era_A_s1.pkl": P.sha_file(cd.cache_path("A", 1))}, open(P.MANIFEST, "w"))
     D = _REAL_LOAD_LOCKED("A")
     assert (D["half"] == 1).all() and D["half_id"] == 1
+
+
+def test_lattice_warnings_flag_planted_pattern():
+    planted = ("import numpy as np\n"
+               "def signals(V, x):\n"
+               "    C = V['C']\n"
+               "    d = np.diff(np.sort(C, axis=1), axis=1)\n"
+               "    g = np.nanmin(np.where(d > 0, np.diff(C, axis=1), np.inf))\n"
+               "    k = C / np.nanmin(np.diff(V['L'], axis=1))\n"
+               "    u = np.unique(V['H'])\n"
+               "    return {'cand': k > g, 'score': C}\n")
+    w = S.lattice_warnings(planted)
+    assert any("차분의 최소" in x for x in w) and any("unique" in x for x in w) and any("÷" in x for x in w)
+    assert S.lattice_warnings(open(P.TRAIN, encoding="utf-8").read()) == []           # 기준선은 경고 없음

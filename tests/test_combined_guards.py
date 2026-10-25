@@ -1271,3 +1271,31 @@ def test_island_worktree_mapping_recorded_and_enforced(monkeypatch):
         P.check_island_path("combined-loop-1")                                       # 같은 섬을 다른 워크트리에서
     P.check_island_path("combined-loop-2")                                           # 다른 워크트리의 새 섬은 기록
     P.check_island_path("main")                                                      # 기준선은 검사 안 함
+
+
+# ---------------------------------------------------------------- 정정 0-4: 가격 격자 통로 lint
+
+@pytest.mark.parametrize("body", [
+    "def signals(V, x):\n    c = V['C'] % 10.0\n    return {'cand': c > 0, 'score': V['C']}\n",
+    "def signals(V, x):\n    d = np.diff(V['C'], axis=1)\n    g = np.gcd(np.nan_to_num(d).astype(np.int64), 5)\n    return {'cand': g > 0, 'score': V['C']}\n",
+    "def signals(V, x):\n    u = 3.0\n    r = np.round(V['C'] / u)\n    return {'cand': r > 0, 'score': V['C']}\n",
+    "def signals(V, x):\n    C = V['C']\n    f = np.floor(C)\n    return {'cand': f > 0, 'score': V['C']}\n",
+    "def signals(V, x):\n    a = np.fmod(V['H'], 7.0)\n    return {'cand': a > 0, 'score': V['C']}\n",
+    "def signals(V, x):\n    q, r = divmod(3, 2)\n    return {'cand': V['C'] > q, 'score': V['C']}\n",
+    "def signals(V, x):\n    k = 5\n    k %= 3\n    return {'cand': V['C'] > k, 'score': V['C']}\n",
+    "def signals(V, x):\n    m = pd.DataFrame(V['L']).mod(5).to_numpy()\n    return {'cand': m > 0, 'score': V['C']}\n",
+])
+def test_lint_rejects_price_lattice_family(tmp_path, body):
+    src = "import numpy as np\nimport pandas as pd\n" + body
+    assert P.lint_price_lattice(src) and P.lint_train(src)
+    with pytest.raises(SystemExit, match="허용 목록"):
+        P.load_strategy(_write_train(tmp_path / "t.py", body))
+
+
+def test_lint_allows_rounding_non_price_values():
+    src = ("import numpy as np\nimport pandas as pd\n"
+           "def signals(V, x):\n    raw = np.log(np.abs(V['gap']) + 1)\n"
+           "    rs = pd.DataFrame(raw.T).rank(axis=1, pct=True).to_numpy().T * 100\n"
+           "    b = np.round(rs)\n    return {'cand': b > 50, 'score': rs}\n")
+    assert P.lint_price_lattice(src) == []
+    assert P.lint_price_lattice(open(P.TRAIN, encoding="utf-8").read()) == []          # 기준선 통과

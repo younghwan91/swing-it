@@ -42,7 +42,8 @@ v4 와 다른 점(전부):
     실패 메시지는 "fail: " 로 시작한다. 계산 본체는 ``run_all``(격리 안 ``--inner`` 가 부른다 — 테스트 가능).
     워크포워드 학습 점 풀은 fork 그대로다: 부모는 그 시대의 전체 V 만 보므로 거기서 숨긴 상태는 train 이 이미 보는 것 이상을 주지 못하고,
     점수 실행(A → B 순)의 시대 A 는 B 를 보기 전에 끝난다. 그 뒤 재실행의 시대 간 오염은 위 신호 해시 비교가 잡는다.
-12. 허용 목록(``lint_train``) = v4 + 상태 은닉 금지: 속성 대입·삭제 전부, 모듈 이름(np·pd·math·…)에 뿌리를 둔 첨자 대입·삭제와
+12. 허용 목록(``lint_train``) = v4 + 가격 격자 통로 금지(정정 0-4: ``%``·divmod·mod/fmod/remainder/gcd/lcm/modf/frexp 전부, 가격 O·H·L·C 에
+    거는 round/rint/floor/ceil/trunc) + 상태 은닉 금지: 속성 대입·삭제 전부, 모듈 이름(np·pd·math·…)에 뿌리를 둔 첨자 대입·삭제와
     변경 메서드 호출(append·update·setdefault·pop·… — ``np.sort`` 같은 모듈 함수 자체는 허용), 모듈 이름을 속성 접근 외 값으로 쓰기,
     ``print``, 모듈 최상위의 실행문(설명문·import·def/class·리터럴 대입만 — 적재 횟수를 세는 길 차단).
 13. 격리: 캐시 디렉터리를 가리고 era_A·era_B 만 다시 보인다. 원장 사본(평가 전에 만들어 늘 가린다)·~/git/daytrade-it(뉴스 아카이브)·
@@ -191,6 +192,7 @@ def lint_train(src: str) -> "list[str]":
               or (isinstance(st, ast.AnnAssign) and (st.value is None or literal(st.value))))
         if not ok:
             bad.append(f"line {st.lineno}: 모듈 최상위 {type(st).__name__} — 설명문·import·def/class·리터럴 대입만")
+    bad += lint_price_lattice(src)
     for n in ast.walk(tree):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in MUTATORS
                 and not isinstance(n.func.value, ast.Name)                   # np.sort·np.append 같은 모듈 함수는 새 객체를 낸다
@@ -207,6 +209,58 @@ def lint_train(src: str) -> "list[str]":
                 bad.append(f"line {n.lineno}: print(출력 통로 금지)")
             elif n.id in mods and not (isinstance(parent.get(n), ast.Attribute) and parent[n].value is n):
                 bad.append(f"line {n.lineno}: 모듈 이름 {n.id} 를 값으로 쓰기(속성 접근만 허용)")
+    return bad
+
+
+PRICE_SUBS = ("O", "H", "L", "C")
+MOD_ATTRS = {"mod", "rmod", "fmod", "remainder", "gcd", "lcm", "modf", "frexp", "divmod"}
+ROUND_ATTRS = {"round", "around", "rint", "floor", "ceil", "trunc", "fix"}
+
+
+def _is_price_sub(n) -> bool:
+    return (isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value in PRICE_SUBS)
+
+
+def price_tainted(fn) -> set:
+    """함수 안에서 가격 첨자(V["O"|"H"|"L"|"C"])를 담은 식으로 대입된 이름(한 단계 — 그 이름을 다시 거친 이름은 세지 않는다)."""
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None and any(_is_price_sub(x) for x in ast.walk(n.value)):
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target]):
+                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
+    return out
+
+
+def has_price(expr, tainted: set) -> bool:
+    return any(_is_price_sub(x) or (isinstance(x, ast.Name) and x.id in tainted) for x in ast.walk(expr))
+
+
+def lint_price_lattice(src: str) -> "list[str]":
+    """정정 0-4 금지(가격 수준·격자 통로 — 미래 수정 사건 표지): 나머지·최대공약수 계열 전부, 그리고 가격(V 의 O·H·L·C 첨자나 그것으로
+    대입된 이름, 한 단계)에 거는 반올림·내림·올림."""
+    bad = []
+    tree = ast.parse(src)
+    fns = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))]
+    taint_of = {}
+    for fn in fns:
+        t = price_tainted(fn)
+        for x in ast.walk(fn):
+            taint_of.setdefault(id(x), set()).update(t)
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod)) or (isinstance(n, ast.AugAssign) and isinstance(n.op, ast.Mod)):
+            bad.append(f"line {n.lineno}: % 연산 금지(가격 격자·끝자리 통로 — 정정 0-4)")
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+        if name in MOD_ATTRS:
+            bad.append(f"line {n.lineno}: {name}() 금지(나머지·최대공약수 계열 — 정정 0-4)")
+        elif name in ROUND_ATTRS or (isinstance(f, ast.Name) and f.id == "round"):
+            t = taint_of.get(id(n), set())
+            args = list(n.args) + [k.value for k in n.keywords] + ([f.value] if isinstance(f, ast.Attribute) and not (
+                isinstance(f.value, ast.Name) and f.value.id in {"np", "numpy", "math", "pd", "pandas"}) else [])
+            if any(has_price(a, t) for a in args):
+                bad.append(f"line {n.lineno}: 가격(O·H·L·C)에 {name}() 금지(가격 수준·격자 통로 — 정정 0-4)")
     return bad
 
 

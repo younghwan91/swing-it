@@ -163,6 +163,39 @@ def extract_train(commit: str, sha: str) -> str:
     return out
 
 
+# ---------------------------------------------------------------- 사람 열람 보조(정정 0-4)
+
+DIFF_ATTRS, MIN_ATTRS, UNIQ_ATTRS = {"diff", "ediff1d"}, {"min", "nanmin", "amin"}, {"unique"}
+
+
+def lattice_warnings(src: str) -> "list[str]":
+    """train.py 에서 가격 격자를 재는 듯한 꼴을 찾는다(자동 제외 아님 — 사람 열람이 ``price_lattice`` 로 판단):
+    가격(O·H·L·C, 한 단계 대입 포함) 차분, 가격 차분의 최소(격자 간격), 가격에 np.unique, 가격 ÷ (최소·차분이 든 식)."""
+    import ast
+    tree = ast.parse(src)
+    out = []
+
+    def cname(n):
+        return n.func.attr if isinstance(n.func, ast.Attribute) else n.func.id if isinstance(n.func, ast.Name) else None
+
+    def priced_call(n, names, t):
+        return isinstance(n, ast.Call) and cname(n) in names and any(
+            P.has_price(a, t) for a in [*n.args, *([n.func.value] if isinstance(n.func, ast.Attribute) else [])])
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.Lambda))]:
+        t = P.price_tainted(fn)
+        for n in ast.walk(fn):
+            if priced_call(n, DIFF_ATTRS, t):
+                out.append(f"WARN line {n.lineno}: 가격 차분 {cname(n)}()")
+            if priced_call(n, UNIQ_ATTRS, t):
+                out.append(f"WARN line {n.lineno}: 가격에 unique()")
+            if isinstance(n, ast.Call) and cname(n) in MIN_ATTRS and any(priced_call(x, DIFF_ATTRS, t) for x in ast.walk(n)):
+                out.append(f"WARN line {n.lineno}: 가격 차분의 최소(격자 간격 꼴)")
+            if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) and P.has_price(n.left, t)
+                    and any(isinstance(x, ast.Call) and cname(x) in DIFF_ATTRS | MIN_ATTRS for x in ast.walk(n.right))):
+                out.append(f"WARN line {n.lineno}: 가격 ÷ 최소·차분 식(간격으로 나누기 꼴)")
+    return sorted(set(out), key=lambda x: int(x.split()[2].rstrip(":")))
+
+
 # ---------------------------------------------------------------- 1. 풀
 
 def _eval_rows(runs: list) -> list:
@@ -458,7 +491,8 @@ def run_screen(workers: int) -> dict:
         results[sha] = screen(r, D, path, workers=workers)
         P.log(f"거르개 {sha} ({r['commit']}): pass {results[sha]['pass']}")
         if results[sha]["pass"]:
-            review.append({"train_sha": sha, "commit": r["commit"], "island": r.get("island", "main"), "path": path, "lines": _lines(path)})
+            review.append({"train_sha": sha, "commit": r["commit"], "island": r.get("island", "main"), "path": path, "lines": _lines(path),
+                           "lattice_warn": lattice_warnings(open(path, encoding="utf-8").read())})
     rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n_trials": st["n"], "pool": [r["train_sha"] for r in pl], "pool_rejects": rej,
            "pool_rows": [{k: r.get(k) for k in ("train_sha", "commit", "island", "score", "beats_best", "ev_net_2x", "oos_trades_per_year",
                                                 "conc")}
@@ -473,6 +507,8 @@ def run_screen(workers: int) -> dict:
     print(f"  → select.py --confirm --reviewed {','.join(rec['survivors'])}")
     for x in review:
         print(f"  섬 {x['island']}: {x['train_sha']}")
+        for w in x["lattice_warn"]:
+            print(f"    {w}  → 가격 격자 규칙이면 --exclude {x['train_sha']}:price_lattice")
     return rec
 
 
