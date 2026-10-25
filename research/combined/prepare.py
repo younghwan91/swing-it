@@ -48,7 +48,7 @@ v4 와 다른 점(전부):
     ``print``, 모듈 최상위의 실행문(설명문·import·def/class·리터럴 대입만 — 적재 횟수를 세는 길 차단).
 13. 격리: 캐시 디렉터리를 가리고 era_A·era_B 만 다시 보인다. 원장 사본(평가 전에 만들어 늘 가린다)·~/git/daytrade-it(뉴스 아카이브)·
     ~/git/quant-airflow·~/.config·~/.ssh·v4 캐시·v4 보관본·v4 원장 사본·잠금 절반 캐시를 가린다. 시간 초과 30분 = crash.
-14. 무결성: 태그 ``combined-prereg-1``, 감시 파일 = 결합 prepare·data·gaps·news·select + v4 감시 파일 전부, MANIFEST 에 캐시 A·B·C sha
+14. 무결성: 태그 ``PREREG_TAG``(정정 1 뒤 ``combined-prereg-2``), 감시 파일 = 결합 prepare·data·gaps·news·select + v4 감시 파일 전부, MANIFEST 에 캐시 A·B·C sha
     (+ 잠금 절반 A·B·C sha — select.py 만 대조). 평가마다 commit 을 ``refs/combined/<sha>/<commit>`` 으로 붙잡는다.
     ``--build`` 는 data.build_all 에 맡기고 MANIFEST 는 쓰지 않는다(``--manifest`` 따로). ``--final`` 은 없다.
 15. 원장 기록: 평가 행에 git commit(앞 12자)·dirty(train.py 가 HEAD 와 다름), 폴드별 era·test·params·alpha·trade_key·n, 쏠림 셋, 부품 제거,
@@ -60,6 +60,9 @@ v4 와 다른 점(전부):
     island). 모든 섬은 같은 기준선 BEST(섬 main 의 첫 유효 실행)에서 출발한다. 공유 JSONL 덧붙이기·BEST 읽고 쓰기는 사본 디렉터리
     ``ledger.lock`` 의 fcntl.flock 아래서, 상한 검사는 실행 직전과 결과 행을 덧붙이기 직전 두 번(151 번째가 끼어들지 못한다).
     섬의 기본 작업자 수 = max(1, (cpu − 1) // 4).
+18. 메모리(정정 1, 결과 불변): 미래정보 검사 작업자는 x 마다 (cand 비트 묶음, cand 칸 score, 지문)만 돌려주고 부모는 절단 결과를 받는 즉시
+    비교·폐기한다(옛 코드는 모든 절단의 전체 배열을 부모에 모아 시대마다 수십 GB). 재실행 시대가 끝나면 ``_G`` 의 D·S·V 를 놓고
+    gc.collect()(train 모듈 전역 ↔ 함수 순환 참조), fork 전 gc.collect()·gc.freeze().
 16. ``--reference``: leader_C 고정값(θ90·N20·MA100·hard 0.15·슬롯 10·불타기·국면, 종가 진입)을 기준선 train.py 로 두 시대에 한 번 잰다.
     결과는 REFERENCE.json(+ 사본)에만 쓰고 RUNS 행은 쓰지 않는다(시행 아님). 이미 있으면 거부, train.py 가 기준선 sha 가 아니면 거부.
     leader_C 의 종목군 ``univ: top200`` 은 V 에 시총 순위 키가 없어 표현하지 못한다(종목군은 평가기 uni 그대로) — 정확한 leader_C 가 아니다.
@@ -76,6 +79,7 @@ from __future__ import annotations
 import argparse
 import ast
 import fcntl
+import gc
 import hashlib
 import json
 import math
@@ -115,7 +119,7 @@ RUNS, BEST, LAST = (os.path.join(HERE, f) for f in ("RUNS.jsonl", "BEST.json", "
 BEST_HISTORY = os.path.join(HERE, "BEST_HISTORY.jsonl")
 REFERENCE = os.path.join(HERE, "REFERENCE.json")
 MANIFEST = os.path.join(HERE, "MANIFEST.json")
-PREREG_TAG = "combined-prereg-1"
+PREREG_TAG = "combined-prereg-2"
 GUARDED_FILES = ("research/combined/prepare.py", "research/combined/data.py", "research/combined/gaps.py", "research/combined/news.py",
                  "research/combined/select.py", *V4.GUARDED_FILES)
 CACHE_ERAS = ("A", "B", "C")                                              # MANIFEST 대상(C 는 확인 — 루프는 못 본다)
@@ -460,8 +464,13 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
                 tasks += [(fi, j, x) for j, x in enumerate(pts)]
             tasks = [(*t, c) for t, c in zip(tasks, fresh_cfgs(train_path, [t[2] for t in tasks]), strict=True)]
             _signals_or_err(S, _G["V"], tasks[0][2], D["C"].shape)   # 부모에서 train.py 캐시를 데운다(fork 공유, 결과는 버린다)
-            with mp.get_context("fork").Pool(max(1, workers)) as pool:
-                out = pool.map(_train_point, tasks, chunksize=1)
+            gc.collect()                                             # 앞 재실행의 쓰레기를 작업자가 물려받지 않게
+            gc.freeze()                                              # 작업자 gc 가 부모 객체 머리를 건드려 쓰기 시 복사가 깨지지 않게(정정 1)
+            try:
+                with mp.get_context("fork").Pool(max(1, workers)) as pool:
+                    out = pool.map(_train_point, tasks, chunksize=1)
+            finally:
+                gc.unfreeze()
             chosen, ph = [], res["point_hash"].setdefault(era, {})
             for fi, j, _, h in out:                                  # 같은 x 가 두 폴드에 나오면 지문도 같아야 한다
                 k = _xkey(pts_all[fi][0][j])
@@ -506,7 +515,16 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
                 res["trades"].append(tr.assign(era=era, fold=gi))
             if clamp_cfg(S["cfg"](dict(x))) != clamp_cfg(cfg):          # 시뮬레이션 뒤: signals 를 부른 뒤의 cfg 가 새 프로세스 cfg 와 다르면
                 res["cfg_mismatch"].append(gi)                       # 상태 의존(채점은 새 프로세스 cfg)
+        _release()                                                   # 시대 끝: 그 시대 모듈 인스턴스(train 캐시)·V 를 놓는다(정정 1)
+        S = sig = eq = tr = None
+        gc.collect()                                                 # 모듈 전역 ↔ 함수 순환 참조라 참조 수만으로는 안 풀린다
     return res
+
+
+def _release() -> None:
+    """``_G`` 에서 시대 상태(D·S·V·folds)를 뺀다 — 다음 재실행·다음 단계로 train 캐시와 V 사본이 쌓이지 않게(정정 1)."""
+    for k in ("D", "S", "V", "folds"):
+        _G.pop(k, None)
 
 
 def _same_signals(res: dict, r: dict, what: str) -> None:
@@ -615,14 +633,28 @@ def _cut(D: dict, cut: int, shuffle_seed: "int | None" = None) -> dict:
     return out
 
 
+def pack_signals(cand: np.ndarray, score: np.ndarray, h) -> tuple:
+    """검사 작업자가 돌려주는 작은 꼴(정정 1) — ((모양, cand 비트 묶음), cand 칸 score(행 우선 순서), 지문). 비교에 쓰는 것은 cand 와
+    cand 칸 score 뿐이라 전체 배열(x 마다 N×T float64)을 부모로 보내지 않는다(옛 꼴은 시대마다 수십 GB 를 부모에 쌓았다)."""
+    c = np.ascontiguousarray(cand, dtype=bool)
+    return (c.shape, np.packbits(c, axis=None)), np.asarray(score, float)[c], h
+
+
+def unpack_cand(pk: tuple) -> np.ndarray:
+    shape, bits = pk
+    return np.unpackbits(bits, count=int(np.prod(shape))).astype(bool).reshape(shape)
+
+
 def _cause_task(args):
-    """spawn 작업자(작업 하나 = 프로세스 하나): 디스크 캐시(경로) 또는 넘겨받은 배열에서 V 를 만들고 train.py 를 새로 로드한다."""
+    """spawn 작업자(작업 하나 = 프로세스 하나): 디스크 캐시(경로) 또는 넘겨받은 배열에서 V 를 만들고 train.py 를 새로 로드한다.
+    결과는 x 마다 ``pack_signals`` 꼴(오류면 (None, None, "ERR"))."""
     era, src, cut, mode, xs, train_path = args
     if isinstance(src, str):
         from research.combined.data import require_vmult
         with open(src, "rb") as f:
             src = require_vmult(pickle.load(f))
     V = view_c(src) if mode == "full" else view_c(_cut(src, cut, shuffle_seed=cut if mode == "shuffle" else None))
+    src = None                                                       # 시대 원본은 V 를 만든 뒤 놓는다(정정 1)
     shape = V["C"].shape                                             # train 코드가 돌기 전에
     S = load_strategy(train_path)
     out = []
@@ -631,10 +663,28 @@ def _cause_task(args):
         if g is None:
             out.append((None, None, "ERR"))
         elif mode == "full":
-            out.append((g["cand"], g["score"], sig_hash(g)))         # g = 소유 사본(call_signals)
+            out.append(pack_signals(g["cand"], g["score"], sig_hash(g)))   # g = 소유 사본(call_signals) — 다음 signals 호출 전에 묶는다
         else:
-            out.append((g["cand"][:, :cut + 1], g["score"][:, :cut + 1], None))
+            out.append(pack_signals(g["cand"][:, :cut + 1], g["score"][:, :cut + 1], None))
     return era, cut, mode, out
+
+
+def _cut_fail(era, cut: int, mode: str, xs: list, full_parts: list, parts: list) -> "str | None":
+    """절단 작업 하나를 전체 신호와 비교 — 첫 불일치 메시지(없으면 None). 옛 비교와 같다: cand 는 전체 cand 의 [:, :cut+1] 과 칸마다 같아야 하고,
+    score 는 그 cand 칸에서 같아야 한다(cand 가 같을 때만 비교하므로 절단 쪽 cand 칸 = 전체 쪽 cand 칸)."""
+    for x, (pa, va, hf), (pb, vb, ht) in zip(xs, full_parts, parts, strict=True):
+        if hf == "ERR" or ht == "ERR":
+            if hf != ht:
+                return f"fail: era {era} cut {cut} {mode} params {x}: 오류 불일치(전체 {hf != 'ERR'} · 절단 {ht != 'ERR'})"
+            continue
+        ca_full = unpack_cand(pa)
+        ca, cb = ca_full[:, :cut + 1], unpack_cand(pb)
+        if ca.shape != cb.shape or (ca != cb).any():
+            return f"fail: era {era} cut {cut} {mode} params {x}: cand 불일치 {int((ca != cb).sum()) if ca.shape == cb.shape else 'shape'}칸"
+        sa = va[np.nonzero(ca_full)[1] <= cut]                       # = 전체 score[:, :cut+1][ca](행 우선 순서 그대로)
+        if not np.allclose(sa, vb, rtol=1e-9, atol=1e-12, equal_nan=True):
+            return f"fail: era {era} cut {cut} {mode} params {x}: score 불일치"
+    return None
 
 
 def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int = 4, n_cut: int = 12,
@@ -666,9 +716,15 @@ def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int
         for cut in sorted(set(starts + [int(c) for c in rnd])):
             for mode in ("trunc", "shuffle"):
                 tasks.append((era, src, min(cut, T - 2), mode, xs, train_path))
+    full, first_fail, n = {}, None, 0                                 # 흘려 비교(정정 1): 절단 결과는 받는 즉시 비교하고 버린다
     with mp.get_context("spawn").Pool(max(1, min(workers, len(tasks))), maxtasksperchild=1) as pool:
-        outs = pool.map(_cause_task, tasks, chunksize=1)
-    full = {era: parts for era, _, mode, parts in outs if mode == "full"}
+        for era, cut, mode, parts in pool.imap(_cause_task, tasks, chunksize=1):   # 작업 순서 그대로(시대마다 전체가 절단보다 먼저)
+            if mode == "full":
+                full[era] = parts
+                continue
+            n += 1
+            if first_fail is None:
+                first_fail = _cut_fail(era, cut, mode, xs_by[era], full[era], parts)
     if res.get("sig_hash"):
         for f, h in zip(res["folds"], res["sig_hash"], strict=True):
             if f["era"] in full and full[f["era"]][xs_by[f["era"]].index(f["params"])][2] != h:
@@ -678,22 +734,8 @@ def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int
             k = _xkey(x)
             if k in ph and full[era][xs_by[era].index(x)][2] != ph[k]:
                 return False, f"fail: era {era} 학습 점 {x}: 고원 선택에 쓴 신호 ≠ 새 프로세스 신호(상태 의존)"
-    n = 0
-    for era, cut, mode, parts in outs:
-        if mode == "full":
-            continue
-        n += 1
-        for x, (ca_full, sa_full, hf), (cb, sb, ht) in zip(xs_by[era], full[era], parts, strict=True):
-            if hf == "ERR" or ht == "ERR":
-                if hf != ht:
-                    return False, f"fail: era {era} cut {cut} {mode} params {x}: 오류 불일치(전체 {hf != 'ERR'} · 절단 {ht != 'ERR'})"
-                continue
-            ca = ca_full[:, :cut + 1]
-            if ca.shape != cb.shape or (ca != cb).any():
-                return False, f"fail: era {era} cut {cut} {mode} params {x}: cand 불일치 {int((ca != cb).sum()) if ca.shape == cb.shape else 'shape'}칸"
-            sa = sa_full[:, :cut + 1][ca]
-            if not np.allclose(sa, sb[ca], rtol=1e-9, atol=1e-12, equal_nan=True):
-                return False, f"fail: era {era} cut {cut} {mode} params {x}: score 불일치"
+    if first_fail is not None:                                       # 우선순위는 옛 코드와 같다: 신호 해시 → 학습 점 지문 → 첫 절단 불일치
+        return False, first_fail
     return True, f"ok({n} 검사)"
 
 

@@ -609,7 +609,7 @@ def test_causality_worker_holds_owned_copies(tmp_path):
     assert P.lint_train(src) == []
     (tmp_path / "hold.py").write_text(src)
     _, _, _, out = P._cause_task(("A", D, -1, "full", [{"a": 1}, {"a": 2}, {"a": 3}], str(tmp_path / "hold.py")))
-    assert all(c.all() for c, _, _ in out)
+    assert all(P.unpack_cand(c).all() for c, _, _ in out)
     assert len({h for _, _, h in out}) == 1
 
 
@@ -696,7 +696,7 @@ def test_guarded_files_cover_evaluator_engine_and_data():
     need = {f"research/combined/{m}.py" for m in ("prepare", "data", "gaps", "news", "select")} | {
         "research/autoresearch/prepare.py", "research/experiments/leader21.py", "research/experiments/indep30.py"} | set(V4.GUARDED_FILES)
     assert need <= set(P.GUARDED_FILES)
-    assert P.PREREG_TAG == "combined-prereg-1"
+    assert P.PREREG_TAG == "combined-prereg-2"
 
 
 def _pairs(cmd, flag):
@@ -1299,3 +1299,98 @@ def test_lint_allows_rounding_non_price_values():
            "    b = np.round(rs)\n    return {'cand': b > 50, 'score': rs}\n")
     assert P.lint_price_lattice(src) == []
     assert P.lint_price_lattice(open(P.TRAIN, encoding="utf-8").read()) == []          # 기준선 통과
+
+
+# ---------------------------------------------------------------- 정정 1: 평가기 메모리(결과 불변)
+
+def _old_cut_fail(era, cut, mode, xs, full_parts, parts):
+    """정정 1 전 비교(전체 배열) — 새 작은 꼴 비교가 같은 답을 내는지 대조하는 기준."""
+    for x, (ca_full, sa_full, hf), (cb, sb, ht) in zip(xs, full_parts, parts, strict=True):
+        if hf == "ERR" or ht == "ERR":
+            if hf != ht:
+                return f"fail: era {era} cut {cut} {mode} params {x}: 오류 불일치(전체 {hf != 'ERR'} · 절단 {ht != 'ERR'})"
+            continue
+        ca = ca_full[:, :cut + 1]
+        if ca.shape != cb.shape or (ca != cb).any():
+            return f"fail: era {era} cut {cut} {mode} params {x}: cand 불일치 {int((ca != cb).sum()) if ca.shape == cb.shape else 'shape'}칸"
+        sa = sa_full[:, :cut + 1][ca]
+        if not np.allclose(sa, sb[ca], rtol=1e-9, atol=1e-12, equal_nan=True):
+            return f"fail: era {era} cut {cut} {mode} params {x}: score 불일치"
+    return None
+
+
+def test_compact_cut_compare_matches_full_array_compare():
+    """작은 꼴(cand 비트 묶음 + cand 칸 score) 비교 = 옛 전체 배열 비교 — 통과·cand·score·모양·오류 불일치와 절단 밖 변경(무시) 모두."""
+    rng = np.random.default_rng(0)
+    n, t, cut = 7, 50, 30
+
+    def full():
+        c = rng.random((n, t)) < 0.3
+        s = rng.normal(size=(n, t))
+        s[rng.random((n, t)) < 0.1] = np.nan
+        return c, s
+
+    def variants(c, s):
+        cb, sb = c[:, :cut + 1].copy(), s[:, :cut + 1].copy()
+        yield "same", cb, sb
+        k = cb.copy()
+        k[3, 5] = ~k[3, 5]
+        yield "cand", k, sb
+        v = sb.copy()
+        v[tuple(np.argwhere(cb)[0])] += 1e-3
+        yield "score", cb, v
+        v = sb.copy()
+        v[tuple(np.argwhere(~cb)[0])] += 5.0
+        yield "score off cand", cb, v
+        yield "shape", cb[:, :-1].copy(), sb[:, :-1].copy()
+    seen = set()
+    for _ in range(20):
+        c, s = full()
+        for name, cb, sb in variants(c, s):
+            old_full, old_cut = [(c, s, "h")], [(cb, sb, None)]
+            new_full, new_cut = [P.pack_signals(c, s, "h")], [P.pack_signals(cb, sb, None)]
+            a = _old_cut_fail("A", cut, "trunc", [{"a": 1}], old_full, old_cut)
+            b = P._cut_fail("A", cut, "trunc", [{"a": 1}], new_full, new_cut)
+            assert a == b, name
+            seen.add((name, a is None))
+    assert {("same", True), ("cand", False), ("score", False), ("score off cand", True), ("shape", False)} <= seen
+    c, s = full()
+    for hf, ht in (("ERR", None), ("h", "ERR"), ("ERR", "ERR")):
+        o = [((None, None, "ERR") if hf == "ERR" else (c, s, hf))], [((None, None, "ERR") if ht == "ERR" else (c[:, :cut + 1], s[:, :cut + 1], ht))]
+        nw = [((None, None, "ERR") if hf == "ERR" else P.pack_signals(c, s, hf))], [
+            ((None, None, "ERR") if ht == "ERR" else P.pack_signals(c[:, :cut + 1], s[:, :cut + 1], ht))]
+        assert _old_cut_fail("A", cut, "shuffle", [{}], *o) == P._cut_fail("A", cut, "shuffle", [{}], *nw)
+
+
+def test_cause_task_payload_is_compact(tmp_path):
+    """미래정보 검사 작업자는 x 마다 전체 N×T 배열을 부모로 보내지 않는다(정정 1 — 옛 꼴은 시대마다 수십 GB 를 부모에 쌓아 OOM)."""
+    import pickle
+    D = _toy(n=40, t=300, seed=3)
+    tr = _write_train(tmp_path / "w.py", "def signals(V, x):\n    return {'cand': V['C'] > np.median(V['C']) * 1.3, 'score': V['C'] * 1.0}\n")
+    xs = [{}] * 6
+    for mode, cut in (("full", -1), ("trunc", 200), ("shuffle", 200)):
+        out = P._cause_task(("A", D, cut, mode, xs, tr))
+        dense = len(xs) * D["C"].size * 9
+        assert len(pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL)) < 0.35 * dense, mode
+
+
+def test_walk_forward_releases_train_modules(tmp_path, monkeypatch):
+    """재실행마다 새 train 모듈 — 시대가 끝나면 모듈 인스턴스(그 캐시)와 V 를 놓아야 한다(정정 1: 모듈 전역 ↔ 함수 순환 참조라 gc 가 필요)."""
+    import weakref
+    Ds = {"A": _toy(seed=1, era="A"), "B": _toy(seed=2, era="B")}
+    monkeypatch.setattr(P, "ERAS", {"A": {"folds": TOY_FOLDS[:1]}, "B": {"folds": TOY_FOLDS[:1]}})
+    for e in Ds:
+        Ds[e]["days"] = pd.bdate_range("2022-01-03", periods=Ds[e]["C"].shape[1] * 10)[::10][:Ds[e]["C"].shape[1]]
+    tr = _write_train(tmp_path / "c.py", "_C: dict = {}\n"
+                      "def signals(V, x):\n    if 'big' not in _C:\n        _C['big'] = np.ones((50, 50))\n"
+                      "    return {'cand': V['uni'] & (V['C'] > 0), 'score': V['C'] * 1.0}\n")
+    refs, real = [], P.load_strategy
+
+    def spy(path=P.TRAIN):
+        S = real(path)
+        refs.append(weakref.ref(S["signals"]))
+        return S
+    monkeypatch.setattr(P, "load_strategy", spy)
+    P.walk_forward_c(Ds, 1, tr, fixed=[{"era": "A", "params": {}}, {"era": "B", "params": {}}])
+    assert len(refs) == 2 and all(r() is None for r in refs)
+    assert not {"D", "S", "V", "folds"} & set(P._G)
