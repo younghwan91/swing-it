@@ -18,7 +18,7 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 2. `uv run python research/combined/prepare.py > run.log 2>&1` (작업 트리 루트; 30분 넘으면 죽이고 crash)
 3. `grep -E "^(score|void|beats_best|beats_detail|lookahead_check|folds_pos|oos_trades|payoff_ratio|ev_net_2x|ev_net_1x|top1pct_removed|top_stock_removed|top10d_removed|news_folds_score|ablation_scalp|ablation_daytrade|eligible|trials|stop):" run.log`
    비었으면 `tail -n 50 run.log` — 쉬운 오류면 고쳐 다시, 아니면 crash 로 적고 넘어간다. "허용 목록 위반" 이면 train.py 를 고친다.
-   "상한 도달 — 평가 거부" 면 루프가 끝난 것이다(아래 '멈춤').
+   "상한 도달 — 평가 거부" 면 루프가 끝난 것이다(아래 '멈춤'). **crash 도 시행 하나로 센다**(원장에 crash 행). crash 때는 stderr 끝 20줄만 보인다.
 4. `results.tsv` 에 한 줄 덧붙인다(모든 시도 — discard·crash 포함).
 5. **keep 은 평가기가 판정한다:** `beats_best: True` 면 `uv run python research/combined/prepare.py --accept` 로 기준을 올리고 커밋을 남긴다.
    아니면 `git reset --hard HEAD~1`.
@@ -32,6 +32,7 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
   쉬는 해·시장 타이밍은 0 이다. 폴드별 값은 일부러 보여주지 않는다. 음수에서 시작하는 것이 정상이다.
 - `payoff_ratio`(손익비)·`ev_net_2x`·`ev_net_1x`(거래당 순기대값, 비용 2·1배)를 승률보다 먼저 본다.
 - 쏠림 셋: 순수익 상위 1% 거래를 빼고 / 순수익 합이 가장 큰 한 종목을 빼고 / 일별 선택 알파 상위 10일을 0 으로 두고 다시 낸 score.
+  상위 1% 제거는 그 거래의 **신호 칸 하나만** 끈다(부드러운 제거) — 같은 종목을 다음 날 다시 살 수 있다. 종목째 빼는 것은 top_stock 이다.
 - `news_folds_score` = 뉴스가 있는 2023·2024 시험 폴드만의 score.
 - `ablation_scalp`·`ablation_daytrade`: 그 레포 입력을 중립값(갭·호가 비율 0, 사건 갭 False, 뉴스 개수 0, news_known False)으로 바꾸고
   같은 폴드 파라미터로 다시 돌린 결과. `changed` = 체결 집합이 바뀐 비율, `dscore` = 원래 score − 제거 score(daytrade 는 2023·2024 폴드만).
@@ -47,8 +48,11 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 
 ## 하지 말 것(어기면 결과 무효)
 - `prepare.py`·`data.py`·`gaps.py`·`news.py`·`select.py`·엔진·데이터·의존성·캐시·원장(`RUNS.jsonl`·`BEST.json`·`MANIFEST.json`) 변경, 태그 조작,
-  `select.py` 실행, 확인 구간(2025~)·잠금 절반 추론.
+  `select.py`·`--reference` 실행, 확인 구간(2025~)·잠금 절반 추론.
 - 허용 목록 우회(문자열로 모듈 이름 만들기, 내장 함수 꺼내기 등), DB·파일·네트워크 접근.
+- 호출 사이 상태 숨기기: 모듈(np·pd 등)에 속성·항목 넣기, 모듈 이름을 값으로 넘기기, `print`(허용 목록이 막는다). 같은 V·파라미터면
+  언제 몇 번째로 불러도 같은 신호여야 한다 — 평가기가 새 프로세스의 신호와 비교하고, 다르면 void 다.
+- 스스로 잰 구간 성적을 예외 메시지·출력으로 내보내기(성공 때 stderr 는 평가기 로그만, 학습 점 실패는 예외 종류만 보인다).
 - 사후 지식: 아는 승자 종목·업종·연도를 겨냥하는 규칙(날짜·코드를 받지 않는다 — 배열 위치로 같은 짓을 하지 않는다).
 - 미래 정보: t 신호는 t 종가(뉴스는 t 15:10)까지의 값만(평가기가 절단 재계산으로 검사 — 걸리면 void).
 - 숫자 맞추기: 상수를 손으로 바꿔 점수를 올리지 않는다 — 숫자는 `params` 범위로 내고 평가기에 맡긴다. 범위를 한 점으로 좁히는 것도 손 맞추기다.
@@ -74,7 +78,8 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 - daytrade: 장중 구조 ~1,000 개, BEST 비용 뒤 −2.4bp, 한 종목이 알파 44%. 그러니 뉴스는 **거부·확인 거르개**로 쓴다.
 
 ## 멈춤
-- 평가기가 시행 상한을 센다: **고유 train sha 150회**, 또는 **첫 keep 이후 고유 sha 30회 연속 keep 없음**. 둘 중 먼저 오는 쪽에서
+- 평가기가 시행 상한을 센다: **고유 train sha 150회**(crash 포함), 또는 **첫 keep 이후 고유 sha 30회 연속 keep 없음**
+  (keep = `beats_best: True` 평가 — `--accept` 를 건너뛰어도 keep 으로 센다. BEST 바는 사본에도 있어 BEST.json 을 지워도 되돌아가지 않는다). 둘 중 먼저 오는 쪽에서
   `stop: True` 가 찍히고, 다음 평가는 "상한 도달 — 평가 거부"로 끝난다. 같은 train.py 를 다시 돌리는 것은 시행을 늘리지 않는다.
 - 그 전에는 사람에게 묻지 않는다. 실험 사이에 말하지 않는다. 10 실험마다 한 번만:
 ```

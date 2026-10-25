@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,8 @@ def _iso(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "RUNS", str(tmp_path / "RUNS.jsonl"))
     monkeypatch.setattr(P, "BEST", str(tmp_path / "BEST.json"))
     monkeypatch.setattr(P, "SHADOW", str(tmp_path / "shadow"))
+    monkeypatch.setattr(P, "BEST_HISTORY", str(tmp_path / "BEST_HISTORY.jsonl"))
+    monkeypatch.setattr(P, "REFERENCE", str(tmp_path / "REFERENCE.json"))
     V4._EXIT.clear()
     yield
     V4._EXIT.clear()
@@ -126,39 +129,70 @@ def test_active_folds_news_only_2023_2024():
 
 # ---------------------------------------------------------------- keep
 
+def _f(i, alpha, key):
+    return {"era": "A" if i < 5 else "B", "test": [f"{2011 + i}-01-01", f"{2012 + i}-01-01"], "alpha": alpha, "trade_key": key}
+
+
+CONC0 = {"top1pct": 0.02, "top_stock": 0.02, "top10d": 0.02}
+
+
 def _best(score=0.0, conc=None):
-    conc = conc or {"top1pct": 0.02, "top_stock": 0.02, "top10d": 0.02}
-    json.dump({"score": score, "conc": conc, "folds": [{"alpha": 0.0, "trade_key": f"k{i}"} for i in range(10)]}, open(P.BEST, "w"))
+    P._append(P.BEST_HISTORY, {"score": score, "conc": conc or CONC0, "folds": [_f(i, 0.0, f"k{i}") for i in range(10)]})
 
 
 def test_keep_counts_changed_folds_only():
     _best()
-    conc = {"top1pct": 0.02, "top_stock": 0.02, "top10d": 0.02}
-    folds = [{"alpha": 0.0, "trade_key": f"k{i}"} for i in range(10)]
-    folds[3] = {"alpha": 0.01, "trade_key": "new3"}
-    folds[7] = {"alpha": 0.01, "trade_key": "new7"}
-    ok, why = P.beats_c({"void": False, "score": 0.006}, folds, conc)
+    folds = [_f(i, 0.0, f"k{i}") for i in range(10)]
+    folds[3] = _f(3, 0.01, "new3")
+    folds[7] = _f(7, 0.01, "new7")
+    ok, why = P.beats_c({"void": False, "score": 0.006}, folds, CONC0)
     assert ok, why
-    folds[7] = {"alpha": -0.01, "trade_key": "new7"}                                  # 바뀐 2개 중 1개만 개선 = 과반 아님
-    assert not P.beats_c({"void": False, "score": 0.006}, folds, conc)[0]
-    same = [{"alpha": 0.5, "trade_key": f"k{i}"} for i in range(10)]                 # 체결이 하나도 안 바뀌면 keep 아님
-    assert not P.beats_c({"void": False, "score": 0.5}, same, conc)[0]
-    folds[7] = {"alpha": 0.01, "trade_key": "new7"}
-    assert not P.beats_c({"void": False, "score": 0.004}, folds, conc)[0]             # Δscore < 0.005
-    assert not P.beats_c({"void": True, "score": 0.5}, folds, conc)[0]
+    folds[7] = _f(7, -0.01, "new7")                                                   # 바뀐 2개 중 1개만 개선 = 과반 아님
+    assert not P.beats_c({"void": False, "score": 0.006}, folds, CONC0)[0]
+    same = [_f(i, 0.5, f"k{i}") for i in range(10)]                                  # 체결이 하나도 안 바뀌면 keep 아님
+    assert not P.beats_c({"void": False, "score": 0.5}, same, CONC0)[0]
+    folds[7] = _f(7, 0.01, "new7")
+    assert not P.beats_c({"void": False, "score": 0.004}, folds, CONC0)[0]            # Δscore < 0.005
+    assert not P.beats_c({"void": True, "score": 0.5}, folds, CONC0)[0]
+
+
+def test_keep_refuses_misaligned_folds():
+    _best()
+    folds = [_f(i, 0.05, f"n{i}") for i in range(10)]
+    assert P.beats_c({"void": False, "score": 0.5}, folds[:9], CONC0) == (False, "fold mismatch")
+    folds[0] = {**folds[0], "test": ["2016-01-01", "2016-09-01"]}
+    assert P.beats_c({"void": False, "score": 0.5}, folds, CONC0) == (False, "fold mismatch")
 
 
 def test_keep_concentration_vs_best():
     _best()
-    folds = [{"alpha": 0.01, "trade_key": f"n{i}"} for i in range(10)]
+    folds = [_f(i, 0.01, f"n{i}") for i in range(10)]
     s = {"void": False, "score": 0.01}
-    assert not P.beats_c(s, folds, {"top1pct": 0.02, "top_stock": 0.02 - 0.011, "top10d": 0.02})[0]
-    assert P.beats_c(s, folds, {"top1pct": 0.02, "top_stock": 0.02 - 0.009, "top10d": 0.02})[0]
+    assert not P.beats_c(s, folds, {**CONC0, "top_stock": 0.02 - 0.011})[0]
+    assert P.beats_c(s, folds, {**CONC0, "top_stock": 0.02 - 0.009})[0]
     for k in ("top1pct", "top10d"):                                                  # BEST 대비(자기 점수 대비가 아니다)
-        c = {"top1pct": 0.02, "top_stock": 0.02, "top10d": 0.02, k: 0.0}
-        assert not P.beats_c(s, folds, c)[0]
-    os.remove(P.BEST)
-    assert P.beats_c(s, folds, {"top1pct": -1, "top_stock": -1, "top10d": -1})[0]   # 첫 유효 실행
+        assert not P.beats_c(s, folds, {**CONC0, k: 0.0})[0]
+
+
+def test_best_bar_survives_deleting_worktree_files():
+    """BEST.json·작업 트리 BEST_HISTORY 를 지워도 사본으로 비교한다 — 바를 되돌릴 수 없다."""
+    _best(score=0.30)
+    for f in (P.BEST, P.BEST_HISTORY):
+        if os.path.exists(f):
+            os.remove(f)
+    folds = [_f(i, 0.01, f"n{i}") for i in range(10)]
+    ok, why = P.beats_c({"void": False, "score": 0.01}, folds, CONC0)
+    assert not ok and why != "첫 유효 실행"
+
+
+def test_first_valid_only_without_any_keep_row():
+    folds = [_f(i, 0.01, f"n{i}") for i in range(10)]
+    s = {"void": False, "score": 0.01}
+    assert P.beats_c(s, folds, {k: -1 for k in CONC0}) == (True, "첫 유효 실행")
+    P._append(P.RUNS, {"train_sha": "b", "beats_best": True, "score": 0.30, "conc": CONC0,   # accept 없이 지나간 keep 도 바다
+                       "folds": [_f(i, 0.0, f"k{i}") for i in range(10)]})
+    ok, why = P.beats_c(s, folds, CONC0)
+    assert not ok and why != "첫 유효 실행"
 
 
 # ---------------------------------------------------------------- 시행 상한
@@ -182,12 +216,31 @@ def test_trial_cap_and_same_sha(monkeypatch):
         P.evaluate(1)
 
 
+def test_crash_counts_and_hides_stdout(tmp_path, monkeypatch, capsys):
+    """crash 도 시행으로 센다. 격리 실행의 stdout 은 버리고 stderr 끝 20줄만 보인다(스스로 잰 구간 성적을 흘리는 통로 차단)."""
+    tr = tmp_path / "train.py"
+    tr.write_text("# x\n")
+    monkeypatch.setattr(P, "TRAIN", str(tr))
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    leak = "import sys\nprint('SECRET_FOLD_SCORE')\nfor i in range(50):\n    print(f'err{i}', file=sys.stderr)\nsys.exit(3)\n"
+    monkeypatch.setattr(P, "sandbox_cmd_c", lambda args: [sys.executable, "-c", leak])
+    with pytest.raises(SystemExit):
+        P.evaluate(1)
+    out = capsys.readouterr()
+    assert "SECRET_FOLD_SCORE" not in out.out + out.err
+    assert "err49" in out.out and "err29" not in out.out
+    st = P.trial_state()
+    assert st["n"] == 1
+    with pytest.raises(SystemExit):
+        P.evaluate(1)                                                                # 같은 sha 재 crash 는 늘지 않는다
+    assert P.trial_state()["n"] == 1
+
+
 def test_trial_cap_since_first_keep():
     for i in range(40):                                                              # keep 전에는 무 keep 이 쌓여도 멈추지 않는다
         _eval(f"pre{i}")
     assert not P.trial_state()["stop"]
-    _eval("k")
-    P._append(P.RUNS, {"train_sha": "k", "accept": True})
+    P._append(P.RUNS, {"train_sha": "k", "folds": [], "beats_best": True})          # keep = beats_best 행(--accept 를 건너뛰어도 센다)
     for i in range(29):
         _eval(f"x{i}")
     _eval("x0")                                                                      # 같은 sha 재실행은 세지 않는다
@@ -212,13 +265,88 @@ def test_lookahead_injection_voids(tmp_path, monkeypatch):
     assert P.run_all(Ds, 1, honest)["summary"]["lookahead_check"].startswith("ok")
 
 
-def test_lookahead_sees_news_and_gap_keys(tmp_path, monkeypatch):
-    """새 V 키(갭·뉴스)도 절단 검사 대상이다 — 내일 뉴스를 읽는 train 이 걸려야 한다."""
+@pytest.mark.parametrize("key,thr", [("gap", 0.0), ("gap_event", 0.5), ("news_known", 0.5), ("n_feat", 0.5)])
+def test_lookahead_sees_news_and_gap_keys(tmp_path, monkeypatch, key, thr):
+    """새 V 키(갭·뉴스)도 절단 검사 대상이다 — 내일 값을 읽는 train 이 걸려야 한다."""
     Ds = _toy_loop(monkeypatch)
-    peek = _write_train(tmp_path / "pn.py", "def signals(V, x):\n    nxt = pd.DataFrame(V['n_feat'].T.astype(float)).shift(-1).to_numpy().T\n"
-                                            "    return {'cand': V['uni'] & ~(nxt > 1), 'score': V['C']}\n")
-    ok, _ = P.causality_c(Ds, {"folds": [{"era": "A", "params": {}}]}, peek)
-    assert not ok
+    peek = _write_train(tmp_path / "pn.py", f"def signals(V, x):\n    nxt = pd.DataFrame(V['{key}'].T.astype(float)).shift(-1).to_numpy().T\n"
+                                            f"    return {{'cand': V['uni'] & ~(nxt > {thr}), 'score': V['C']}}\n")
+    ok, why = P.causality_c(Ds, {"folds": [{"era": "A", "params": {}}]}, peek, workers=4, n_cut=4)
+    assert not ok, why
+
+
+PROBE = "/tmp/claude-1000/-home-young-git/ece1241f-233e-4b80-ba5e-41e11ecd7401/scratchpad/probe/stash_train.py"
+STASH_BODY = ("def signals(V, x):\n    C = V['C']\n    box = np.typecodes.setdefault('zz_stash_t4', [])\n"
+              "    if not box or box[0].shape[1] < C.shape[1]:\n        box[:] = [C.copy()]\n"
+              "    F = box[0]\n    t = C.shape[1]\n    nxt = pd.DataFrame(F.T).shift(-1).to_numpy().T[:, :t]\n"
+              "    return {'cand': V['uni'] & ~(nxt < C * 0.98), 'score': C}\n")
+
+
+def test_lint_rejects_module_state_stash():
+    src = ("import numpy as np\nimport pandas as pd\ndef signals(V, x):\n    if not hasattr(np, 'zz_full'):\n"
+           "        np.zz_full = V['C'].copy()\n    return {'cand': V['uni'], 'score': V['C']}\n")
+    if os.path.exists(PROBE):
+        src = open(PROBE, encoding="utf-8").read()                                    # 리뷰가 확인한 실제 우회 파일
+    assert P.lint_train(src)
+    for bad in ("import numpy as np\nnp.zz = 1\n", "import numpy as np\nnp.random.zz = 1\n", "import numpy as np\nm = np\n",
+                "import numpy as np\nnp.typecodes['zz'] = 1\n", "import numpy as np\ndel np.zz\n", "x = 1\nprint(x)\n",
+                "import numpy as np\nf = lambda: np\n"):
+        assert P.lint_train(bad), bad
+    assert P.lint_train("import numpy as np\nx = np.zeros(3)\nd = {}\nd['a'] = np.ones(2)\n") == []
+
+
+def test_causality_isolates_processes_against_stash(tmp_path, monkeypatch):
+    """lint 를 피한 상태 은닉(np.typecodes 안에 전체 C 를 숨김)도 — 절단 검사가 새 프로세스에서 돌아서 걸린다."""
+    Ds = _toy_loop(monkeypatch)
+    stash = _write_train(tmp_path / "stash.py", STASH_BODY)
+    assert P.lint_train(open(stash, encoding="utf-8").read()) == []
+    try:
+        ok, why = P.causality_c(Ds, {"folds": [{"era": "A", "params": {}}]}, stash, workers=4, n_cut=4)
+        assert not ok, why
+        out = P.run_all(Ds, 8, stash)
+        assert out["summary"]["void"] and not out["summary"]["lookahead_check"].startswith("ok")
+    finally:
+        np.typecodes.pop("zz_stash_t4", None)
+
+
+def test_causality_one_task_per_process(tmp_path, monkeypatch):
+    """작업자 하나여도(재사용되면 전체 신호 작업의 은닉 상태가 절단 작업으로 넘어간다) 걸린다 — 작업 하나 = 프로세스 하나."""
+    Ds = _toy_loop(monkeypatch)
+    stash = _write_train(tmp_path / "stash1.py", STASH_BODY.replace("zz_stash_t4", "zz_stash_w1"))
+    try:
+        ok, why = P.causality_c(Ds, {"folds": [{"era": "A", "params": {}}]}, stash, workers=1, n_cut=2)
+        assert not ok, why
+    finally:
+        np.typecodes.pop("zz_stash_w1", None)
+
+
+def test_concentration_rerun_detects_state(tmp_path, monkeypatch):
+    """평가 실행과 같은 V·파라미터의 재실행 신호가 다르면(호출 횟수로 바뀜) StateLeak — 쏠림·비용 1배 숫자를 믿을 수 없다."""
+    Ds = _toy_loop(monkeypatch)
+    body = ("def signals(V, x):\n    box = np.typecodes.setdefault('zz_calls_c4', [])\n    box.append(1)\n"
+            "    late = len(box) > 2\n    return {'cand': V['uni'] & (V['C'] > (1e9 if late else 0)), 'score': V['C']}\n")
+    tr = _write_train(tmp_path / "late.py", body)
+    try:
+        res = P.walk_forward_c(Ds, 1, tr, fixed=[{"era": "A", "params": {}}] * 2)
+        assert res["trades"]
+        with pytest.raises(P.StateLeak):
+            P.concentration(Ds, res, tr)
+    finally:
+        np.typecodes.pop("zz_calls_c4", None)
+
+
+def test_state_dependent_signals_void(tmp_path, monkeypatch):
+    """새 프로세스 첫 호출과 평가 프로세스의 신호가 다르면 void — 호출 횟수·숨긴 상태로 바꾸는 train."""
+    Ds = _toy_loop(monkeypatch)
+    body = ("def signals(V, x):\n    box = np.typecodes.setdefault('zz_calls_t4', [])\n    box.append(1)\n"
+            "    good = len(box) > 1\n    return {'cand': V['uni'] & (V['C'] > (0 if good else 1e9)), 'score': V['C']}\n")
+    tr = _write_train(tmp_path / "calls.py", body)
+    assert P.lint_train(open(tr, encoding="utf-8").read()) == []
+    try:
+        s = P.run_all(Ds, 8, tr)["summary"]
+        assert s["void"] and s["lookahead_check"].startswith("fail"), s["lookahead_check"]
+    finally:
+        np.typecodes.pop("zz_calls_t4", None)
 
 
 # ---------------------------------------------------------------- 무결성·격리
@@ -257,7 +385,7 @@ def test_integrity_refuses_changed_guarded_file(tmp_path, monkeypatch):
 
 def test_guarded_files_cover_evaluator_engine_and_data():
     need = {f"research/combined/{m}.py" for m in ("prepare", "data", "gaps", "news", "select")} | {
-        "research/autoresearch/prepare.py", "research/experiments/leader21.py", "research/experiments/indep30.py"}
+        "research/autoresearch/prepare.py", "research/experiments/leader21.py", "research/experiments/indep30.py"} | set(V4.GUARDED_FILES)
     assert need <= set(P.GUARDED_FILES)
     assert P.PREREG_TAG == "combined-prereg-1"
 
@@ -274,7 +402,8 @@ def test_confirm_cache_hidden_in_sandbox():
     tmpfs = [a for a, _ in _pairs(cmd, "--tmpfs")]
     assert P.CACHE in tmpfs and cmd.index(P.CACHE) < cmd.index(binds[-1])            # 캐시 디렉터리를 가린 뒤 A·B 만 다시 보인다
     home = os.path.expanduser("~")
-    for h in (P.SHADOW, f"{home}/git/daytrade-it", f"{home}/git/quant-airflow", f"{home}/.config", f"{home}/.ssh"):
+    for h in (P.SHADOW, f"{home}/git/daytrade-it", f"{home}/git/quant-airflow", f"{home}/.config", f"{home}/.ssh", V4.SHADOW,
+              f"{home}/.cache/cc-swing/scratch/autoresearch", f"{home}/.cache/cc-swing/autoresearch_archive"):
         assert h in P.sandbox_hide()
         if os.path.isdir(h):
             assert h in tmpfs
@@ -307,3 +436,77 @@ def test_baseline_train_passes_lint_and_uses_no_repo_keys():
     S = P.load_strategy(P.TRAIN)
     assert set(S["params"]) == {"theta", "N", "ma_exit", "hard", "exit_kind", "low_w"}
     assert "entry" not in S["cfg"]({"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "exit_kind": "ma", "low_w": 50})
+
+
+# ---------------------------------------------------------------- 참고 실행(--reference)
+
+def test_reference_once_not_a_trial(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    fake = json.dumps({"summary": {"score": 0.0}, "folds": []})
+    monkeypatch.setattr(P, "sandbox_cmd_c", lambda args: [sys.executable, "-c", f"print('@@RESULT@@' + {fake!r})"])
+    P.reference(1)
+    assert os.path.exists(P.REFERENCE) and os.path.exists(os.path.join(P.SHADOW, "REFERENCE.json"))
+    assert P.trial_state()["n"] == 0 and not os.path.exists(P.RUNS)                # 시행으로 세지 않는다
+    os.remove(P.REFERENCE)
+    with pytest.raises(SystemExit, match="이미"):
+        P.reference(1)                                                               # 사본이 있으면 다시 못 돈다
+
+
+def test_reference_refuses_changed_train(tmp_path, monkeypatch):
+    tr = tmp_path / "train.py"
+    tr.write_text(open(P.TRAIN, encoding="utf-8").read() + "\n# 바뀜\n")
+    monkeypatch.setattr(P, "TRAIN", str(tr))
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    with pytest.raises(SystemExit, match="기준선"):
+        P.reference(1)
+
+
+def test_reference_params_are_leader_c():
+    from research.paper.leader_paper import ARMS
+    c = ARMS["leader_C"]
+    r = P.REF_PARAMS
+    assert (r["theta"], r["N"], r["ma_exit"], r["hard"], r["exit_kind"]) == (c["theta"], c["N"], c["ma_exit"], c["hard"], "ma")
+    S = P.load_strategy(P.TRAIN)
+    cfg = P.clamp_cfg(S["cfg"](r))
+    assert (cfg["max_pos"], cfg["pyramid"], cfg["regime"], cfg["exit_w"]) == (10, c["pyramid"], c["regime"], c["ma_exit"])
+    assert P.BASELINE_TRAIN_SHA == P.hashlib.sha256(open(P.TRAIN, "rb").read()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------- select.py 용 인터페이스
+
+def test_git_state_records_commit_and_dirty(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    (root / "research/combined").mkdir(parents=True)
+    tr = root / "research/combined/train.py"
+    tr.write_text("# a\n")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "a")
+    monkeypatch.setattr(P, "ROOT", str(root))
+    monkeypatch.setattr(P, "TRAIN", str(tr))
+    head = _git(root, "rev-parse", "HEAD").stdout.strip()
+    assert P.git_state() == {"commit": head[:12], "dirty": False}
+    tr.write_text("# b\n")
+    assert P.git_state() == {"commit": head[:12], "dirty": True}
+
+
+def test_crash_row_carries_commit(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    monkeypatch.setattr(P, "sandbox_cmd_c", lambda args: [sys.executable, "-c", "raise SystemExit(2)"])
+    with pytest.raises(SystemExit):
+        P.evaluate(1)
+    row = P._read_jsonl(P.RUNS)[-1]
+    assert row["crash"] and {"commit", "dirty"} <= set(row)
+
+
+def test_eras_keyword_runs_other_era_without_global_swap(tmp_path):
+    D = _toy(n=6, t=780, start="2022-01-03", seed=3)
+    eras = {"Z": {"folds": TOY_FOLDS}}
+    used = _write_train(tmp_path / "used.py", "def signals(V, x):\n    return {'cand': np.nan_to_num(V['gap']) > 0.005, 'score': V['C']}\n")
+    fixed = [{"era": "Z", "params": {}}] * 2
+    res = P.walk_forward_c({"Z": D}, 1, used, fixed=fixed, eras=eras)
+    assert [f["era"] for f in res["folds"]] == ["Z", "Z"] and set(P.ERAS) == {"A", "B"}
+    assert set(P.concentration({"Z": D}, res, used, eras=eras)) == set(P.CONC_KEYS)
+    assert P.ablation({"Z": D}, res, used, eras=eras)["scalp"]["changed"] >= 0.05
+    ok, why = P.causality_c({"Z": D}, res, used, workers=4, n_cut=4, eras=eras)
+    assert ok, why

@@ -2,6 +2,7 @@
 
 기준선 = leader_C 구조(추세 템플릿 · N일 돌파 · RS 백분위 ≥ θ · MA 청산 · 하드 손절 · 불타기 · 국면). 진입은 **신호일 종가**(평가기가 강제 — 여기서 정하지 않는다).
 숫자 파라미터는 ``params`` 범위만 정하고 값은 평가기가 폴드마다 학습 구간에서 고른다 — 여기서 숫자를 손으로 맞추지 않는다.
+기준선은 v4 형 계약(종목군 = 평가기 uni)이고 정확한 leader_C 가 아니다 — leader_C 의 시총 상위 200 종목군(univ top200) 키가 V 에 없다.
 이 기준선은 갭·뉴스 키를 쓰지 않으므로 후보 자격(eligible)이 없다 — 정상이다. 세 레포 부품을 실제로 쓰는 구조로 바꾸는 것이 루프의 일이다.
 
 계약(prepare.load_strategy — AST 허용 목록: numpy·pandas·math·functools·itertools·collections 만, 파일·OS·getattr·더블 언더스코어·연도·종목코드 리터럴 금지):

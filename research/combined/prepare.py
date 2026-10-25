@@ -1,47 +1,66 @@
 """세 레포 종합 autoresearch 고정 평가기 — 진입점이자 심판. 에이전트는 이 파일을 고치지 않는다(program.md · PREREG.md).
 
 swing v4 평가기(``research/autoresearch/prepare.py``, 태그 autoresearch-prereg-4)를 골격으로 쓴다. v4 의 순수 함수(전역을 읽지 않는 것)는
-import 해서 그대로 쓰고(lint_train·load_strategy·sample_params·plateau_pick·clamp_cfg·exit_line·fold_stats·summarize·factor_months·factor_t·
-half_of·sha_file), v4 의 ERAS·_G·VIEW_KEYS·TRAIN·CACHE 를 읽는 것은 복사해 고쳤다. 설계: docs/superpowers/specs/2026-10-25-combined-autoresearch-design.md.
+import 해서 그대로 쓰고(sample_params·plateau_pick·clamp_cfg·exit_line·fold_stats·summarize·factor_months·factor_t·half_of·sha_file),
+v4 의 ERAS·_G·VIEW_KEYS·TRAIN·CACHE 를 읽는 것은 복사해 고쳤다. 설계: docs/superpowers/specs/2026-10-25-combined-autoresearch-design.md.
 
 v4 와 다른 점(전부):
 1. 데이터: 시대 A(2011~2015 시험 5폴드)·B(2020~2024 시험 5폴드) = 10폴드, ``research.combined.data`` 캐시(갭·뉴스 키 추가). 2016 폴드는 없다.
-   확인 시대 C 는 루프가 보지 못한다(격리 프로세스에 바인드하지 않는다 — select.py 몫).
+   확인 시대 C 는 루프가 보지 못한다(격리 프로세스에 바인드하지 않는다 — select.py 몫). 시대를 도는 함수는 ``eras=`` 를 받는다(기본 A·B).
 2. V = v4 키 + 갭(gap·tickp·gap_event) + 뉴스(n_all·n_feat·n_move·n_excl·news_known). 미래정보 절단 검사도 새 키를 자른다.
 3. 진입은 **신호일 종가**(``entry="close"``, leader_C 방식) — 평가기가 강제한다. exit_dist(진입일 청산선 거리)도 종가 대비.
-4. ``simulate_c`` 에 ``mask``(cand 에서 끌 칸 — 상위 1% 거래 제거용).
+4. ``simulate_c`` 에 ``mask``(cand 에서 끌 칸 — 상위 1% 거래 제거용, 신호 칸만 끄는 부드러운 제거).
 5. 폴드마다 ``trade_key``(시험 체결 (종목 위치, 진입일 위치) 정렬 목록 sha1 앞 12자). 거래 표에 ci·ti 열, fold = 전체 폴드 번호(v4 는 시대 안 번호).
 6. 쏠림 진단 셋(``concentration``): 상위 1% 거래 신호 칸 끄기 · 최대 기여 한 종목 빼기 · 일별 선택 알파 상위 10일 0. v4 의 top5 제거를 대신한다.
+   상위 1% 거래 수 = ceil(1% × 시험 체결 수)(최소 1).
 7. 부품 제거(``ablation``): 레포 키를 중립값으로 바꾸고 폴드 파라미터 고정 재실행 → 체결 대칭차 ≥ 5% ∧ 작동 폴드 점수 기여 > 0.
    작동 폴드 = scalp 10폴드 전부, daytrade 시험 연도 2023·2024. 대칭차·점수 모두 작동 폴드에서 잰다. ``eligible`` = 둘 다 ok.
    자격은 keep 과 무관하다(후보 고르기 select.py 의 거르개).
 8. keep(``beats_c``): 폴드 조건이 "10 중 6 개선" → "체결이 바뀐 폴드(≥ 1) 중 alpha 개선 과반". top5 조건 → 쏠림 셋 각각 BEST 의 같은 값 − 0.01 이상.
-9. 시행 상한(``trial_state``): 고유 train sha 150, 또는 첫 keep(= --accept 기록) 뒤 고유 sha 30개 연속 keep 없음. 상한이면 ``evaluate`` 는
-   계산·무결성 검사 전에 거부한다. 원장은 작업 트리 + ~/.cache 사본 중 긴 쪽(v4 와 같음).
+   폴드 정렬(era·test)이 BEST 와 다르면 (False, "fold mismatch"). BEST 는 BEST_HISTORY.jsonl(작업 트리 + 사본 중 긴 쪽)의 마지막 행,
+   없으면 원장의 마지막 beats_best 평가 행이다. 둘 다 없을 때만 "첫 유효 실행"(BEST.json 을 지워도 바가 되돌아가지 않는다).
+9. 시행 상한(``trial_state``): 고유 train sha 150, 또는 첫 keep(= beats_best True 평가 행 — --accept 를 건너뛰어도 센다) 뒤 고유 sha 30개 연속
+   keep 없음. 상한이면 ``evaluate`` 는 계산·무결성 검사 전에 거부한다. 원장은 작업 트리 + ~/.cache 사본 중 긴 쪽(v4 와 같음).
+   crash 도 원장에 crash 행으로 남겨 시행으로 센다(v4 는 세지 않았다). crash 때는 격리 실행의 stdout 을 버리고 stderr 끝 20줄만 보인다.
+   성공 때 stderr 는 평가기 로그 줄([ …s])만, 학습 점 실패는 예외 종류만 보인다(train 이 스스로 잰 구간 성적을 흘리는 통로 차단).
 10. 출력 줄: score·void·beats_best·beats_detail·lookahead_check·folds_pos·oos_trades·payoff_ratio·ev_net_2x·ev_net_1x·쏠림 셋·
     news_folds_score·ablation 둘·eligible·trials·stop. ev_net_1x 는 같은 폴드 파라미터로 비용 1배 재실행.
-11. 미래정보 검사 실패 메시지는 "fail: " 로 시작한다(v4 는 접두 없음). 계산 본체는 ``run_all``(격리 안 ``--inner`` 가 부른다 — 테스트 가능).
-12. 격리: 캐시 디렉터리를 가리고 era_A·era_B 만 다시 보인다. 원장 사본(평가 전에 만들어 늘 가린다)·~/git/daytrade-it(뉴스 아카이브)·
-    ~/git/quant-airflow·~/.config·~/.ssh 를 가린다.
-13. 무결성: 태그 ``combined-prereg-1``, 감시 파일에 결합 data·gaps·news·select 와 v4 평가기 추가, MANIFEST 에 캐시 A·B·C sha.
-    ``--build`` 는 data.build_all 에 맡기고 MANIFEST 는 쓰지 않는다(``--manifest`` 따로 — select.py 가 생긴 뒤). ``--final`` 은 없다.
-14. 원장 기록: 평가 행에 폴드별 era·test·params·alpha·trade_key·n, 쏠림 셋, 부품 제거, eligible, 거래당 값을 남긴다(select.py 가 읽는다).
-15. 상위 1% 거래 수 = ceil(1% × 시험 체결 수)(최소 1). crash 는 원장에 남지 않아 시행으로 세지 않는다(v4 와 같음).
+11. 미래정보 검사(``causality_c``)는 절단 하나·전체 신호 하나마다 **새 프로세스**(spawn, maxtasksperchild=1)에서 디스크 캐시(또는 넘겨받은
+    배열)로 돈다 — 평가 프로세스에 숨긴 상태(모듈 속성 등)가 절단 계산으로 넘어가지 못한다. 그리고 새 프로세스의 전체 신호가 평가에 쓴 신호와
+    해시로 같아야 한다(호출 횟수·숨긴 상태로 신호를 바꾸는 train 은 void). 쏠림·비용 1배 재실행 신호도 원래 실행과 같아야 한다.
+    실패 메시지는 "fail: " 로 시작한다. 계산 본체는 ``run_all``(격리 안 ``--inner`` 가 부른다 — 테스트 가능).
+    워크포워드 학습 점 풀은 fork 그대로다: 부모는 그 시대의 전체 V 만 보므로 거기서 숨긴 상태는 train 이 이미 보는 것 이상을 주지 못하고,
+    점수 실행(A → B 순)의 시대 A 는 B 를 보기 전에 끝난다. 그 뒤 재실행의 시대 간 오염은 위 신호 해시 비교가 잡는다.
+12. 허용 목록(``lint_train``) = v4 + 상태 은닉 금지: 속성 대입·삭제 전부, 모듈 이름(np·pd·math·…)에 뿌리를 둔 첨자 대입·삭제,
+    모듈 이름을 속성 접근 외 값으로 쓰기(별칭·인자·반환), ``print``.
+13. 격리: 캐시 디렉터리를 가리고 era_A·era_B 만 다시 보인다. 원장 사본(평가 전에 만들어 늘 가린다)·~/git/daytrade-it(뉴스 아카이브)·
+    ~/git/quant-airflow·~/.config·~/.ssh·v4 캐시·v4 보관본·v4 원장 사본을 가린다.
+14. 무결성: 태그 ``combined-prereg-1``, 감시 파일 = 결합 prepare·data·gaps·news·select + v4 감시 파일 전부, MANIFEST 에 캐시 A·B·C sha.
+    ``--build`` 는 data.build_all 에 맡기고 MANIFEST 는 쓰지 않는다(``--manifest`` 따로). ``--final`` 은 없다.
+15. 원장 기록: 평가 행에 git commit(앞 12자)·dirty(train.py 가 HEAD 와 다름), 폴드별 era·test·params·alpha·trade_key·n, 쏠림 셋, 부품 제거,
+    eligible, 거래당 값을 남긴다(select.py 가 읽는다). BEST.json·BEST_HISTORY 도 사본에 쓴다.
+16. ``--reference``: leader_C 고정값(θ90·N20·MA100·hard 0.15·슬롯 10·불타기·국면, 종가 진입)을 기준선 train.py 로 두 시대에 한 번 잰다.
+    결과는 REFERENCE.json(+ 사본)에만 쓰고 RUNS 행은 쓰지 않는다(시행 아님). 이미 있으면 거부, train.py 가 기준선 sha 가 아니면 거부.
+    leader_C 의 종목군 ``univ: top200`` 은 V 에 시총 순위 키가 없어 표현하지 못한다(종목군은 평가기 uni 그대로) — 정확한 leader_C 가 아니다.
 
 사용(작업 트리 루트):
   uv run python research/combined/prepare.py > run.log 2>&1          # 실험 한 번
   uv run python research/combined/prepare.py --accept                 # 직전 실행이 beats_best 면 BEST 갱신(keep)
+  uv run python research/combined/prepare.py --reference              # leader_C 고정값 참고 한 번(메인 세션, 루프 전)
   uv run --extra pg python research/combined/prepare.py --build      # 캐시(data.build_all, KR_QUANT_DB)
   uv run python research/combined/prepare.py --manifest               # 코드·캐시 sha 매니페스트(사전등록 때)
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import math
 import multiprocessing as mp
 import os
+import pickle
+import re
 import subprocess
 import sys
 import time
@@ -60,8 +79,6 @@ from research.autoresearch.prepare import (  # noqa: E402,F401 — select.py 가
     factor_t,
     fold_stats,
     half_of,
-    lint_train,
-    load_strategy,
     plateau_pick,
     sample_params,
     sha_file,
@@ -72,11 +89,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TRAIN = os.path.join(HERE, "train.py")
 SHADOW = os.path.expanduser("~/.cache/cc-swing/combined_ledger")        # 원장 사본(작업 트리를 지워도 남는다)
 RUNS, BEST, LAST = (os.path.join(HERE, f) for f in ("RUNS.jsonl", "BEST.json", "last_run.json"))
+BEST_HISTORY = os.path.join(HERE, "BEST_HISTORY.jsonl")
+REFERENCE = os.path.join(HERE, "REFERENCE.json")
 MANIFEST = os.path.join(HERE, "MANIFEST.json")
 PREREG_TAG = "combined-prereg-1"
 GUARDED_FILES = ("research/combined/prepare.py", "research/combined/data.py", "research/combined/gaps.py", "research/combined/news.py",
-                 "research/combined/select.py", "research/autoresearch/prepare.py", "research/experiments/leader21.py",
-                 "research/experiments/indep30.py")
+                 "research/combined/select.py", *V4.GUARDED_FILES)
 CACHE_ERAS = ("A", "B", "C")                                              # MANIFEST 대상(C 는 확인 — 루프는 못 본다)
 ERAS = {e: ERAS_C[e] for e in ("A", "B")}                                 # 루프가 보는 시대
 COST_MULT = V4.COST_MULT
@@ -88,8 +106,17 @@ ABL_MIN_CHANGED = 0.05
 NEWS_YEARS = (2023, 2024)
 TOP_DAYS, TOP_TRADE_FRAC = 10, 0.01
 CONC_KEYS = ("top1pct", "top_stock", "top10d")
-_SANDBOX_HIDE_FIXED = tuple(os.path.expanduser(p) for p in ("~/git/daytrade-it", "~/git/quant-airflow", "~/.config", "~/.ssh"))
+CRASH_TAIL = 20
+REF_PARAMS = {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "exit_kind": "ma", "low_w": 20}   # leader_paper ARMS["leader_C"]
+BASELINE_TRAIN_SHA = "9d9ed460ff597f1d"                                   # 기준선 train.py sha256 앞 16자(테스트가 대조)
+_SANDBOX_HIDE_FIXED = tuple(os.path.expanduser(p) for p in (
+    "~/git/daytrade-it", "~/git/quant-airflow", "~/.config", "~/.ssh", "~/.cache/cc-swing/scratch/autoresearch",
+    "~/.cache/cc-swing/autoresearch_archive")) + (V4.SHADOW,)
 _G: dict = {}
+
+
+class StateLeak(RuntimeError):
+    """같은 V·파라미터에서 신호가 달라졌다 — train 이 호출 사이 상태로 신호를 바꾼다."""
 
 
 def log(msg: str) -> None:
@@ -105,6 +132,42 @@ def score_of(al) -> float:
     a = np.asarray(al, float)
     a = a[np.isfinite(a)]
     return float(a.mean() - DISPERSION * a.std(ddof=1)) if len(a) >= 2 else float("nan")
+
+
+# ---------------------------------------------------------------- train.py 검사(v4 + 상태 은닉 금지)
+
+def lint_train(src: str) -> "list[str]":
+    """v4 허용 목록 + 상태 은닉 금지 — 위반 목록(비면 통과)."""
+    bad = V4.lint_train(src)
+    tree = ast.parse(src)
+    mods = {a.asname or a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    parent = {ch: n for n in ast.walk(tree) for ch in ast.iter_child_nodes(n)}
+
+    def root(n):
+        while isinstance(n, (ast.Attribute, ast.Subscript)):
+            n = n.value
+        return n
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            bad.append(f"line {n.lineno}: 속성 대입·삭제 .{n.attr}(상태 은닉 금지)")
+        elif isinstance(n, ast.Subscript) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            r = root(n)
+            if isinstance(r, ast.Name) and r.id in mods:
+                bad.append(f"line {n.lineno}: 모듈 {r.id} 안 첨자 대입·삭제(상태 은닉 금지)")
+        elif isinstance(n, ast.Name):
+            if n.id == "print":
+                bad.append(f"line {n.lineno}: print(출력 통로 금지)")
+            elif n.id in mods and not (isinstance(parent.get(n), ast.Attribute) and parent[n].value is n):
+                bad.append(f"line {n.lineno}: 모듈 이름 {n.id} 를 값으로 쓰기(속성 접근만 허용)")
+    return bad
+
+
+def load_strategy(path: str = TRAIN) -> dict:
+    """결합 허용 목록을 먼저 통과해야 v4 load_strategy(새 모듈 인스턴스)로 로드한다."""
+    bad = lint_train(open(path, encoding="utf-8").read())
+    if bad:
+        raise SystemExit("train.py 허용 목록 위반 — 평가 거부:\n  " + "\n  ".join(bad))
+    return V4.load_strategy(path)
 
 
 # ---------------------------------------------------------------- 시뮬레이션
@@ -138,6 +201,15 @@ def simulate_c(D: dict, sig: dict, cfg: dict, start: str, end: str, exclude=(), 
         return L.simulate(D2, ecfg, cost_mult, end=end, start=start, paper=True, net_mtm=True)   # 정지일 매도 미룸 · 순가치
 
 
+def sig_hash(sig: dict) -> str:
+    """신호 지문 — cand 와 cand 칸의 score."""
+    c = np.ascontiguousarray(np.asarray(sig["cand"], bool))
+    s = np.where(c, np.nan_to_num(np.asarray(sig["score"], float), nan=-1.5e300), 0.0)
+    h = hashlib.sha1(c.tobytes())
+    h.update(np.ascontiguousarray(s).tobytes())
+    return h.hexdigest()
+
+
 def daily_sel(D: dict, eq: pd.Series, lo: str, hi: str) -> np.ndarray:
     """[lo, hi) 일별 선택 알파(로그) — 합 = fold_stats 의 (ls − lm)."""
     ix = (eq.index >= lo) & (eq.index < hi)
@@ -163,19 +235,21 @@ def _train_point(args):
         n = int((tr["entry"] >= lo).sum()) if len(tr) else 0
         return fi, j, (st["alpha"] if n >= MIN_TRAIN_TRADES_PER_YEAR * st["years"] else -1.0)
     except Exception as e:  # noqa: BLE001 — 한 점 실패는 그 점만 버린다
-        log(f"학습 점 fold {fi} #{j} 실패: {e!r}")
+        log(f"학습 점 fold {fi} #{j} 실패: {type(e).__name__}")              # 메시지는 숨긴다(출력 통로 차단)
         return fi, j, -1.0
 
 
 def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed: "list | None" = None, null: "tuple | None" = None,
-                   neutral: "str | None" = None, cost_mult: float = COST_MULT, exclude=(), mask: "dict | None" = None) -> dict:
+                   neutral: "str | None" = None, cost_mult: float = COST_MULT, exclude=(), mask: "dict | None" = None,
+                   eras: "dict | None" = None) -> dict:
     """시대마다 새 모듈로 train.py 로드 → 폴드별 학습 구간 고원 선택 → 시험 한 번(v4 walk_forward 복사).
     ``fixed`` = 그 폴드 파라미터 그대로, ``null`` = ("rank"|"thin"|"params", seed), ``neutral`` = 레포 키 중립화,
-    ``exclude`` = 뺄 종목코드, ``mask`` = {시대: bool[N,T]} cand 에서 끌 칸."""
+    ``exclude`` = 뺄 종목코드, ``mask`` = {시대: bool[N,T]} cand 에서 끌 칸, ``eras`` = 돌 시대(기본 루프 A·B)."""
     if neutral is not None and neutral not in REPO_KEYS:
         raise ValueError(f"neutral={neutral!r}")
-    res = {"folds": [], "trades": [], "months": [], "daily": []}
-    for ei, (era, E) in enumerate(ERAS.items()):
+    eras = ERAS if eras is None else eras
+    res = {"folds": [], "trades": [], "months": [], "daily": [], "sig_hash": []}
+    for ei, (era, E) in enumerate(eras.items()):
         D = D_by_era[era]
         S = load_strategy(train_path)
         _G.update(D=D, S=S, V=neutral_view(D, neutral), folds=E["folds"])
@@ -201,6 +275,7 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
         for fi, (_, lo, hi) in enumerate(E["folds"]):
             x = chosen[fi]
             sig = S["signals"](_G["V"], x)
+            res["sig_hash"].append(sig_hash(sig))
             if null and null[0] == "rank":
                 sig = {**sig, "score": rng.random(D["C"].shape)}
             elif null and null[0] == "thin":                         # 후보 솎기: 시험 구간 월별 통과율 그대로
@@ -233,6 +308,11 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
     return res
 
 
+def _same_signals(res: dict, r: dict, what: str) -> None:
+    if res.get("sig_hash") and r.get("sig_hash") != res["sig_hash"]:
+        raise StateLeak(f"fail: {what} 재실행 신호가 원래 실행과 다르다(같은 V·파라미터) — 상태 의존 신호")
+
+
 def active_folds(folds: list, repo: str) -> "list[int]":
     """그 레포 부품이 작동하는 폴드 — daytrade 는 시험 연도 2023·2024(뉴스 아카이브), scalp 는 전부."""
     if repo == "daytrade":
@@ -262,18 +342,21 @@ def top10d_score(daily: list, years: list, k: int = TOP_DAYS) -> float:
     return score_of([p.sum() / max(y, 1e-9) for p, y in zip(parts, years, strict=True)])
 
 
-def concentration(D_by_era: dict, res: dict, train_path: str = TRAIN) -> dict:
-    """쏠림 진단 셋 — 각각 제거 뒤 score(void 무관 원점수). 파라미터는 고른 값 그대로."""
+def concentration(D_by_era: dict, res: dict, train_path: str = TRAIN, eras: "dict | None" = None) -> dict:
+    """쏠림 진단 셋 — 각각 제거 뒤 score(void 무관 원점수). 파라미터는 고른 값 그대로. 재실행 신호가 원래와 다르면 StateLeak."""
+    eras = ERAS if eras is None else eras
     if not res["trades"]:
         return {k: float("nan") for k in CONC_KEYS}
     tr = pd.concat(res["trades"])
     top = tr.nlargest(max(1, math.ceil(TOP_TRADE_FRAC * len(tr))), "ret")
-    mask = {e: np.zeros(D_by_era[e]["C"].shape, bool) for e in ERAS}
+    mask = {e: np.zeros(D_by_era[e]["C"].shape, bool) for e in eras}
     for era, ci, ti in zip(top["era"], top["ci"], top["ti"], strict=True):
         mask[era][int(ci), int(ti)] = True                           # 종가 진입: 신호 칸 = 진입 칸
-    r1 = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], mask=mask)
+    r1 = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], mask=mask, eras=eras)
     top_code = tr.groupby("code")["ret"].sum().idxmax()             # 순수익 합 최대 종목
-    r2 = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], exclude=[top_code])
+    r2 = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], exclude=[top_code], eras=eras)
+    _same_signals(res, r1, "상위 1%")
+    _same_signals(res, r2, "최대 종목")
     return {"top1pct": score_of(_alphas(r1)), "top_stock": score_of(_alphas(r2)),
             "top10d": top10d_score(res["daily"], [f["years"] for f in res["folds"]])}
 
@@ -286,12 +369,12 @@ def _tset(res: dict, idx: list) -> set:
     return out
 
 
-def ablation(D_by_era: dict, res: dict, train_path: str = TRAIN) -> dict:
+def ablation(D_by_era: dict, res: dict, train_path: str = TRAIN, eras: "dict | None" = None) -> dict:
     """레포 부품 제거 — 중립 V 로 폴드 파라미터 고정 재실행. 작동 폴드에서 체결 대칭차 ≥ 5% ∧ 점수 기여 > 0 이면 ok."""
     out = {}
     for repo in REPO_KEYS:
         idx = active_folds(res["folds"], repo)
-        r = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], neutral=repo)
+        r = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], neutral=repo, eras=eras)
         a, b = _tset(res, idx), _tset(r, idx)
         changed = len(a ^ b) / max(len(a), 1)
         dscore = score_of(_alphas(res, idx)) - score_of(_alphas(r, idx))
@@ -300,7 +383,7 @@ def ablation(D_by_era: dict, res: dict, train_path: str = TRAIN) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- 미래정보 검사(v4 causality — VIEW_KEYS_C·루프 시대)
+# ---------------------------------------------------------------- 미래정보 검사(새 프로세스마다 한 절단)
 
 def _cut(D: dict, cut: int, shuffle_seed: "int | None" = None) -> dict:
     T = D["C"].shape[1]
@@ -317,80 +400,119 @@ def _cut(D: dict, cut: int, shuffle_seed: "int | None" = None) -> dict:
     return out
 
 
-def _sig_many(V: dict, xs: list, train_path: str) -> list:
-    S = load_strategy(train_path)                                     # 새 모듈 — 캐시 공유 없음
-    return [S["signals"](V, x) for x in xs]
-
-
 def _cause_task(args):
-    era, cut, mode, xs, train_path = args
-    V = view_c(_cut(_G["DC"][era], cut, shuffle_seed=cut if mode == "shuffle" else None))
-    return era, cut, mode, [(np.asarray(g["cand"], bool)[:, :cut + 1], np.asarray(g["score"], float)[:, :cut + 1])
-                            for g in _sig_many(V, xs, train_path)]
+    """spawn 작업자(작업 하나 = 프로세스 하나): 디스크 캐시(경로) 또는 넘겨받은 배열에서 V 를 만들고 train.py 를 새로 로드한다."""
+    era, src, cut, mode, xs, train_path = args
+    if isinstance(src, str):
+        with open(src, "rb") as f:
+            src = pickle.load(f)
+    V = view_c(src) if mode == "full" else view_c(_cut(src, cut, shuffle_seed=cut if mode == "shuffle" else None))
+    S = load_strategy(train_path)
+    out = []
+    for x in xs:
+        g = S["signals"](V, x)
+        if mode == "full":
+            out.append((np.asarray(g["cand"], bool), np.asarray(g["score"], float), sig_hash(g)))
+        else:
+            out.append((np.asarray(g["cand"], bool)[:, :cut + 1], np.asarray(g["score"], float)[:, :cut + 1], None))
+    return era, cut, mode, out
 
 
-def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int = 4, n_cut: int = 12) -> "tuple[bool, str]":
-    """허용 0, 시대마다 절단 n_cut 곳(시험 폴드 시작 + 무작위), 그 시대 폴드 파라미터 전부, 절단 · 절단 뒤 시간 섞기 두 방식."""
-    _G["DC"] = D_by_era
-    tasks, full = [], {}
-    for era, E in ERAS.items():
+def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int = 4, n_cut: int = 12,
+                sources: "dict | None" = None, eras: "dict | None" = None) -> "tuple[bool, str]":
+    """허용 0, 시대마다 절단 n_cut 곳(시험 폴드 시작 + 무작위), 그 시대 폴드 파라미터 전부, 절단 · 절단 뒤 시간 섞기 두 방식.
+    전체 신호도 절단 신호도 새 프로세스에서 만든다(평가 프로세스의 숨긴 상태 차단). ``sources`` = {시대: 캐시 경로}(없으면 배열을 넘긴다).
+    ``res["sig_hash"]`` 가 있으면 새 프로세스 전체 신호가 평가에 쓴 신호와 같아야 한다."""
+    eras = ERAS if eras is None else eras
+    tasks, xs_by = [], {}
+    for era, E in eras.items():
         D = D_by_era[era]
+        src = sources[era] if sources else D
         T = D["C"].shape[1]
         xs = []
         for f in res["folds"]:
             if f["era"] == era and f["params"] not in xs:
                 xs.append(f["params"])
-        full[era] = (xs, _sig_many(view_c(D), xs, train_path))
+        xs_by[era] = xs
+        tasks.append((era, src, -1, "full", xs, train_path))
         starts = [int(D["days"].searchsorted(pd.Timestamp(lo))) for _, lo, _ in E["folds"]]
         rnd = np.random.default_rng(SEED + len(starts)).integers(int(T * 0.3), T - 2, size=max(0, n_cut - len(starts)))
         for cut in sorted(set(starts + [int(c) for c in rnd])):
             for mode in ("trunc", "shuffle"):
-                tasks.append((era, min(cut, T - 2), mode, xs, train_path))
-    with mp.get_context("fork").Pool(max(1, min(workers, len(tasks)))) as pool:
+                tasks.append((era, src, min(cut, T - 2), mode, xs, train_path))
+    with mp.get_context("spawn").Pool(max(1, min(workers, len(tasks))), maxtasksperchild=1) as pool:
         outs = pool.map(_cause_task, tasks, chunksize=1)
+    full = {era: parts for era, _, mode, parts in outs if mode == "full"}
+    if res.get("sig_hash"):
+        for f, h in zip(res["folds"], res["sig_hash"], strict=True):
+            if f["era"] in full and full[f["era"]][xs_by[f["era"]].index(f["params"])][2] != h:
+                return False, f"fail: era {f['era']} params {f['params']}: 새 프로세스 신호 ≠ 평가 신호(상태 의존)"
+    n = 0
     for era, cut, mode, parts in outs:
-        xs, fulls = full[era]
-        for x, g, (cb, sb) in zip(xs, fulls, parts, strict=True):
-            ca = np.asarray(g["cand"], bool)[:, :cut + 1]
+        if mode == "full":
+            continue
+        n += 1
+        for x, (ca_full, sa_full, _), (cb, sb, _) in zip(xs_by[era], full[era], parts, strict=True):
+            ca = ca_full[:, :cut + 1]
             if ca.shape != cb.shape or (ca != cb).any():
                 return False, f"fail: era {era} cut {cut} {mode} params {x}: cand 불일치 {int((ca != cb).sum()) if ca.shape == cb.shape else 'shape'}칸"
-            sa = np.asarray(g["score"], float)[:, :cut + 1][ca]
+            sa = sa_full[:, :cut + 1][ca]
             if not np.allclose(sa, sb[ca], rtol=1e-9, atol=1e-12, equal_nan=True):
                 return False, f"fail: era {era} cut {cut} {mode} params {x}: score 불일치"
-    return True, f"ok({len(tasks)} 검사)"
+    return True, f"ok({n} 검사)"
 
 
 # ---------------------------------------------------------------- 계산 본체(격리 안)
 
-def run_all(D_by_era: dict, workers: int, train_path: str = TRAIN) -> dict:
+def run_all(D_by_era: dict, workers: int, train_path: str = TRAIN, sources: "dict | None" = None, eras: "dict | None" = None) -> dict:
     S = load_strategy(train_path)
-    res = walk_forward_c(D_by_era, workers, train_path)
+    res = walk_forward_c(D_by_era, workers, train_path, eras=eras)
     log("워크포워드 끝")
     s = summarize_c(res)
-    ok, why = causality_c(D_by_era, res, train_path, workers=max(1, workers // 2))
+    ok, why = causality_c(D_by_era, res, train_path, workers=max(1, workers // 2), sources=sources, eras=eras)
     log("미래정보 검사 끝")
+    conc = {k: float("nan") for k in CONC_KEYS}
+    abl = {"scalp": None, "daytrade": None, "eligible": False}
+    s["ev_net_1x"] = float("nan")
+    if ok and not s["void"]:
+        try:
+            conc = concentration(D_by_era, res, train_path, eras=eras)
+            abl = ablation(D_by_era, res, train_path, eras=eras)
+            c1 = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], cost_mult=1.0, eras=eras)
+            _same_signals(res, c1, "비용 1배")
+            s["ev_net_1x"] = float(pd.concat(c1["trades"])["ret"].mean()) if c1["trades"] else float("nan")
+            log("쏠림·부품 제거·비용 1배 끝")
+        except StateLeak as e:
+            ok, why = False, str(e)
+            conc = {k: float("nan") for k in CONC_KEYS}
+            abl = {"scalp": None, "daytrade": None, "eligible": False}
     if not ok:
         s.update(void=True, score=-1.0)
     s["lookahead_check"] = why
-    if s["void"]:
-        conc = {k: float("nan") for k in CONC_KEYS}
-        abl = {"scalp": None, "daytrade": None, "eligible": False}
-        s["ev_net_1x"] = float("nan")
-    else:
-        conc = concentration(D_by_era, res, train_path)
-        abl = ablation(D_by_era, res, train_path)
-        c1 = walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], cost_mult=1.0)
-        s["ev_net_1x"] = float(pd.concat(c1["trades"])["ret"].mean()) if c1["trades"] else float("nan")
-        log("쏠림·부품 제거·비용 1배 끝")
     s["train_sha"] = S["sha"]
     return {"summary": s, "folds": [dict(f) for f in res["folds"]], "conc": conc, "ablation": abl}
+
+
+def _sources(eras) -> dict:
+    return {e: os.path.join(CACHE, f"era_{e}_s0.pkl") for e in eras}
 
 
 def inner(workers: int) -> None:
     """bwrap 안에서 도는 계산(train.py 코드가 실행되는 유일한 곳) — 결과 JSON 한 줄을 stdout 에. 원장·BEST 는 바깥이 쓴다."""
     from research.combined.data import load
     _G["t0"] = time.time()
-    out = run_all({e: load(e) for e in ERAS}, workers)
+    out = run_all({e: load(e) for e in ERAS}, workers, sources=_sources(ERAS))
+    sys.stdout.write("@@RESULT@@" + json.dumps(out, ensure_ascii=False, default=str) + "\n")
+
+
+def inner_reference(workers: int) -> None:
+    """leader_C 고정값을 기준선 train.py 로 두 시대에 — 폴드 파라미터 고정(학습 없음)."""
+    from research.combined.data import load
+    _G["t0"] = time.time()
+    D_by_era = {e: load(e) for e in ERAS}
+    fixed = [{"era": e, "params": dict(REF_PARAMS)} for e in ERAS for _ in ERAS[e]["folds"]]
+    res = walk_forward_c(D_by_era, workers, TRAIN, fixed=fixed)
+    out = {"summary": summarize_c(res), "folds": [dict(f) for f in res["folds"]]}
     sys.stdout.write("@@RESULT@@" + json.dumps(out, ensure_ascii=False, default=str) + "\n")
 
 
@@ -428,31 +550,64 @@ def _read_jsonl(path: str) -> list:
     return max(out, key=len) if out else []
 
 
+def _write_both(path: str, obj: dict) -> None:
+    os.makedirs(SHADOW, exist_ok=True)
+    for p in (path, os.path.join(SHADOW, os.path.basename(path))):
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=1, default=str)
+
+
+def git_state() -> dict:
+    """원장 행에 남길 git 상태 — HEAD 앞 12자, train.py 가 HEAD 와 다른지(추적 안 됨·스테이지 포함)."""
+    def git(*a):
+        return subprocess.run(["git", "-C", ROOT, *a], capture_output=True, text=True)
+    head = git("rev-parse", "HEAD")
+    st = git("status", "--porcelain", "--", os.path.relpath(TRAIN, ROOT))
+    return {"commit": head.stdout.strip()[:12] if head.returncode == 0 else None,
+            "dirty": bool(st.stdout.strip()) if st.returncode == 0 else None}
+
+
 def trial_state() -> dict:
-    """n = 평가된 고유 train sha 수. since_keep = 마지막 keep(--accept 기록) 뒤 새 sha 수. stop = n ≥ 150 ∨ (keep 있음 ∧ since_keep ≥ 30)."""
+    """n = 평가된 고유 train sha 수(crash 포함). since_keep = 마지막 keep(beats_best True 평가 행) 뒤 새 sha 수.
+    stop = n ≥ 150 ∨ (keep 있음 ∧ since_keep ≥ 30)."""
     seen, since, kept = set(), 0, False
     for r in _read_jsonl(RUNS):
-        if r.get("accept"):
-            kept, since = True, 0
-            continue
         sha = r.get("train_sha")
-        if sha is None or "folds" not in r or sha in seen:
+        if sha is None or not ("folds" in r or r.get("crash")):
             continue
+        new = sha not in seen
         seen.add(sha)
-        if kept:
+        if r.get("beats_best") is True:
+            kept, since = True, 0
+        elif new and kept:
             since += 1
     n = len(seen)
     return {"n": n, "since_keep": since, "stop": bool(n >= MAX_TRIALS or (kept and since >= MAX_SINCE_KEEP))}
+
+
+def best_record() -> "dict | None":
+    """BEST 바 — BEST_HISTORY(작업 트리·사본 중 긴 쪽) 마지막 행, 없으면 원장의 마지막 beats_best 평가 행, 둘 다 없으면 None."""
+    hist = _read_jsonl(BEST_HISTORY)
+    if hist:
+        return hist[-1]
+    keeps = [r for r in _read_jsonl(RUNS) if r.get("beats_best") is True and "folds" in r]
+    return keeps[-1] if keeps else None
+
+
+def _fold_id(f: dict) -> tuple:
+    return f.get("era"), [str(x) for x in (f.get("test") or [])]
 
 
 def beats_c(s: dict, folds: list, conc: dict) -> "tuple[bool, str]":
     """keep: 체결이 바뀐 폴드 ≥ 1, 그중 alpha 개선 과반, Δscore ≥ 0.005, 쏠림 셋 각각 ≥ BEST 의 같은 값 − 0.01."""
     if s["void"]:
         return False, "void"
-    if not os.path.exists(BEST):
+    b = best_record()
+    if b is None:
         return True, "첫 유효 실행"
-    b = json.load(open(BEST))
-    changed = [(f, g) for f, g in zip(folds, b["folds"], strict=True) if f["trade_key"] != g["trade_key"]]
+    if len(folds) != len(b["folds"]) or any(_fold_id(f) != _fold_id(g) for f, g in zip(folds, b["folds"])):
+        return False, "fold mismatch"
+    changed = [(f, g) for f, g in zip(folds, b["folds"]) if f["trade_key"] != g["trade_key"]]
     better = sum(f["alpha"] > g["alpha"] for f, g in changed)
     dconc = {k: conc[k] - b["conc"][k] for k in CONC_KEYS}
     ok = (len(changed) >= 1 and better * 2 > len(changed) and s["score"] >= b["score"] + KEEP_DSCORE
@@ -503,6 +658,19 @@ def _fmt(k: str, v) -> str:
     return f"{k + ':':22s} {v:.6f}" if isinstance(v, float) else f"{k + ':':22s} {v}"
 
 
+def _sandboxed(args: "list[str]", cur: str):
+    """격리 실행 → 결과 dict. 실패하면 crash 행을 원장에 남기고(시행으로 센다) stderr 끝 20줄만 보이고 끝낸다(stdout 은 버린다)."""
+    p = subprocess.run(sandbox_cmd_c(args), capture_output=True, text=True)
+    line = [x for x in p.stdout.splitlines() if x.startswith("@@RESULT@@")]
+    if p.returncode != 0 or not line:
+        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": p.returncode,
+                       **git_state(), "evaluator": PREREG_TAG})
+        print("---\nscore:                 crash\n" + "\n".join(p.stderr.splitlines()[-CRASH_TAIL:]))
+        raise SystemExit(p.returncode or 1)
+    sys.stderr.write("\n".join(x for x in p.stderr.splitlines() if re.match(r"^\[\s*\d+s\] ", x) or x.startswith("경고")) + "\n")
+    return json.loads(line[-1][len("@@RESULT@@"):])
+
+
 def evaluate(workers: int) -> dict:
     st = trial_state()                                                # 상한 검사가 맨 먼저(계산·무결성보다 앞)
     if st["stop"]:
@@ -510,24 +678,20 @@ def evaluate(workers: int) -> dict:
     integrity()
     os.makedirs(SHADOW, exist_ok=True)                                # 있어야 격리에서 가린다
     t0 = time.time()
-    p = subprocess.run(sandbox_cmd_c(["--inner", "--workers", str(workers)]), capture_output=True, text=True)
-    sys.stderr.write(p.stderr[-4000:])
-    line = [x for x in p.stdout.splitlines() if x.startswith("@@RESULT@@")]
-    if p.returncode != 0 or not line:
-        print("---\nscore:                 crash\n" + p.stdout[-2000:])
-        raise SystemExit(p.returncode or 1)
-    r = json.loads(line[-1][len("@@RESULT@@"):])
-    s, folds, conc, abl = r["summary"], r["folds"], r["conc"], r["ablation"]
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
+    r = _sandboxed(["--inner", "--workers", str(workers)], cur)
+    s, folds, conc, abl = r["summary"], r["folds"], r["conc"], r["ablation"]
     if s["train_sha"] != cur:
+        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "why": "sha mismatch",
+                       **git_state(), "evaluator": PREREG_TAG})
         raise SystemExit("격리 실행이 다른 train.py 를 평가했다 — 거부")
     s["beats_best"], s["beats_detail"] = beats_c(s, folds, conc)
     s.update({f"{k}_removed": conc[k] for k in CONC_KEYS})
     s.update(ablation_scalp=abl["scalp"], ablation_daytrade=abl["daytrade"], eligible=abl["eligible"])
-    rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "score": s["score"], "raw_score": s["raw_score"], "void": s["void"],
-           "beats_best": s["beats_best"], "lookahead": s["lookahead_check"], "conc": conc, "ablation": abl, "eligible": abl["eligible"],
-           "oos_trades": s["oos_trades"], "oos_trades_per_year": s["oos_trades_per_year"], "payoff_ratio": s["payoff_ratio"],
-           "ev_net_2x": s["ev_net_2x"], "ev_net_1x": s["ev_net_1x"], "news_folds_score": s["news_folds_score"],
+    rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, **git_state(), "score": s["score"], "raw_score": s["raw_score"],
+           "void": s["void"], "beats_best": s["beats_best"], "lookahead": s["lookahead_check"], "conc": conc, "ablation": abl,
+           "eligible": abl["eligible"], "oos_trades": s["oos_trades"], "oos_trades_per_year": s["oos_trades_per_year"],
+           "payoff_ratio": s["payoff_ratio"], "ev_net_2x": s["ev_net_2x"], "ev_net_1x": s["ev_net_1x"], "news_folds_score": s["news_folds_score"],
            "folds": [{k: f[k] for k in ("era", "test", "params", "alpha", "trade_key", "n")} for f in folds],
            "evaluator": PREREG_TAG, "elapsed_s": round(time.time() - t0, 1)}
     _append(RUNS, rec)
@@ -544,19 +708,39 @@ def evaluate(workers: int) -> dict:
 
 
 def accept() -> None:
-    """BEST 갱신 — 원장(RUNS)의 마지막 평가 기록이 현재 train.py 의 beats_best=True 일 때만."""
+    """BEST 갱신 — 원장(RUNS)의 마지막 평가 기록이 현재 train.py 의 beats_best=True 일 때만. BEST.json·BEST_HISTORY 는 사본에도."""
     integrity(check_cache=False)
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
     evals = [r for r in _read_jsonl(RUNS) if "folds" in r]
     if not evals or evals[-1]["train_sha"] != cur or not evals[-1]["beats_best"]:
         raise SystemExit("원장의 마지막 평가가 현재 train.py 의 beats_best=True 가 아니다 — 갱신 거부")
     r = evals[-1]
-    best = {"score": r["score"], "conc": r["conc"], "train_sha": cur, "evaluator": r["evaluator"], "eligible": r["eligible"],
-            "folds": [{k: f[k] for k in ("era", "test", "alpha", "trade_key")} for f in r["folds"]]}
-    json.dump(best, open(BEST, "w"), indent=1)
+    best = {"score": r["score"], "conc": r["conc"], "train_sha": cur, "commit": r.get("commit"), "evaluator": r["evaluator"],
+            "eligible": r["eligible"], "folds": [{k: f[k] for k in ("era", "test", "alpha", "trade_key")} for f in r["folds"]]}
+    _write_both(BEST, best)
     _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "accept": True, "score": r["score"]})
-    _append(os.path.join(HERE, "BEST_HISTORY.jsonl"), best)
+    _append(BEST_HISTORY, best)
     print(f"BEST 갱신: score {r['score']:.4f}")
+
+
+def reference(workers: int) -> None:
+    """leader_C 고정값 참고 — 한 번만, 기준선 train.py 로만. REFERENCE.json(+ 사본)에만 쓰고 RUNS 행은 쓰지 않는다(시행 아님)."""
+    if any(os.path.exists(p) for p in (REFERENCE, os.path.join(SHADOW, os.path.basename(REFERENCE)))):
+        raise SystemExit("REFERENCE.json 이 이미 있다 — 참고 실행은 한 번뿐")
+    integrity()
+    cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
+    if cur != BASELINE_TRAIN_SHA:
+        raise SystemExit(f"train.py({cur}) 가 기준선({BASELINE_TRAIN_SHA})이 아니다 — 참고 실행은 기준선으로만")
+    os.makedirs(SHADOW, exist_ok=True)
+    p = subprocess.run(sandbox_cmd_c(["--inner-reference", "--workers", str(workers)]), capture_output=True, text=True)
+    line = [x for x in p.stdout.splitlines() if x.startswith("@@RESULT@@")]
+    if p.returncode != 0 or not line:
+        print("\n".join(p.stderr.splitlines()[-CRASH_TAIL:]))
+        raise SystemExit(p.returncode or 1)
+    r = json.loads(line[-1][len("@@RESULT@@"):])
+    _write_both(REFERENCE, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, **git_state(), "params": REF_PARAMS,
+                            "note": "leader_C 고정값(univ top200 은 표현 불가 — 평가기 uni)", "evaluator": PREREG_TAG, **r})
+    print(f"REFERENCE 기록: {REFERENCE}")
 
 
 def main() -> None:
@@ -564,7 +748,9 @@ def main() -> None:
     ap.add_argument("--build", action="store_true", help="캐시 A·B·C(data.build_all, KR_QUANT_DB)")
     ap.add_argument("--manifest", action="store_true", help="코드·캐시 sha 매니페스트(사전등록 때)")
     ap.add_argument("--accept", action="store_true")
+    ap.add_argument("--reference", action="store_true", help="leader_C 고정값 참고 한 번(시행 아님)")
     ap.add_argument("--inner", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--inner-reference", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     a = ap.parse_args()
     _G["t0"] = time.time()
@@ -575,8 +761,12 @@ def main() -> None:
         write_manifest()
     elif a.accept:
         accept()
+    elif a.reference:
+        reference(a.workers)
     elif a.inner:
         inner(a.workers)
+    elif a.inner_reference:
+        inner_reference(a.workers)
     else:
         evaluate(a.workers)
 
