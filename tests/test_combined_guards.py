@@ -527,6 +527,101 @@ def test_evaluate_sends_secret_seed_on_stdin(tmp_path, monkeypatch):
     assert seen and seed not in " ".join(seen[0])                                    # 격리 명령 인자에는 시드가 없다(stdin 만)
 
 
+# 리뷰 rr6: train 이 돌려준 cand 배열을 자기 _C 에 쥐고 있다가, 평가기가 지문을 뜬 뒤 부르는 cfg(x) 에서 그 배열을 내일 종가로 덮어쓴다
+CFGMUT = (HEAD_A + "_C: dict = {}\n"
+          "def signals(V, x):\n    C = V['C']\n    nxt = pd.DataFrame(C.T).shift(-1).to_numpy().T\n"
+          "    cand = V['uni'] & (C > 0)\n    _C['cand'] = cand\n    _C['cheat'] = cand & (nxt > C)\n"
+          "    return {'cand': cand, 'score': C}\n"
+          "def cfg(x):\n    if 'cand' in _C:\n        c = _C['cand']\n        c[:] = _C['cheat']\n    return {'pyramid': 0}\n"
+          "def get_strategy():\n    return {'params': {'a': ('int', 0, 10)}, 'signals': signals, 'cfg': cfg}\n")
+CFGHON = CFGMUT.replace("        c[:] = _C['cheat']\n", "        c = c\n")
+# 읽을 때마다 바뀌는 신호 객체: 첫 읽기(지문)는 정직, 그 뒤(시뮬레이션)는 내일 종가
+_FLIP_SIG = ("def signals(V, x):\n    C = V['C']\n    nxt = pd.DataFrame(C.T).shift(-1).to_numpy().T\n"
+             "    _N['h'] = V['uni'] & (C > 0)\n    _N['c'] = _N['h'] & (nxt > C)\n    _N['k'] = 0\n")
+FLIP_OBJ = (HEAD_A + "_N: dict = {}\n"
+            "class Flip:\n    def __array__(self, dtype=None, copy=None):\n        _N['k'] = _N['k'] + 1\n"
+            "        a = _N['h'] if _N['k'] == 1 else _N['c']\n        return a if dtype is None else a.astype(dtype)\n"
+            + _FLIP_SIG + "    return {'cand': Flip(), 'score': C}\n" + TAIL_A)
+FLIP_SUB = (HEAD_A + "_N: dict = {}\n"
+            "class Sub(np.ndarray):\n    def __array__(self, dtype=None, copy=None):\n        _N['k'] = _N['k'] + 1\n"
+            "        a = _N['h'] if _N['k'] == 1 else _N['c']\n        return a if dtype is None else a.astype(dtype)\n"
+            + _FLIP_SIG + "    return {'cand': _N['h'].view(Sub), 'score': C}\n" + TAIL_A)
+
+
+def test_cfg_mutating_returned_cand_cannot_reach_scoring(tmp_path, monkeypatch):
+    """리뷰 rr6: 지문 뒤 cfg 가 train 이 쥔 cand 를 제자리에서 고쳐도 평가기 사본은 그대로 — 정직한 train 과 같은 채점."""
+    Ds = _toy_loop(monkeypatch)
+    _salt()
+    out = {}
+    for name, src in (("mut", CFGMUT), ("hon", CFGHON)):
+        assert P.lint_train(src) == []
+        (tmp_path / f"{name}.py").write_text(src)
+        out[name] = P.run_all(Ds, 8, str(tmp_path / f"{name}.py"))
+    mut, hon = out["mut"], out["hon"]
+    assert [f["trade_key"] for f in mut["folds"]] == [f["trade_key"] for f in hon["folds"]]
+    assert [f["alpha"] for f in mut["folds"]] == [f["alpha"] for f in hon["folds"]]
+    assert [f["params"] for f in mut["folds"]] == [f["params"] for f in hon["folds"]]
+    assert mut["conc"] == hon["conc"] or all(np.isnan(v) for v in mut["conc"].values())
+
+
+def test_own_signals_copies_and_rejects_non_plain_arrays():
+    D = _toy()
+    shp = D["C"].shape
+    cand, score = np.ones(shp, bool), np.ones(shp)
+    own = P.own_signals({"cand": cand, "score": score}, shp)
+    cand[:] = False
+    score[:] = 7.0
+    assert own["cand"].all() and (own["score"] == 1.0).all()                          # 사본 — 원본을 고쳐도 그대로
+    assert own["cand"].dtype == bool and own["score"].dtype == float
+
+    class DictSub(dict):
+        pass
+    bad = [DictSub(cand=cand, score=score), [cand, score], {"cand": cand.view(np.matrix) if cand.ndim == 2 else cand, "score": score},
+           {"cand": cand.tolist(), "score": score}, {"cand": cand, "score": score.astype(object)}, {"cand": cand[:, :-1], "score": score},
+           {"cand": cand, "score": score[0]}, {"cand": cand}]
+    for b in bad:
+        with pytest.raises(TypeError):
+            P.own_signals(b, shp)
+
+
+@pytest.mark.parametrize("src", [FLIP_OBJ, FLIP_SUB], ids=["array-protocol", "ndarray-subclass"])
+def test_signals_reading_differently_on_each_access_rejected(tmp_path, monkeypatch, src):
+    """읽을 때마다 바뀌는 신호(__array__ 객체·ndarray 하위 클래스)는 거부 — 학습 점은 오류, 시험 폴드는 crash(시행으로 셈)."""
+    Ds = _toy_loop(monkeypatch)
+    _salt()
+    assert P.lint_train(src) == []
+    (tmp_path / "flip.py").write_text(src)
+    with pytest.raises(TypeError):
+        P.run_all(Ds, 8, str(tmp_path / "flip.py"))
+
+
+def test_causality_worker_holds_owned_copies(tmp_path):
+    """새 프로세스 작업자는 앞 x 의 전체 신호를 쥔 채 다음 x 로 signals 를 부른다 — train 이 앞서 돌려준 배열을 뒤 호출에서 고쳐도
+    비교에 쓰는 배열은 그대로(소유 사본)."""
+    D = _toy(n=4, t=80, seed=5)
+    src = HEAD_A + ("_C: dict = {}\n"
+                    "def signals(V, x):\n    for c in _C.get('prev', []):\n        c[:] = False\n"
+                    "    cand = V['uni'] & (V['C'] > 0)\n    _C['prev'] = _C.get('prev', []) + [cand]\n"
+                    "    return {'cand': cand, 'score': V['C']}\n" + TAIL_A[TAIL_A.index("def get_strategy"):])
+    assert P.lint_train(src) == []
+    (tmp_path / "hold.py").write_text(src)
+    _, _, _, out = P._cause_task(("A", D, -1, "full", [{"a": 1}, {"a": 2}, {"a": 3}], str(tmp_path / "hold.py")))
+    assert all(c.all() for c, _, _ in out)
+    assert len({h for _, _, h in out}) == 1
+
+
+def test_signals_get_a_copy_of_params(tmp_path, monkeypatch):
+    """signals·cfg 가 받은 x 를 고쳐도 평가기가 기록·재실행에 쓰는 파라미터는 그대로."""
+    Ds = _toy_loop(monkeypatch)
+    _salt()
+    src = HEAD_A + ("def signals(V, x):\n    x['a'] = 99\n    return {'cand': V['uni'] & (V['C'] > 0), 'score': V['C']}\n"
+                    "def cfg(x):\n    x['a'] = 77\n    return {'pyramid': 0}\n"
+                    "def get_strategy():\n    return {'params': {'a': ('int', 0, 10)}, 'signals': signals, 'cfg': cfg}\n")
+    (tmp_path / "px.py").write_text(src)
+    out = P.run_all(Ds, 8, str(tmp_path / "px.py"))
+    assert all(0 <= f["params"]["a"] <= 10 for f in out["folds"])
+
+
 def _keep_row(score):
     return {"train_sha": f"s{score}", "beats_best": True, "score": score, "conc": CONC0, "folds": [_f(i, 0.0, f"k{i}") for i in range(10)]}
 

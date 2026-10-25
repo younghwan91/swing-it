@@ -35,6 +35,9 @@ v4 와 다른 점(전부):
     signals 의 예외도 비교한다(같은 x 면 어디서나 같이 실패해야 한다). 학습 점의 cfg 예외는 평가 전체를 crash 로 끝낸다(시행으로 셈).
     cfg(x) 는 signals 를 부른 적 없는 새 프로세스에서만 계산해(``fresh_cfgs``) 학습 점·채점·모든 재실행에 쓴다. 평가 프로세스의 cfg 가
     그 값과 다르면 void(signals 가 숨긴 전체 기간 V 를 cfg 가 읽는 길 차단; v4 는 cfg 를 검사하지 않았다).
+    signals 결과는 받는 즉시 평가기 소유 사본으로 만든다(``call_signals`` — 정확히 dict, 값은 정확히 수 dtype np.ndarray, 아니면 거부:
+    학습 점은 오류, 시험 폴드는 crash). 지문·시뮬레이션은 사본만 쓰고, 사본을 뜬 뒤 그 시뮬레이션이 끝날 때까지 train 코드(cfg 포함)를
+    부르지 않는다 — train 이 쥔 배열을 cfg 등에서 제자리로 고치는 길(리뷰 rr6) 차단. x 도 사본으로 넘긴다.
     실패 메시지는 "fail: " 로 시작한다. 계산 본체는 ``run_all``(격리 안 ``--inner`` 가 부른다 — 테스트 가능).
     워크포워드 학습 점 풀은 fork 그대로다: 부모는 그 시대의 전체 V 만 보므로 거기서 숨긴 상태는 train 이 이미 보는 것 이상을 주지 못하고,
     점수 실행(A → B 순)의 시대 A 는 B 를 보기 전에 끝난다. 그 뒤 재실행의 시대 간 오염은 위 신호 해시 비교가 잡는다.
@@ -232,6 +235,26 @@ def simulate_c(D: dict, sig: dict, cfg: dict, start: str, end: str, exclude=(), 
         return L.simulate(D2, ecfg, cost_mult, end=end, start=start, paper=True, net_mtm=True)   # 정지일 매도 미룸 · 순가치
 
 
+def own_signals(sig, shape) -> dict:
+    """train 이 돌려준 신호 → 평가기 소유 사본(cand bool·score float, 새 메모리). 정확히 dict 이고 값은 정확히 수 dtype np.ndarray(shape)만
+    받는다(dict·ndarray 하위 클래스·``__array__`` 객체·object dtype 거부 — 읽을 때마다 train 코드가 돌 길 차단). 지문·시뮬레이션은 이 사본만
+    쓴다: train 이 쥔 배열을 뒤에(cfg 등) 제자리에서 고쳐도 평가에 닿지 않는다(리뷰 rr6)."""
+    if type(sig) is not dict:
+        raise TypeError(f"signals 는 dict 를 돌려야 한다({type(sig).__name__})")
+    out = {}
+    for k, dt in (("cand", bool), ("score", float)):
+        v = dict.get(sig, k)
+        if type(v) is not np.ndarray or v.dtype.kind not in "biuf" or v.shape != tuple(shape):
+            raise TypeError(f"signals[{k!r}] 는 수 dtype np.ndarray{tuple(shape)} 여야 한다({type(v).__name__})")
+        out[k] = np.array(v, dtype=dt, copy=True)
+    return out
+
+
+def call_signals(S: dict, V: dict, x: dict) -> dict:
+    """signals 호출의 유일한 길 — x 는 사본으로 넘기고(train 이 평가기 파라미터를 고치지 못한다) 결과는 곧바로 소유 사본으로."""
+    return own_signals(S["signals"](V, dict(x)), V["C"].shape)
+
+
 def sig_hash(sig: dict) -> str:
     """신호 지문 — cand 와 cand 칸의 score."""
     c = np.ascontiguousarray(np.asarray(sig["cand"], bool))
@@ -264,7 +287,7 @@ def _cfg_task(args):
     """spawn 작업자: signals 를 한 번도 부르지 않은 새 프로세스·새 모듈에서 cfg(x) 만 계산한다."""
     train_path, xs = args
     S = load_strategy(train_path)
-    return [S["cfg"](x) for x in xs]
+    return [S["cfg"](dict(x)) for x in xs]
 
 
 def _xkey(x: dict) -> str:
@@ -318,15 +341,15 @@ def check_points(spec: dict, n_folds: int, ei: int, seed: int, k: int = TRAIN_CH
 
 def _signals_or_err(S: dict, V: dict, x: dict):
     try:
-        return S["signals"](V, x)
-    except Exception:  # noqa: BLE001 — 오류도 비교 대상(같은 x 면 어디서나 같아야 한다)
+        return call_signals(S, V, x)
+    except Exception:  # noqa: BLE001 — 오류(형식 거부 포함)도 비교 대상(같은 x 면 어디서나 같아야 한다)
         return None
 
 
 def _train_point(args):
     fi, j, x, cfg = args
     D, S, lo, hi = _G["D"], _G["S"], _G["folds"][fi][0], _G["folds"][fi][1]
-    sig = _signals_or_err(S, _G["V"], x)
+    sig = _signals_or_err(S, _G["V"], x)                             # 소유 사본 — 지문·시뮬레이션 사이에 train 코드는 돌지 않는다
     h = "ERR" if sig is None else sig_hash(sig)                      # 고원 선택에 실제로 쓴 신호의 지문(새 프로세스 값과 비교)
     try:
         if sig is None:
@@ -366,7 +389,7 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
                 pts_all[fi] = (pts, U)
                 tasks += [(fi, j, x) for j, x in enumerate(pts)]
             tasks = [(*t, c) for t, c in zip(tasks, fresh_cfgs(train_path, [t[2] for t in tasks]), strict=True)]
-            S["signals"](_G["V"], tasks[0][2])                       # 부모에서 train.py 캐시를 데운다(fork 공유)
+            _signals_or_err(S, _G["V"], tasks[0][2])                 # 부모에서 train.py 캐시를 데운다(fork 공유, 결과는 버린다)
             with mp.get_context("fork").Pool(max(1, workers)) as pool:
                 out = pool.map(_train_point, tasks, chunksize=1)
             chosen, ph = [], res["point_hash"].setdefault(era, {})
@@ -380,10 +403,8 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
         cfgs = fresh_cfgs(train_path, chosen)
         for fi, (_, lo, hi) in enumerate(E["folds"]):
             x, cfg = chosen[fi], cfgs[fi]
-            sig = S["signals"](_G["V"], x)
+            sig = call_signals(S, _G["V"], x)                        # 소유 사본 — 여기서 시뮬레이션 끝까지 train 코드를 부르지 않는다
             res["sig_hash"].append(sig_hash(sig))
-            if clamp_cfg(S["cfg"](x)) != clamp_cfg(cfg):                # signals 를 부른 뒤의 cfg 가 새 프로세스 cfg 와 다르면 상태 의존
-                res["cfg_mismatch"].append(len(res["folds"]))
             if null and null[0] == "rank":
                 sig = {**sig, "score": rng.random(D["C"].shape)}
             elif null and null[0] == "thin":                         # 후보 솎기: 시험 구간 월별 통과율 그대로
@@ -413,6 +434,8 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
             res["daily"].append(daily_sel(D, eq, lo, hi))
             if len(tr):
                 res["trades"].append(tr.assign(era=era, fold=gi))
+            if clamp_cfg(S["cfg"](dict(x))) != clamp_cfg(cfg):          # 시뮬레이션 뒤: signals 를 부른 뒤의 cfg 가 새 프로세스 cfg 와 다르면
+                res["cfg_mismatch"].append(gi)                       # 상태 의존(채점은 새 프로세스 cfg)
     return res
 
 
@@ -522,9 +545,9 @@ def _cause_task(args):
         if g is None:
             out.append((None, None, "ERR"))
         elif mode == "full":
-            out.append((np.asarray(g["cand"], bool), np.asarray(g["score"], float), sig_hash(g)))
+            out.append((g["cand"], g["score"], sig_hash(g)))         # g = 소유 사본(call_signals)
         else:
-            out.append((np.asarray(g["cand"], bool)[:, :cut + 1], np.asarray(g["score"], float)[:, :cut + 1], None))
+            out.append((g["cand"][:, :cut + 1], g["score"][:, :cut + 1], None))
     return era, cut, mode, out
 
 
