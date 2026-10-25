@@ -26,6 +26,7 @@ v4 와 다른 점(전부):
 13. 무결성: 태그 ``combined-prereg-1``, 감시 파일에 결합 data·gaps·news·select 와 v4 평가기 추가, MANIFEST 에 캐시 A·B·C sha.
     ``--build`` 는 data.build_all 에 맡기고 MANIFEST 는 쓰지 않는다(``--manifest`` 따로 — select.py 가 생긴 뒤). ``--final`` 은 없다.
 14. 원장 기록: 평가 행에 폴드별 era·test·params·alpha·trade_key·n, 쏠림 셋, 부품 제거, eligible, 거래당 값을 남긴다(select.py 가 읽는다).
+15. 상위 1% 거래 수 = ceil(1% × 시험 체결 수)(최소 1). crash 는 원장에 남지 않아 시행으로 세지 않는다(v4 와 같음).
 
 사용(작업 트리 루트):
   uv run python research/combined/prepare.py > run.log 2>&1          # 실험 한 번
