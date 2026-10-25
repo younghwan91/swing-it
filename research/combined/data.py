@@ -6,7 +6,7 @@
 루프·기준선·참고·선택·전진 모두 이 캐시를 쓴다.
 ``prepare.build_era`` 는 전역 ``ERAS`` 를 읽으므로 같은 단계를 ``ERAS_C`` 로 재현한다(prepare.py 는 바꾸지 않는다).
 
-원주가: ``read_raw_close(aftermarket_fix=True)`` (indep30.load 는 raw_close 를 밖으로 내지 않는다), 빈 칸(시대 A 전부)은 v2 raw_close.
+tickp 는 수정 종가로 계산한다 — 원주가를 쓰지 않는다(원주가/수정가 = 미래 수정 계수 누수, 정정 0 판정 26).
 실제 시장(mkt_real): ``stocks`` + ``delisted_stocks`` 의 market (코스닥=1, 거래소·유가증권·코넥스=0). 엔진용 ``mkt`` 는 v4 처럼 0.
 """
 from __future__ import annotations
@@ -22,14 +22,15 @@ import pandas as pd
 
 from research.autoresearch.prepare import VIEW_KEYS as VIEW_KEYS_V4
 from research.autoresearch.prepare import half_of, log, slice_half
-from research.combined.gaps import gap_arrays, tick_dated_vec
+from research.combined.gaps import gap_arrays
 from research.combined.news import archive_dir, check_news_leak, news_arrays, news_excluded, news_uni_off
 
 CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/combined")
 LOCKED_CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/combined_locked")    # 잠금 절반(격리가 가린다)
 NEWS_EXCLUDE = True    # 뉴스 구간 종목 제외 규칙 스위치(사용자가 뉴스 부품을 빼기로 하면 False — 그때는 PREREG 정정으로)
-TICKP_LEAK_TOL = {"nan": 0.01, "offgrid": 0.01, "ks": 0.15}
-# ks 0.15: 원주가가 거의 다 있는 시대 B·C 의 폐지/생존 tickp KS 가 0.07~0.11(폐지 종목이 싸서 생기는 정상 차이, 2026-10-25 캐시 실측) — 그 위 여유.
+TICKP_LEAK_TOL = {"nan": 0.01, "ks": 0.15}
+# ks 0.15: 폐지 종목이 싸서 생기는 정상 차이(2026-10-25 캐시, 수정가 tickp 폐지/생존 KS A 0.04·B 0.03·C 0.06, 원주가 판 B·C 0.07~0.11) 위 여유.
+# 격자 밖 검사는 뺐다 — 수정가 tickp 는 누구에게나 격자 밖이라 표지가 아니다.
 
 
 def _folds(y0: int, y1: int) -> list:
@@ -79,21 +80,6 @@ def _market_real(con, codes: list) -> "tuple[np.ndarray, list, int]":
     return arr, miss, n_dis
 
 
-def snap_to_tick(p: np.ndarray, days: pd.DatetimeIndex, mkt: np.ndarray) -> np.ndarray:
-    """가격을 그날 호가 격자에 맞춘다: round(p/tick)·tick(최소 1틱). 구간 경계가 두 틱의 공배수라 결과는 자기 틱의 격자 위다."""
-    p = np.asarray(p, float)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        tk = tick_dated_vec(p, days, mkt)
-        return np.maximum(np.round(p / tk), 1.0) * tk
-
-
-def fill_raw_with_adj(raw: np.ndarray, C: np.ndarray, days: pd.DatetimeIndex, mkt: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
-    """원주가 결측 칸을 수정 종가로 채우되 **그날 호가 격자에 맞춘 값**으로(indep30 px_cap 방식 + 격자). 결측 여부(NaN)도,
-    격자 밖 가격(|1/tickp − 정수| > 0)도 미래 폐지를 알리는 표지가 되지 않게 한다(정정 0 C2: 격자 밖 몫 폐지 0.501 / 생존 0.001)."""
-    miss = ~np.isfinite(raw)
-    return np.where(miss, snap_to_tick(C, days, mkt), raw), miss
-
-
 def _ks(a: np.ndarray, b: np.ndarray) -> float:
     """두 표본 KS 통계(최대 ECDF 차)."""
     a, b = np.sort(a), np.sort(b)
@@ -102,46 +88,25 @@ def _ks(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def check_tickp_leak(tickp: np.ndarray, uni: np.ndarray, delisted: np.ndarray, tol: "dict | None" = None) -> dict:
-    """uni 칸 tickp 가 폐지 표지가 되는지 — 폐지·생존 사이 (1) NaN 몫 차, (2) 호가 격자 밖(|1/tickp − round| > 0.01) 몫 차,
-    (3) 유한값 분포 KS 가 허용치(``TICKP_LEAK_TOL``) 이상이면 ValueError. 값 dict 를 돌려준다(진단용)."""
+    """uni 칸 tickp 가 폐지 표지가 되는지 — 폐지·생존 사이 (1) NaN 몫 차, (2) 유한값 분포 KS 가 허용치(``TICKP_LEAK_TOL``) 이상이면
+    ValueError. 값 dict 를 돌려준다(진단용). 수정가 tickp 는 C 의 함수라 통과가 기대값이다 — 원주가 등 다른 입력이 다시 들어오면 잡는다."""
     tol = {**TICKP_LEAK_TOL, **(tol or {})}
     tp = np.asarray(tickp, float)
     uni = np.asarray(uni, bool)
     nan = np.isnan(tp)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        inv = 1.0 / tp
-        off = np.isfinite(inv) & (np.abs(inv - np.round(inv)) > 1e-2)
     out, bad, fin = {}, [], {}
     for name, g in (("delisted", delisted), ("alive", ~np.asarray(delisted, bool))):
         m = np.asarray(g, bool)[:, None] & uni
         out[f"nan_{name}"] = float(nan[m].mean()) if m.any() else 0.0
-        f = m & ~nan
-        out[f"offgrid_{name}"] = float(off[f].mean()) if f.any() else 0.0
-        fin[name] = tp[f]
+        fin[name] = tp[m & ~nan]
     out["ks"] = _ks(fin["delisted"], fin["alive"]) if len(fin["delisted"]) and len(fin["alive"]) else 0.0
-    for k in ("nan", "offgrid"):
-        if abs(out[f"{k}_delisted"] - out[f"{k}_alive"]) >= tol[k]:
-            bad.append(f"{k} 몫 폐지 {out[f'{k}_delisted']:.4f} vs 생존 {out[f'{k}_alive']:.4f}(허용 {tol[k]})")
+    if abs(out["nan_delisted"] - out["nan_alive"]) >= tol["nan"]:
+        bad.append(f"nan 몫 폐지 {out['nan_delisted']:.4f} vs 생존 {out['nan_alive']:.4f}(허용 {tol['nan']})")
     if out["ks"] >= tol["ks"]:
         bad.append(f"분포 KS {out['ks']:.4f}(허용 {tol['ks']})")
     if bad:
         raise ValueError("tickp 폐지 표지 누수 — " + "; ".join(bad))
     return out
-
-
-def _raw_wide(con, data: tuple, days: pd.DatetimeIndex, codes: list) -> np.ndarray:
-    from swing_it.krx_session import read_raw_close
-    r = read_raw_close(con, start=data[0], end=data[1], aftermarket_fix=True)
-    r["date"] = pd.to_datetime(r["date"])
-    w = r.pivot_table(index="date", columns="code", values="close", aggfunc="last").reindex(index=days, columns=codes)
-    raw = w.to_numpy(float).T
-    # read_raw_close 는 2016-09-05 부터라 시대 A 는 비었다 — 그 칸은 v2 의 raw_close(겹치는 구간에서 99.9% 일치)로 채운다.
-    # 자료가 모두 2026-09-14 이전이라 session="raw" 여도 애프터마켓 오염이 없다.
-    from swing_it.storage import read_prices
-    v = read_prices(con, cols=("code", "date", "raw_close"), table="daily_bars_adj_v2", start=data[0], end=data[1], parse_dates=True,
-                    session="raw")
-    v = v.pivot_table(index="date", columns="code", values="raw_close", aggfunc="last").reindex(index=days, columns=codes)
-    return np.where(np.isfinite(raw), raw, v.to_numpy(float).T)
 
 
 def apply_news_exclusion(uni: np.ndarray, codes: "list[str]", days: pd.DatetimeIndex, archive) -> "tuple[np.ndarray, dict]":
@@ -194,14 +159,12 @@ def build_era(con, era: str, end: "str | None" = None) -> dict:
         out[k] = np.asarray(out[k], np.float32)
     # --- 결합 추가분
     mkt_real, miss, n_dis = _market_real(con, codes)
-    raw, fb = fill_raw_with_adj(_raw_wide(con, data, days, codes), D["C"], days, mkt_real)
     out["mkt_real"] = mkt_real
-    out.update(gap_arrays(D["O"], D["C"], raw, D["reopen"], D["lu"], days, mkt_real))
+    out.update(gap_arrays(D["O"], D["C"], D["reopen"], D["lu"], days, mkt_real))
     out.update(news)
     tk = check_tickp_leak(out["tickp"], D["uni"], isdel)
     uc = D["uni"].sum(1)
     out["diag"] = {**D["diag"], "eps_up_share": float(up[ci, s].mean()),
-                   "tickp_adj_fallback_share_uni": float(fb[D["uni"]].mean()),
                    **{f"tickp_leak_{k}": v for k, v in tk.items()},
                    **{f"news_exclusion_{k}": v for k, v in excl.items()}, **{f"news_leak_{k}": v for k, v in news_leak.items()},
                    "mkt_unmapped_uni_cells": {c: int(uc[codes.index(c)]) for c in miss if uc[codes.index(c)] > 0},

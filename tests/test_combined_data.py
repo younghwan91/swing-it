@@ -33,24 +33,18 @@ def test_repo_keys_cover_new_arrays():
     assert new == {k for v in cd.REPO_KEYS.values() for k in v}
 
 
-def test_raw_fill_removes_delisting_flag_and_no_flag_key():
-    import pytest
+def test_tickp_leak_check_nan_and_no_flag_key():
     from research.combined.gaps import gap_arrays
     n, t = 2, 6
     C = np.full((n, t), 1000.0)
-    raw = C.copy()
-    raw[1] = np.nan                                   # 폐지 종목: 원주가 전부 결측
-    raw2, fb = cd.fill_raw_with_adj(raw, C, pd.date_range("2020-01-01", periods=t), np.zeros(n, int))
-    assert fb[1].all() and not fb[0].any()
-    g = gap_arrays(C, C, raw2, np.zeros((n, t), bool), np.full(t, 1.29), pd.date_range("2020-01-01", periods=t), np.zeros(n, int))
-    assert np.isfinite(g["tickp"][1, 1:]).all()
+    g = gap_arrays(C, C, np.zeros((n, t), bool), np.full(t, 1.29), pd.date_range("2020-01-01", periods=t), np.zeros(n, int))
     uni = np.ones((n, t), bool)
     cd.check_tickp_leak(g["tickp"], uni, np.array([False, True]))
     bad = g["tickp"].copy()
     bad[1] = np.nan
     with pytest.raises(ValueError):
         cd.check_tickp_leak(bad, uni, np.array([False, True]))
-    assert not [k for k in cd.VIEW_KEYS_C if "fallback" in k or "src" in k or "miss" in k]
+    assert not [k for k in cd.VIEW_KEYS_C if "fallback" in k or "src" in k or "miss" in k or "raw" in k]
 
 
 def test_market_mapping_explicit():
@@ -62,57 +56,7 @@ def test_market_mapping_explicit():
         cd.market_codes(pd.Series({"A": "ETF"}), ["A"])
 
 
-# ---------------------------------------------------------------- 정정 0 C2: 대체 원주가를 호가 격자에 맞춘다
-
-PRE = pd.bdate_range("2015-01-05", periods=8)        # 옛 호가표 구간
-
-
-def _tickp(raw, days, mkt):
-    from research.combined.gaps import gap_arrays
-    n, t = raw.shape
-    return gap_arrays(raw, raw, raw, np.zeros((n, t), bool), np.full(t, 1.29), days, mkt)["tickp"]
-
-
-def _offgrid(tp):
-    inv = 1.0 / tp.astype(float)
-    return np.isfinite(inv) & (np.abs(inv - np.round(inv)) > 1e-2)
-
-
-def test_snap_to_tick_lands_on_own_grid_across_bands_and_reform():
-    from research.combined.gaps import tick_dated_vec
-    rng = np.random.default_rng(0)
-    days = pd.DatetimeIndex(["2015-03-02", "2023-01-24", "2023-01-25", "2024-06-03"])
-    p = np.exp(rng.uniform(np.log(50), np.log(2e6), (400, len(days))))
-    edges = np.array([999.6, 1000.4, 1999.7, 4999.8, 5002.0, 9999.0, 19999.0, 49990.0, 50010.0, 99990.0, 199990.0, 499900.0, 500100.0])
-    p[:len(edges), :] = edges[:, None]
-    mkt = (np.arange(400) % 2).astype(int)
-    q = cd.snap_to_tick(p, days, mkt)
-    tk = tick_dated_vec(q, days, mkt)
-    assert np.all(np.abs(q / tk - np.round(q / tk)) < 1e-9)                 # 자기 틱의 격자 위(구간 경계를 넘어도)
-    assert np.all(np.abs(q - p) <= tick_dated_vec(p, days, mkt) / 2 + 1e-9)  # 반 틱 안에서만 움직인다
-    assert cd.snap_to_tick(np.array([[0.3]]), days[:1], np.zeros(1, int))[0, 0] == 1.0   # 최소 1틱
-    assert np.isnan(cd.snap_to_tick(np.array([[np.nan]]), days[:1], np.zeros(1, int))[0, 0])
-
-
-def test_adj_fill_on_grid_kills_offgrid_delisting_flag():
-    """폐지 종목은 원주가가 없어 수정 종가(격자 밖)로 채워졌다 → |1/tickp − 정수| 가 폐지 표지(0.501 vs 0.001). 격자에 맞춘 대체는 그 차이를 없앤다."""
-    n, t = 40, len(PRE)
-    rng = np.random.default_rng(1)
-    raw_alive = np.round(rng.uniform(2_000, 40_000, (n // 2, t)) / 50) * 50          # 생존: 실제 원주가(격자 위)
-    adj_dead = rng.uniform(2_000, 40_000, (n // 2, t)) * 0.873                       # 폐지: 수정 종가(격자 밖)
-    raw = np.vstack([raw_alive, np.full_like(adj_dead, np.nan)])
-    C = np.vstack([raw_alive, adj_dead])
-    mkt, dl = np.zeros(n, int), np.r_[np.zeros(n // 2, bool), np.ones(n // 2, bool)]
-    uni = np.ones((n, t), bool)
-    unsnapped = np.where(np.isfinite(raw), raw, C)                                   # 옛 대체(위반 주입)
-    with pytest.raises(ValueError, match="offgrid"):
-        cd.check_tickp_leak(_tickp(unsnapped, PRE, mkt), uni, dl)
-    filled, fb = cd.fill_raw_with_adj(raw, C, PRE, mkt)
-    tp = _tickp(filled, PRE, mkt)
-    assert fb[n // 2:].all() and not _offgrid(tp[:, 1:]).any()
-    out = cd.check_tickp_leak(tp, uni, dl, tol={"ks": 1.0})                          # 격자 검사만(장난감 분포 차는 별도 시험)
-    assert out["offgrid_delisted"] == 0.0 and out["offgrid_alive"] == 0.0
-
+# ---------------------------------------------------------------- 정정 0 C2·판정 26: tickp 누수 검사(NaN·KS)
 
 def test_tickp_leak_check_each_measure_fires():
     n, t = 60, 30
@@ -121,14 +65,10 @@ def test_tickp_leak_check_each_measure_fires():
     dl = np.r_[np.zeros(n // 2, bool), np.ones(n // 2, bool)]
     uni = np.ones((n, t), bool)
     ok = cd.check_tickp_leak(tp, uni, dl)
-    assert ok["ks"] < cd.TICKP_LEAK_TOL["ks"] and ok["nan_delisted"] == ok["offgrid_delisted"] == 0.0
+    assert ok["ks"] < cd.TICKP_LEAK_TOL["ks"] and ok["nan_delisted"] == 0.0 and "offgrid" not in cd.TICKP_LEAK_TOL
     bad = tp.copy()
     bad[n // 2:, :3] = np.nan                                                          # NaN 몫 10% 차
     with pytest.raises(ValueError, match="nan"):
-        cd.check_tickp_leak(bad, uni, dl)
-    bad = tp.copy()
-    bad[n // 2:, :3] = 1.0 / 333.3                                                     # 격자 밖 10%
-    with pytest.raises(ValueError, match="offgrid"):
         cd.check_tickp_leak(bad, uni, dl)
     bad = tp.copy()
     bad[n // 2:] = (1.0 / rng.integers(20, 200, (n // 2, t))).astype(np.float32)       # 격자 위지만 분포가 다르다(10배 큰 tickp)

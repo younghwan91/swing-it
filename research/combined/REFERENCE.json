@@ -1,7 +1,7 @@
 {
- "at": "2026-10-25T18:37:03",
+ "at": "2026-10-25T22:04:16",
  "train_sha": "9d9ed460ff597f1d",
- "commit": "0ba1a758b992",
+ "commit": "5abc30b45d48",
  "dirty": false,
  "params": {
   "theta": 90,
@@ -14,25 +14,25 @@
  "note": "leader_C 고정값(univ top200 은 표현 불가 — 평가기 uni)",
  "evaluator": "combined-prereg-1",
  "summary": {
-  "score": -0.06102421905592592,
-  "raw_score": -0.06102421905592592,
+  "score": -0.057618538497622274,
+  "raw_score": -0.057618538497622274,
   "void": false,
-  "exit_dist_median": 0.31088709796268565,
-  "exit_dist_lt5pct": 0.004594180704441042,
-  "alpha_mean": 0.010233657983013015,
-  "alpha_std": 0.14251575407787787,
+  "exit_dist_median": 0.31269521789491106,
+  "exit_dist_lt5pct": 0.0046801872074883,
+  "alpha_mean": 0.02596296706827823,
+  "alpha_std": 0.16716301113180101,
   "folds_pos": 5,
-  "excess_vs_kospi_mean": -0.0030179617106604077,
+  "excess_vs_kospi_mean": 0.0129996888218293,
   "eraA_alpha": 0.0075870388872814835,
-  "eraB_alpha": 0.012880277078744548,
-  "oos_trades": 653,
-  "oos_trades_per_year": 66.01390810960422,
+  "eraB_alpha": 0.04433889524927498,
+  "oos_trades": 641,
+  "oos_trades_per_year": 64.80078881815666,
   "thin_folds": 1,
-  "trade_ret_mean": -0.0368609608605453,
-  "payoff_ratio": 1.3787096218430952,
-  "win_rate": 0.2833078101071976,
-  "ev_net_2x": -0.0368609608605453,
-  "news_folds_score": 0.06109803038780246
+  "trade_ret_mean": -0.03352935377718901,
+  "payoff_ratio": 1.4389399026506424,
+  "win_rate": 0.28861154446177845,
+  "ev_net_2x": -0.03352935377718901,
+  "news_folds_score": 0.07744614322416765
  },
  "folds": [
   {
@@ -217,12 +217,12 @@
     "exit_kind": "ma",
     "low_w": 20
    },
-   "alpha": 0.14208678654661916,
-   "excess": -0.05427220456806651,
+   "alpha": 0.30883662025625397,
+   "excess": 0.11375637312820153,
    "years": 0.9856262833675564,
-   "n": 85,
+   "n": 75,
    "half": 0,
-   "trade_key": "e1c3c336e993"
+   "trade_key": "f6777678712e"
   },
   {
    "era": "B",
@@ -238,12 +238,12 @@
     "exit_kind": "ma",
     "low_w": 20
    },
-   "alpha": 0.04720255663040458,
-   "excess": 0.09474113675980073,
+   "alpha": 0.037745813773421934,
+   "excess": 0.08688906438842978,
    "years": 0.9938398357289527,
-   "n": 54,
+   "n": 52,
    "half": 0,
-   "trade_key": "6d8477512814"
+   "trade_key": "3ddecfcdd756"
   }
  ]
 }

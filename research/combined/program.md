@@ -43,7 +43,9 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 
 ## "세 레포 부품"과 eligible
 - **swing:** leader21 골격(추세 템플릿·RS·N일 돌파·청산 메뉴·하드 손절·불타기·국면), 수축·실적 신선도 같은 특성. EPS 상승은 평가기가 강제한다.
-- **scalp:** 야간 갭 지속성(gap, 원주가 비용항 tickp 를 빼고, 창 w/2·w·2w)을 돌파 후보 안 순위 키나 거르개로. 제한폭 절반 이상 갭(gap_event)은 대칭으로 뺀다.
+- **scalp:** 야간 갭 지속성(gap, 비용항 tickp 를 빼고, 창 w/2·w·2w)을 돌파 후보 안 순위 키나 거르개로. 제한폭 절반 이상 갭(gap_event)은 대칭으로 뺀다.
+  `tickp` 는 **수정 종가** 기준 호가 비율(`tick(C[t-1])/C[t-1]`)이다 — 원주가를 주면 미래 수정 계수가 새서 수정가로 바꿨다(PREREG 정정 0).
+  수정 사건 전에는 실제 호가 비율과 다르다. 엔진 체결 비용은 정가 cost_rt × 2 그대로다.
 - **daytrade:** [특징주] 헤드라인 거부(n_feat, 신호일 전후 창), 기사 뒤 이미 반영됐는지(일봉 가격 이동) 검사. `news_known` 이 False 면 개수 0 은 "모름"이다.
   뉴스 구간(2023-03-15~)에서 아카이브가 없거나 잘린 종목은 평가기가 uni 를 꺼 둔다(PREREG 정정 0) — 그 종목은 그 구간에 후보가 아니다.
 - `eligible: True` = scalp·daytrade 부품 제거 검사가 둘 다 ok(그 부품이 실제로 체결과 점수를 바꾼다). 장식으로 읽기만 하는 부품은 걸린다.
@@ -54,7 +56,6 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 - `prepare.py`·`data.py`·`gaps.py`·`news.py`·`select.py`·엔진·데이터·의존성·캐시·원장(`RUNS.jsonl`·`BEST.json`·`MANIFEST.json`) 변경, 태그 조작,
   `select.py`·`--reference` 실행, 확인 구간(2025~)·잠금 절반 추론.
 - `REFERENCE.json`(기준선 점수)·`RUNS.jsonl`·`BEST*.json`·`last_run.json`·캐시·원장 사본을 어떤 방법으로든 읽기(Bash 포함). 출력 줄만 본다.
-- tickp 로 원주가를 되살려 수정 종가와 비교하기(미래 수정 계수 — 미래정보다, 사람 열람 제외 사유).
 - 허용 목록 우회(문자열로 모듈 이름 만들기, 내장 함수 꺼내기 등), DB·파일·네트워크 접근.
 - 호출 사이 상태 숨기기: 모듈(np·pd 등)에 속성·항목 넣기, 모듈 이름을 값으로 넘기기, `print`(허용 목록이 막는다). 같은 V·파라미터면
   언제 몇 번째로 불러도 같은 신호여야 한다 — 평가기가 새 프로세스의 신호와 비교하고, 다르면 void 다.
