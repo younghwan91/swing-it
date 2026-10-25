@@ -36,12 +36,16 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 - `news_folds_score` = 뉴스가 있는 2023·2024 시험 폴드만의 score.
 - `ablation_scalp`·`ablation_daytrade`: 그 레포 입력을 중립값(갭·호가 비율 0, 사건 갭 False, 뉴스 개수 0, news_known False)으로 바꾸고
   같은 폴드 파라미터로 다시 돌린 결과. `changed` = 체결 집합이 바뀐 비율, `dscore` = 원래 score − 제거 score(daytrade 는 2023·2024 폴드만).
-  `ok` = changed ≥ 0.05 ∧ dscore > 0.
+  `ok` = changed ≥ 0.05 ∧ dscore > 0 ∧ `trades_ok`(제거 실행의 작동 폴드 체결 합 ≥ 원래의 50% ∧ 폴드마다 ≥ 5).
+- **중립 입력 = 통과(pass-through).** 부품은 중립값(갭·tickp 0, 사건 갭 False, 뉴스 0, news_known False)을 받으면 아무것도 막거나 바꾸지 않아야 한다.
+  `cand & news_known` 처럼 중립 입력에서 거래를 멈추는 문은 `trades_ok` 에 걸리고, 사람 열람에서 제외된다(`neutral_input`).
+  중립 입력(전부 0·False)을 감지해 다르게 행동하는 것도 제외 사유다.
 
 ## "세 레포 부품"과 eligible
 - **swing:** leader21 골격(추세 템플릿·RS·N일 돌파·청산 메뉴·하드 손절·불타기·국면), 수축·실적 신선도 같은 특성. EPS 상승은 평가기가 강제한다.
 - **scalp:** 야간 갭 지속성(gap, 원주가 비용항 tickp 를 빼고, 창 w/2·w·2w)을 돌파 후보 안 순위 키나 거르개로. 제한폭 절반 이상 갭(gap_event)은 대칭으로 뺀다.
 - **daytrade:** [특징주] 헤드라인 거부(n_feat, 신호일 전후 창), 기사 뒤 이미 반영됐는지(일봉 가격 이동) 검사. `news_known` 이 False 면 개수 0 은 "모름"이다.
+  뉴스 구간(2023-03-15~)에서 아카이브가 없거나 잘린 종목은 평가기가 uni 를 꺼 둔다(PREREG 정정 0) — 그 종목은 그 구간에 후보가 아니다.
 - `eligible: True` = scalp·daytrade 부품 제거 검사가 둘 다 ok(그 부품이 실제로 체결과 점수를 바꾼다). 장식으로 읽기만 하는 부품은 걸린다.
 - **자격 없는 keep 도 keep 이다.** 자격은 keep 판정에 쓰이지 않는다 — 다음 시도의 디딤돌이다. 기준선(`train.py` 처음 상태)은 갭·뉴스를 안 써서 자격이 없다.
   다만 후보는 자격 있는 시도에서만 나오니, 세 레포 부품이 모두 일하는 구조로 가야 한다.
@@ -49,6 +53,8 @@ swing v4 루프(`research/autoresearch/program.md`)와 같은 방식이다. 숫�
 ## 하지 말 것(어기면 결과 무효)
 - `prepare.py`·`data.py`·`gaps.py`·`news.py`·`select.py`·엔진·데이터·의존성·캐시·원장(`RUNS.jsonl`·`BEST.json`·`MANIFEST.json`) 변경, 태그 조작,
   `select.py`·`--reference` 실행, 확인 구간(2025~)·잠금 절반 추론.
+- `REFERENCE.json`(기준선 점수)·`RUNS.jsonl`·`BEST*.json`·`last_run.json`·캐시·원장 사본을 어떤 방법으로든 읽기(Bash 포함). 출력 줄만 본다.
+- tickp 로 원주가를 되살려 수정 종가와 비교하기(미래 수정 계수 — 미래정보다, 사람 열람 제외 사유).
 - 허용 목록 우회(문자열로 모듈 이름 만들기, 내장 함수 꺼내기 등), DB·파일·네트워크 접근.
 - 호출 사이 상태 숨기기: 모듈(np·pd 등)에 속성·항목 넣기, 모듈 이름을 값으로 넘기기, `print`(허용 목록이 막는다). 같은 V·파라미터면
   언제 몇 번째로 불러도 같은 신호여야 한다 — 평가기가 새 프로세스의 신호와 비교하고, 다르면 void 다.

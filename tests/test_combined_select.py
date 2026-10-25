@@ -14,6 +14,8 @@ import pytest
 from research.combined import prepare as P
 from research.combined import select as S
 
+_REAL_LOAD_LOCKED = S.load_locked
+
 
 @pytest.fixture(autouse=True)
 def _iso(tmp_path, monkeypatch):
@@ -25,31 +27,32 @@ def _iso(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "SCREEN", str(tmp_path / "SCREEN.jsonl"))
     monkeypatch.setattr(S, "SELECTION", str(tmp_path / "SELECTION.json"))
     monkeypatch.setattr(S, "SCRATCH", str(tmp_path / "scratch"))
-    monkeypatch.setattr(P, "integrity", lambda check_cache=True: None)
+    calls = {"locked": [], "integrity_locked": []}
+    monkeypatch.setattr(P, "integrity", lambda check_cache=True, check_locked=False: calls["integrity_locked"].append(check_locked))
     monkeypatch.setattr(S, "load_search", lambda era: {"era": era, "half": 0})
-    calls = {"locked": []}
     monkeypatch.setattr(S, "load_locked", lambda era: calls["locked"].append(era) or {"era": era, "half": 1})
     yield calls
 
 
 # ---------------------------------------------------------------- 가짜 계산
 
-def _fake_wf(alpha_of, n=30, ret=0.02, boom=None):
-    """walk_forward_c 대역 — 받은 ``eras`` 의 폴드마다 alpha_of(train_sha, era, half, null) 로 폴드 alpha. boom(eras) 참이면 예외."""
+def _fake_wf(alpha_of, n=30, ret=0.02, boom=None, excl_alpha=None):
+    """walk_forward_c 대역 — 받은 ``eras`` 의 폴드마다 alpha_of(train_sha, era, half, null) 로 폴드 alpha. boom(eras) 참이면 예외.
+    ``excl_alpha`` 가 있으면 종목을 뺀(exclude) 재실행의 폴드 alpha 는 그 값."""
     calls = []
 
     def wf(D_by_era, workers, train_path=P.TRAIN, fixed=None, null=None, neutral=None, cost_mult=P.COST_MULT, exclude=(), mask=None,
            eras=None):
         assert eras is not None, "select 는 eras= 를 늘 넘긴다"
         sha = hashlib.sha256(open(train_path, "rb").read()).hexdigest()[:16]
-        calls.append({"sha": sha, "eras": tuple(eras), "null": null, "fixed": fixed is not None,
+        calls.append({"sha": sha, "eras": tuple(eras), "null": null, "fixed": fixed is not None, "exclude": tuple(exclude),
                       "half": {e: D_by_era[e]["half"] for e in eras}, "data_eras": {e: D_by_era[e]["era"] for e in eras}})
         if boom and boom(tuple(eras)):
             raise RuntimeError("계산 중 죽음(주입)")
         res = {"folds": [], "trades": [], "months": [], "daily": []}
         for era, E in eras.items():
             for _lo_tr, lo, hi in E["folds"]:
-                a = alpha_of(sha, era, D_by_era[era]["half"], null)
+                a = excl_alpha if (exclude and excl_alpha is not None) else alpha_of(sha, era, D_by_era[era]["half"], null)
                 gi = len(res["folds"])
                 res["folds"].append({"era": era, "test": [lo, hi], "params": {"w": 20, "era": era}, "alpha": a, "excess": a,
                                      "years": 1.0, "n": n, "half": D_by_era[era]["half"], "trade_key": f"{sha}{gi}"})
@@ -87,11 +90,13 @@ def _write_runs(rows):
         P._append(P.RUNS, r)
 
 
-def _screened(shas: list) -> None:
-    """원장 행 + 그 sha 들이 통과한 거르개 기록(직접 쓴다 — confirm·lockbox 단위 시험용)."""
+def _screened(shas: list, excluded: "dict | None" = None, review: bool = True) -> None:
+    """원장 행 + 그 sha 들이 통과한 거르개 기록 + 사람 열람(review) 행(직접 쓴다 — confirm·lockbox 단위 시험용)."""
     _write_runs([_run(s, 0.2) for s in shas])
     P._append(S.SCREEN, {"pool": [r["train_sha"] for r in S.pool(P._read_jsonl(P.RUNS))], "n_trials": P.trial_state()["n"],
                          "survivors": list(shas), "review": [], "results": {}, "pool_rows": []})
+    if review:
+        P._append(S.SCREEN, {"kind": "review", "reviewed": sorted(shas), "excluded": dict(excluded or {})})
 
 
 # ---------------------------------------------------------------- 풀
@@ -130,18 +135,23 @@ def test_screen_null_bar(tmp_path, monkeypatch):
     path, sha = _train(tmp_path, "a")
     _stub_stats(monkeypatch)
 
-    def alpha(s, era, half, null):                                                # 실제 0.20, 널 100회 0.00~0.99 균등 → p95 ≈ 0.94
-        return 0.20 if null is None else (null[1] % 100) / 100.0
+    def alpha(s, era, half, null):                                                # 실제 0.20, 솎기 널 0.00~0.99 균등 → p95 ≈ 0.94
+        return 0.20 if null is None else ((null[1] % 100) / 100.0 if null[0] == "thin" else -0.5)
     monkeypatch.setattr(P, "walk_forward_c", _fake_wf(alpha))
     rec = _run(sha, 0.20)
     out = S.screen(rec, {"A": {"half": 0, "era": "A"}, "B": {"half": 0, "era": "B"}}, path)
-    assert out["bars"]["beats_null_p95"] is False and out["pass"] is False
-    assert out["null_n"] == S.N_NULL and all(c["null"][0] == "params" for c in P.walk_forward_c.calls if c["null"])
+    assert out["bars"]["beats_null_p95"] is False and out["pass"] is False                  # 바는 솎기 널(파라미터 널이 낮아도)
+    kinds = [c["null"][0] for c in P.walk_forward_c.calls if c["null"]]
+    assert kinds.count("thin") == S.N_NULL == 300 and kinds.count("params") == S.N_NULL_PARAMS == 100
+    assert all(c["fixed"] for c in P.walk_forward_c.calls if c["null"])                       # 같은 폴드 파라미터·cfg
+    assert out["null_kind"] == "thin" and out["null_n"] == 300 and out["params_null"]["bar"] is False
     assert {c["eras"] for c in P.walk_forward_c.calls} == {("A", "B")}
 
-    monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.20 if null is None else -0.05))
+    # 파라미터 널이 실제보다 높아도(기록만) 솎기 널을 넘으면 통과 — 바가 파라미터 널로 돌아가면 이 시험이 깨진다
+    monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.20 if null is None else (-0.05 if null[0] == "thin" else 0.9)))
     out = S.screen(rec, {"A": {"half": 0, "era": "A"}, "B": {"half": 0, "era": "B"}}, path)
-    assert out["pass"] is True and all(out["bars"].values())
+    assert out["pass"] is True and all(out["bars"].values()) and out["params_null"]["p95"] > out["score"]
+    assert "팩터" in out["factor_bar"] and "전진" in out["factor_bar"]
     assert {c["half"]["A"] for c in P.walk_forward_c.calls} == {0}                # 거르개는 탐색 절반만
 
 
@@ -152,6 +162,9 @@ def test_screen_null_too_few_finite_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.20 if null is None else (nan if null[1] > 85 else -0.5)))
     out = S.screen(_run(sha, 0.20), {"A": {"half": 0, "era": "A"}, "B": {"half": 0, "era": "B"}}, path)
     assert out["pass"] is False and out["null_n"] == 85 and any("null 표본 부족" in r for r in out["reasons"])
+    monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.20 if null is None else (nan if null[1] > 275 else -0.5)))
+    out = S.screen(_run(sha, 0.20), {"A": {"half": 0, "era": "A"}, "B": {"half": 0, "era": "B"}}, path)
+    assert out["pass"] is True and out["null_n"] == 275                                     # 유한 ≥ 270 이면 된다
 
 
 @pytest.mark.parametrize("bad", ["score", "ev", "conc", "trades", "repro"])
@@ -182,7 +195,7 @@ def test_confirm_refuses_same_sha_twice(tmp_path, monkeypatch):
     os.remove(S.CONFIRM)                                                           # 작업 트리 원장을 지워도 사본이 막는다
     with pytest.raises(SystemExit, match="이미"):
         S.confirm(sha, path, {sha})
-    assert len(P.walk_forward_c.calls) == 1
+    assert len(P.walk_forward_c.calls) == 2                                        # 확인 + 최대 종목 제거 재실행
 
 
 def test_confirm_crash_burns_attempt(tmp_path, monkeypatch):
@@ -223,10 +236,13 @@ def test_confirm_lockbox_require_screen_and_reviewed(tmp_path, monkeypatch, _iso
         S.confirm(sha2, path2, {sha2})
     with pytest.raises(SystemExit, match="reviewed"):                              # 통과했어도 reviewed 밖이면 거부
         S.confirm(sha, path, set())
+    with pytest.raises(SystemExit, match="기록이 없다"):                           # 새 거르개 뒤 사람 열람(review) 행이 없으면 거부
+        S.confirm(sha, path, {sha})
+    P._append(S.SCREEN, {"kind": "review", "reviewed": [sha], "excluded": {}})
     S.confirm(sha, path, {sha})
     with pytest.raises(SystemExit, match="reviewed"):
         S.lockbox(sha, path, set())
-    assert _iso["locked"] == [] and len(P.walk_forward_c.calls) == 1
+    assert _iso["locked"] == [] and len(P.walk_forward_c.calls) == 2
 
 
 # ---------------------------------------------------------------- 잠금 1회
@@ -245,8 +261,9 @@ def test_lockbox_once(tmp_path, monkeypatch, _iso):
     row = S.lockbox(sha, path, rv)
     assert row["pass"] is True and len(row["folds"]) == 11
     assert sorted(_iso["locked"]) == ["A", "B", "C"]
-    lk = P.walk_forward_c.calls[2:]
-    assert [c["eras"] for c in lk] == [("A", "B"), ("C",)] and {h for c in lk for h in c["half"].values()} == {1}
+    lk = P.walk_forward_c.calls[4:]                                                # 확인 둘 × (실행 + 최대 종목 제거)
+    assert [c["eras"] for c in lk] == [("A", "B"), ("C",), ("A", "B"), ("C",)] and {h for c in lk for h in c["half"].values()} == {1}
+    assert [bool(c["exclude"]) for c in lk] == [False, False, True, True] and len({c["exclude"] for c in lk[2:]}) == 1
     assert [r["status"] for r in P._read_jsonl(S.LOCKBOX)] == ["opened", "result"]
     with pytest.raises(SystemExit, match="잠금"):
         S.lockbox(sha2, path2, rv)                                                # 다른 sha 도 두 번째는 거부
@@ -332,6 +349,7 @@ def test_reviewed_sha_required(tmp_path, monkeypatch, _iso):
             S.main(["--confirm", "--reviewed", bad])
     assert not os.path.exists(S.CONFIRM) and _iso["locked"] == []
     S.main(["--confirm", "--reviewed", f"{trains['lo'][1]},{trains['hi'][1]}"])
+    assert _iso["integrity_locked"][-1] is True                                    # 확인·잠금 전에 잠금 캐시 sha 까지 대조
     sel = json.load(open(S.SELECTION))
     assert sel["chosen"]["train_sha"] == trains["hi"][1] and sel["frozen_params"]["era"] == "C"
     assert any("dirty" in r for r in sel["reasons"])                               # 풀 제외 사유가 남는다
@@ -424,3 +442,117 @@ def test_extract_train_from_commit(tmp_path, monkeypatch):
     assert open(p).read() == "v2_discarded\n"
     with pytest.raises(SystemExit, match="sha"):
         S.extract_train(shas[0][1], shas[1][0])                                   # 내용이 다른 commit 은 거부
+
+
+# ---------------------------------------------------------------- 정정 0 M3: 확인 유효성 바·잠금 최대 종목 바
+
+@pytest.mark.parametrize("bad", ["trades", "ev", "top_stock"])
+def test_confirm_validity_bars(tmp_path, monkeypatch, bad):
+    path, sha = _train(tmp_path, "a")
+    _screened([sha])
+    wf = _fake_wf(lambda s, e, h, null: 0.3, n=10 if bad == "trades" else 30, ret=-0.01 if bad == "ev" else 0.02,
+                  excl_alpha=-0.01 if bad == "top_stock" else None)
+    monkeypatch.setattr(P, "walk_forward_c", wf)
+    row = S.confirm(sha, path, {sha})
+    want = {"trades": "trades_ge_20_per_year", "ev": "ev_net_2x_pos", "top_stock": "top_stock_removed_pos"}[bad]
+    assert row["valid"] is False and row["bars"][want] is False
+    assert sum(not v for v in row["bars"].values()) == 1
+    assert len(wf.calls) == 2 and wf.calls[0]["exclude"] == () and len(wf.calls[1]["exclude"]) == 1 and wf.calls[1]["fixed"]
+
+
+def test_invalid_confirm_cannot_be_picked(tmp_path, monkeypatch, _iso):
+    trains = _setup_main(tmp_path, monkeypatch, (0.1, 0.3), 0.1)
+    S.main(["--screen"])
+    hi, lo = trains["hi"][1], trains["lo"][1]
+    base = P.walk_forward_c
+
+    def wf2(D_by_era, workers, train_path=P.TRAIN, fixed=None, null=None, neutral=None, cost_mult=P.COST_MULT, exclude=(), mask=None,
+            eras=None):
+        r = base(D_by_era, workers, train_path, fixed, null, neutral, cost_mult, exclude, mask, eras)
+        sha = hashlib.sha256(open(train_path, "rb").read()).hexdigest()[:16]
+        if exclude and sha == hi:                                                 # hi(확인 score 큼)는 최대 종목을 빼면 음수
+            for f in r["folds"]:
+                f["alpha"] = -0.2
+        return r
+    wf2.calls = base.calls
+    monkeypatch.setattr(P, "walk_forward_c", wf2)
+    S.main(["--confirm", "--reviewed", f"{hi},{lo}"])
+    sel = json.load(open(S.SELECTION))
+    assert sel["picked"]["train_sha"] == lo and sel["chosen"]["train_sha"] == lo      # 무효인 hi 는 순위에 들지 못한다
+    conf = {r["train_sha"]: r for r in sel["confirm"]}
+    assert conf[hi]["valid"] is False and conf[lo]["valid"] is True
+
+
+def test_no_valid_confirm_writes_no_candidate_without_lockbox(tmp_path, monkeypatch, _iso):
+    trains = _setup_main(tmp_path, monkeypatch, (0.1, 0.3), 0.1)
+    S.main(["--screen"])
+    monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.1, excl_alpha=-0.1))
+    S.main(["--confirm", "--reviewed", f"{trains['hi'][1]},{trains['lo'][1]}"])
+    sel = json.load(open(S.SELECTION))
+    assert sel["chosen"] is None and sel["picked"] is None and sel["lockbox"] is None
+    assert any("유효성" in r for r in sel["reasons"]) and _iso["locked"] == [] and not os.path.exists(S.LOCKBOX)
+
+
+def test_lockbox_top_stock_bar(tmp_path, monkeypatch):
+    path, sha = _train(tmp_path, "a")
+    _screened([sha])
+    monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.1))
+    S.confirm(sha, path, {sha})
+    monkeypatch.setattr(P, "walk_forward_c", _fake_wf(lambda s, e, h, null: 0.1, excl_alpha=-0.05))
+    row = S.lockbox(sha, path, {sha})
+    assert row["bars"] == {"score_pos": True, "ev_net_2x_pos": True, "top_stock_removed_pos": False} and row["pass"] is False
+
+
+# ---------------------------------------------------------------- 정정 0 M5: 사람 열람 제외(열거 사유, 열기 전 기록)
+
+def test_parse_exclude_only_enumerated_reasons():
+    assert S.parse_exclude(["a" * 16 + ":e104063", "b" * 16 + ":news_param"]) == {"a" * 16: "e104063", "b" * 16: "news_param"}
+    for bad in (["a" * 16], ["a" * 16 + ":마음에 안 듦"], ["a" * 16 + ":e104063", "a" * 16 + ":news_param"]):
+        with pytest.raises(SystemExit):
+            S.parse_exclude(bad)
+    assert set(S.EXCLUDE_REASONS) == {"e104063", "neutral_input", "date_code_target", "news_param"}
+
+
+def test_exclude_recorded_before_confirm_and_frozen_after(tmp_path, monkeypatch, _iso):
+    trains = _setup_main(tmp_path, monkeypatch, (0.1, 0.3), 0.1)
+    hi, lo = trains["hi"][1], trains["lo"][1]
+    S.main(["--screen"])
+    with pytest.raises(SystemExit, match="거르개 통과 목록에 없다"):
+        S.main(["--confirm", "--reviewed", f"{hi},{lo}", "--exclude", f"{trains['bad'][1]}:e104063"])
+    assert not os.path.exists(S.CONFIRM)
+    monkeypatch.setattr(S, "lockbox", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("잠금 전 멈춤(주입)")))
+    with pytest.raises(RuntimeError):
+        S.main(["--confirm", "--reviewed", f"{hi},{lo}", "--exclude", f"{hi}:neutral_input"])
+    rows = P._read_jsonl(S.SCREEN)
+    assert rows[-1]["kind"] == "review" and rows[-1]["excluded"] == {hi: "neutral_input"}
+    conf = P._read_jsonl(S.CONFIRM)
+    assert {r["train_sha"] for r in conf} == {lo}                                  # 제외된 hi 는 열리지 않았다
+    with pytest.raises(SystemExit, match="제외됐다"):
+        S.confirm(hi, trains["hi"][0], {hi, lo})                                   # import 로도 못 연다
+    with pytest.raises(SystemExit, match="바꿀 수 없다"):
+        S.main(["--confirm", "--reviewed", f"{hi},{lo}"])                          # 확인이 열린 뒤 제외를 거둘 수 없다
+    assert {r["train_sha"] for r in P._read_jsonl(S.CONFIRM)} == {lo}
+
+
+# ---------------------------------------------------------------- 정정 0 M4: 잠금 절반 = 태그 전 디스크 캐시 + MANIFEST sha
+
+def test_load_locked_reads_manifest_pinned_file(tmp_path, monkeypatch):
+    import numpy as np
+
+    from research.combined import data as cd
+    monkeypatch.setattr(cd, "CACHE", str(tmp_path / "combined"))
+    monkeypatch.setattr(cd, "LOCKED_CACHE", str(tmp_path / "combined_locked"))
+    monkeypatch.setattr(P, "MANIFEST", str(tmp_path / "MANIFEST.json"))
+    codes = [f"{i:06d}" for i in range(10)]
+    F = {"codes": codes, "days": pd.bdate_range("2020-01-01", periods=3), "C": np.ones((10, 3)), "mkt_real": np.zeros(10, np.int8),
+         "half": np.array([P.half_of(c) for c in codes], np.int8), "mkt": np.zeros(10, np.int64)}
+    cd.write_halves(F, "A")
+    json.dump({}, open(P.MANIFEST, "w"))
+    with pytest.raises(SystemExit, match="MANIFEST"):
+        _REAL_LOAD_LOCKED("A")
+    json.dump({"locked/era_A_s1.pkl": "0" * 64}, open(P.MANIFEST, "w"))
+    with pytest.raises(SystemExit, match="sha"):
+        _REAL_LOAD_LOCKED("A")
+    json.dump({"locked/era_A_s1.pkl": P.sha_file(cd.cache_path("A", 1))}, open(P.MANIFEST, "w"))
+    D = _REAL_LOAD_LOCKED("A")
+    assert (D["half"] == 1).all() and D["half_id"] == 1

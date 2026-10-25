@@ -118,3 +118,100 @@ def test_tz_aware_raises(tmp_path):
     _write(tmp_path, "000001", [("2023-03-17T09:00:00+09:00", "a")])
     with pytest.raises(ValueError, match="tz-aware"):
         news_arrays(["000001"], DAYS, tmp_path)
+
+
+# ---------------------------------------------------------------- 정정 0 C1: 뉴스 구간 uni 끄기·누수 검사·신선도
+
+import numpy as np  # noqa: E402
+
+from research.combined import news as N  # noqa: E402
+
+WIN = pd.bdate_range("2023-01-02", periods=400)                 # 2023-03-15 앞뒤를 걸친다
+W0 = int(np.searchsorted(WIN, N.NEWS_START))
+
+
+def _panel(seed=0):
+    """생존 8(구간 첫날부터 known, 기사 잦음) · 폐지 8(파일 없음 = known 없음) · 잘린 page_cap 8(첫 기사가 구간 중간 — 미래 기사량이 정한 시작)."""
+    rng = np.random.default_rng(seed)
+    n, t = 24, len(WIN)
+    known = np.zeros((n, t), bool)
+    known[:8, W0:] = True
+    known[16:, W0 + 150:] = True
+    n_all = np.where(known, rng.poisson(2.0, (n, t)), 0).astype(np.uint16)
+    dl = np.r_[np.zeros(8, bool), np.ones(8, bool), np.zeros(8, bool)]
+    capped = np.r_[np.zeros(16, bool), np.ones(8, bool)]
+    return n_all, known, np.ones((n, t), bool), dl, capped
+
+
+def _done(d, code, status, since="2023-03-16"):
+    (d / f"{code}.done").write_text(json.dumps({"status": status, "rows": 9999, "since": since}))
+
+
+def test_news_excluded_is_a_build_time_code_set(tmp_path):
+    _write(tmp_path, "000001", [("2023-03-16T09:00:00", "a")])                  # 정상
+    _write(tmp_path, "000002", [("2024-08-01T09:00:00", "b")])                  # page_cap, 잘림(첫 기사 늦음)
+    _done(tmp_path, "000002", "page_cap")
+    _write(tmp_path, "000003", [("2023-03-16T11:00:00", "c")])                  # page_cap 이지만 수집 시작일에 닿음
+    _done(tmp_path, "000003", "page_cap")
+    _write(tmp_path, "000004", [("2024-08-01T09:00:00", "d")])                  # 늦게 시작해도 page_cap 아님(상장 등) — 빼지 않는다
+    _done(tmp_path, "000004", "done")
+    ex, det = N.news_excluded(["000001", "000002", "000003", "000004", "999999"], tmp_path)
+    assert ex.tolist() == [False, True, False, False, True]
+    assert det == {"nofile": ["999999"], "page_cap_late": ["000002"], "page_cap_kept": ["000003"]}
+
+
+def test_uni_off_whole_window_not_time_dependent():
+    n_all, known, uni, dl, capped = _panel()
+    ex = dl | capped
+    u2, n_off = N.news_uni_off(uni, ex, WIN)
+    assert u2[:, :W0].all()                                                   # 뉴스 구간 전은 그대로
+    assert not u2[ex, W0:].any() and u2[~ex, W0:].all()                      # 제외 종목은 구간 **전체**(첫 기사 뒤도) 끈다
+    assert n_off == int((uni & ~u2).sum()) == int(ex.sum()) * (len(WIN) - W0)
+
+
+def test_news_leak_check_fires_without_exclusion_and_passes_with_it():
+    n_all, known, uni, dl, capped = _panel()
+    with pytest.raises(ValueError, match="known delisted.*known capped"):
+        N.check_news_leak(n_all, known, uni, WIN, dl, capped=capped)        # 위반 주입: 제외를 안 하면 "0 = 모름" 이 폐지·page_cap 표지
+    only_dead, _ = N.news_uni_off(uni, dl, WIN)
+    with pytest.raises(ValueError, match="known capped"):
+        N.check_news_leak(n_all, known, only_dead, WIN, dl, capped=capped)  # page_cap 제외만 빠져도 잡힌다
+    u2, _ = N.news_uni_off(uni, dl | capped, WIN)
+    out = N.check_news_leak(n_all, known, u2, WIN, dl, capped=capped)
+    assert out["known_share_delisted"] is None and out["known_cells_delisted"] == 0   # 빈 집단은 비교하지 않는다(기록)
+    assert out["known_share_capped"] is None and out["known_share_alive"] == 1.0
+
+
+def test_news_leak_check_zero60_and_late_groups():
+    """늦게 시작한 종목(상장 전 uni 없음)이 시작 뒤 기사가 드물면(60일 무기사 잦음) 이른 시작과 달라 실패한다(page_cap 표시 없이도)."""
+    n_all, known, uni, dl, capped = _panel()
+    u2, _ = N.news_uni_off(uni, dl, WIN)
+    u2[16:, :W0 + 150] = False                                                # 상장 전: uni 없음 → known 몫은 같다
+    sparse = n_all.copy()
+    sparse[16:] = 0
+    sparse[16:, W0 + 150] = 1                                                 # 첫 기사 하나 뒤로 무기사
+    with pytest.raises(ValueError, match="zero60 late"):
+        N.check_news_leak(sparse, known, u2, WIN, dl)
+    out = N.check_news_leak(n_all, known, u2, WIN, dl)
+    assert out["known_share_late"] == out["known_share_early"] == 1.0 and out["zero60_share_late"] < 0.05
+    G = N.news_groups(known, WIN, dl)
+    assert G["late"][16:].all() and G["early"][:8].all() and not (G["late"] | G["early"])[8:16].any()
+
+
+def test_zero60_window_counts_only_fully_known_windows():
+    n = np.zeros((1, 100), np.uint16)
+    n[0, 10] = 1
+    k = np.zeros((1, 100), bool)
+    k[0, 5:] = True
+    z, full = N._zero60(n, k)
+    assert not full[0, :64].any() and full[0, 64:].all()                     # 창 첫 칸(t-59)이 known 이어야
+    assert not z[0, 64:70].any() and z[0, 70:].all()                          # t=10 기사는 t=69 까지 창 안
+
+
+def test_archive_fresh_requires_article_at_or_after_cutoff(tmp_path):
+    _write(tmp_path, "000001", [("2026-10-22T15:09:00", "a")])
+    _write(tmp_path, "000002", [("2026-10-21T09:00:00", "b")])
+    assert not N.archive_fresh(tmp_path, "2026-10-22")
+    _write(tmp_path, "000003", [("2026-10-22T15:10:00", "c")])
+    assert N.archive_fresh(tmp_path, "2026-10-22") and not N.archive_fresh(tmp_path, "2026-10-23")
+    assert N.archive_max_ts(tmp_path) == pd.Timestamp("2026-10-22 15:10")

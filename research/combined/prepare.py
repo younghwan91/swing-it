@@ -13,7 +13,8 @@ v4 와 다른 점(전부):
 5. 폴드마다 ``trade_key``(시험 체결 (종목 위치, 진입일 위치) 정렬 목록 sha1 앞 12자). 거래 표에 ci·ti 열, fold = 전체 폴드 번호(v4 는 시대 안 번호).
 6. 쏠림 진단 셋(``concentration``): 상위 1% 거래 신호 칸 끄기 · 최대 기여 한 종목 빼기 · 일별 선택 알파 상위 10일 0. v4 의 top5 제거를 대신한다.
    상위 1% 거래 수 = ceil(1% × 시험 체결 수)(최소 1).
-7. 부품 제거(``ablation``): 레포 키를 중립값으로 바꾸고 폴드 파라미터 고정 재실행 → 체결 대칭차 ≥ 5% ∧ 작동 폴드 점수 기여 > 0.
+7. 부품 제거(``ablation``): 레포 키를 중립값으로 바꾸고 폴드 파라미터 고정 재실행 → 체결 대칭차 ≥ 5% ∧ 작동 폴드 점수 기여 > 0
+   ∧ 제거 실행 작동 폴드 체결 ≥ 원래의 50% ∧ 폴드마다 ≥ 5(정정 0 M1 — 중립 입력에서 전략이 멈추면 자격 아님).
    작동 폴드 = scalp 10폴드 전부, daytrade 시험 연도 2023·2024. 대칭차·점수 모두 작동 폴드에서 잰다. ``eligible`` = 둘 다 ok.
    자격은 keep 과 무관하다(후보 고르기 select.py 의 거르개).
 8. keep(``beats_c``): 폴드 조건이 "10 중 6 개선" → "체결이 바뀐 폴드(≥ 1) 중 alpha 개선 과반". top5 조건 → 쏠림 셋 각각 BEST 의 같은 값 − 0.01 이상.
@@ -45,8 +46,9 @@ v4 와 다른 점(전부):
     변경 메서드 호출(append·update·setdefault·pop·… — ``np.sort`` 같은 모듈 함수 자체는 허용), 모듈 이름을 속성 접근 외 값으로 쓰기,
     ``print``, 모듈 최상위의 실행문(설명문·import·def/class·리터럴 대입만 — 적재 횟수를 세는 길 차단).
 13. 격리: 캐시 디렉터리를 가리고 era_A·era_B 만 다시 보인다. 원장 사본(평가 전에 만들어 늘 가린다)·~/git/daytrade-it(뉴스 아카이브)·
-    ~/git/quant-airflow·~/.config·~/.ssh·v4 캐시·v4 보관본·v4 원장 사본을 가린다.
-14. 무결성: 태그 ``combined-prereg-1``, 감시 파일 = 결합 prepare·data·gaps·news·select + v4 감시 파일 전부, MANIFEST 에 캐시 A·B·C sha.
+    ~/git/quant-airflow·~/.config·~/.ssh·v4 캐시·v4 보관본·v4 원장 사본·잠금 절반 캐시를 가린다. 시간 초과 30분 = crash.
+14. 무결성: 태그 ``combined-prereg-1``, 감시 파일 = 결합 prepare·data·gaps·news·select + v4 감시 파일 전부, MANIFEST 에 캐시 A·B·C sha
+    (+ 잠금 절반 A·B·C sha — select.py 만 대조). 평가마다 commit 을 ``refs/combined/<sha>/<commit>`` 으로 붙잡는다.
     ``--build`` 는 data.build_all 에 맡기고 MANIFEST 는 쓰지 않는다(``--manifest`` 따로). ``--final`` 은 없다.
 15. 원장 기록: 평가 행에 git commit(앞 12자)·dirty(train.py 가 HEAD 와 다름), 폴드별 era·test·params·alpha·trade_key·n, 쏠림 셋, 부품 제거,
     eligible, 거래당 값을 남긴다(select.py 가 읽는다). BEST.json·BEST_HISTORY 도 사본에 쓴다.
@@ -94,7 +96,7 @@ from research.autoresearch.prepare import (  # noqa: E402,F401 — select.py 가
     sample_params,
     sha_file,
 )
-from research.combined.data import CACHE, ERAS_C, REPO_KEYS, VIEW_KEYS_C, view_c  # noqa: E402
+from research.combined.data import CACHE, ERAS_C, LOCKED_CACHE, REPO_KEYS, VIEW_KEYS_C, view_c  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRAIN = os.path.join(HERE, "train.py")
@@ -114,6 +116,8 @@ N_EVAL, DISPERSION, MIN_TRAIN_TRADES_PER_YEAR = V4.N_EVAL, V4.DISPERSION, V4.MIN
 KEEP_DSCORE, KEEP_CONC_SLACK = 0.005, 0.01
 MAX_TRIALS, MAX_SINCE_KEEP = 150, 30
 ABL_MIN_CHANGED = 0.05
+ABL_MIN_KEEP_TRADES, ABL_MIN_FOLD_TRADES = 0.5, 5                         # 제거 실행 체결 ≥ 원래의 50% ∧ 작동 폴드마다 ≥ 5(정정 0 M1)
+SANDBOX_TIMEOUT_S = 1800                                                  # 격리 실행 시간 초과 = crash(시행으로 센다)
 NEWS_YEARS = (2023, 2024)
 TOP_DAYS, TOP_TRADE_FRAC = 10, 0.01
 CONC_KEYS = ("top1pct", "top_stock", "top10d")
@@ -125,7 +129,7 @@ REF_PARAMS = {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "exit_kind": "
 BASELINE_TRAIN_SHA = "9d9ed460ff597f1d"                                   # 기준선 train.py sha256 앞 16자(테스트가 대조)
 _SANDBOX_HIDE_FIXED = tuple(os.path.expanduser(p) for p in (
     "~/git/daytrade-it", "~/git/quant-airflow", "~/.config", "~/.ssh", "~/.cache/cc-swing/scratch/autoresearch",
-    "~/.cache/cc-swing/autoresearch_archive")) + (V4.SHADOW,)
+    "~/.cache/cc-swing/autoresearch_archive")) + (V4.SHADOW, LOCKED_CACHE)
 _G: dict = {}
 
 
@@ -250,9 +254,11 @@ def own_signals(sig, shape) -> dict:
     return out
 
 
-def call_signals(S: dict, V: dict, x: dict) -> dict:
-    """signals 호출의 유일한 길 — x 는 사본으로 넘기고(train 이 평가기 파라미터를 고치지 못한다) 결과는 곧바로 소유 사본으로."""
-    return own_signals(S["signals"](V, dict(x)), V["C"].shape)
+def call_signals(S: dict, V: dict, x: dict, shape: "tuple | None" = None) -> dict:
+    """signals 호출의 유일한 길 — x 는 사본으로 넘기고(train 이 평가기 파라미터를 고치지 못한다) 결과는 곧바로 소유 사본으로.
+    기대 모양은 train 코드가 돌기 **전에** 정한다(``shape`` 또는 호출 전 V["C"].shape) — signals 가 V["C"] 를 바꿔 끼워도 모양 검사를 못 속인다."""
+    shape = tuple(V["C"].shape if shape is None else shape)
+    return own_signals(S["signals"](V, dict(x)), shape)
 
 
 def sig_hash(sig: dict) -> str:
@@ -339,9 +345,9 @@ def check_points(spec: dict, n_folds: int, ei: int, seed: int, k: int = TRAIN_CH
     return out
 
 
-def _signals_or_err(S: dict, V: dict, x: dict):
+def _signals_or_err(S: dict, V: dict, x: dict, shape: "tuple | None" = None):
     try:
-        return call_signals(S, V, x)
+        return call_signals(S, V, x, shape)
     except Exception:  # noqa: BLE001 — 오류(형식 거부 포함)도 비교 대상(같은 x 면 어디서나 같아야 한다)
         return None
 
@@ -349,7 +355,7 @@ def _signals_or_err(S: dict, V: dict, x: dict):
 def _train_point(args):
     fi, j, x, cfg = args
     D, S, lo, hi = _G["D"], _G["S"], _G["folds"][fi][0], _G["folds"][fi][1]
-    sig = _signals_or_err(S, _G["V"], x)                             # 소유 사본 — 지문·시뮬레이션 사이에 train 코드는 돌지 않는다
+    sig = _signals_or_err(S, _G["V"], x, D["C"].shape)               # 소유 사본 — 지문·시뮬레이션 사이에 train 코드는 돌지 않는다
     h = "ERR" if sig is None else sig_hash(sig)                      # 고원 선택에 실제로 쓴 신호의 지문(새 프로세스 값과 비교)
     try:
         if sig is None:
@@ -389,7 +395,7 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
                 pts_all[fi] = (pts, U)
                 tasks += [(fi, j, x) for j, x in enumerate(pts)]
             tasks = [(*t, c) for t, c in zip(tasks, fresh_cfgs(train_path, [t[2] for t in tasks]), strict=True)]
-            _signals_or_err(S, _G["V"], tasks[0][2])                 # 부모에서 train.py 캐시를 데운다(fork 공유, 결과는 버린다)
+            _signals_or_err(S, _G["V"], tasks[0][2], D["C"].shape)   # 부모에서 train.py 캐시를 데운다(fork 공유, 결과는 버린다)
             with mp.get_context("fork").Pool(max(1, workers)) as pool:
                 out = pool.map(_train_point, tasks, chunksize=1)
             chosen, ph = [], res["point_hash"].setdefault(era, {})
@@ -403,7 +409,7 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
         cfgs = fresh_cfgs(train_path, chosen)
         for fi, (_, lo, hi) in enumerate(E["folds"]):
             x, cfg = chosen[fi], cfgs[fi]
-            sig = call_signals(S, _G["V"], x)                        # 소유 사본 — 여기서 시뮬레이션 끝까지 train 코드를 부르지 않는다
+            sig = call_signals(S, _G["V"], x, D["C"].shape)          # 소유 사본 — 여기서 시뮬레이션 끝까지 train 코드를 부르지 않는다
             res["sig_hash"].append(sig_hash(sig))
             if null and null[0] == "rank":
                 sig = {**sig, "score": rng.random(D["C"].shape)}
@@ -501,7 +507,10 @@ def _tset(res: dict, idx: list) -> set:
 
 
 def ablation(D_by_era: dict, res: dict, train_path: str = TRAIN, eras: "dict | None" = None) -> dict:
-    """레포 부품 제거 — 중립 V 로 폴드 파라미터 고정 재실행. 작동 폴드에서 체결 대칭차 ≥ 5% ∧ 점수 기여 > 0 이면 ok."""
+    """레포 부품 제거 — 중립 V 로 폴드 파라미터 고정 재실행. 작동 폴드에서 체결 대칭차 ≥ 5% ∧ 점수 기여 > 0 ∧
+    제거 실행이 **여전히 거래한다**(작동 폴드 체결 합 ≥ 원래의 50% ∧ 폴드마다 ≥ 5)이면 ok.
+    마지막 조건(정정 0 M1): 중립 입력에서 거래를 멈추는 부품(news_known 으로 cand 를 막는 문 등)은 "부품 끔"이 아니라 "전략 끔"이라
+    dscore 가 공짜로 양수가 된다 — 그것을 자격으로 치지 않는다. 중립 입력 = 통과(pass-through)가 program 규칙이다."""
     out = {}
     for repo in REPO_KEYS:
         idx = active_folds(res["folds"], repo)
@@ -509,7 +518,13 @@ def ablation(D_by_era: dict, res: dict, train_path: str = TRAIN, eras: "dict | N
         a, b = _tset(res, idx), _tset(r, idx)
         changed = len(a ^ b) / max(len(a), 1)
         dscore = score_of(_alphas(res, idx)) - score_of(_alphas(r, idx))
-        out[repo] = {"changed": float(changed), "dscore": float(dscore), "ok": bool(changed >= ABL_MIN_CHANGED and dscore > 0)}
+        n0 = sum(res["folds"][i]["n"] for i in idx)
+        n1 = sum(r["folds"][i]["n"] for i in idx)
+        fmin = min((r["folds"][i]["n"] for i in idx), default=0)
+        trades_ok = bool(n1 >= ABL_MIN_KEEP_TRADES * n0 and fmin >= ABL_MIN_FOLD_TRADES)
+        out[repo] = {"changed": float(changed), "dscore": float(dscore), "n_orig": int(n0), "n_removed": int(n1),
+                     "min_fold_n_removed": int(fmin), "trades_ok": trades_ok,
+                     "ok": bool(changed >= ABL_MIN_CHANGED and dscore > 0 and trades_ok)}
     out["eligible"] = all(out[r]["ok"] for r in REPO_KEYS)
     return out
 
@@ -538,10 +553,11 @@ def _cause_task(args):
         with open(src, "rb") as f:
             src = pickle.load(f)
     V = view_c(src) if mode == "full" else view_c(_cut(src, cut, shuffle_seed=cut if mode == "shuffle" else None))
+    shape = V["C"].shape                                             # train 코드가 돌기 전에
     S = load_strategy(train_path)
     out = []
     for x in xs:
-        g = _signals_or_err(S, V, x)
+        g = _signals_or_err(S, V, x, shape)
         if g is None:
             out.append((None, None, "ERR"))
         elif mode == "full":
@@ -720,6 +736,16 @@ def git_state() -> dict:
             "dirty": bool(st.stdout.strip()) if st.returncode == 0 else None}
 
 
+def pin_ref(sha: str, gs: dict) -> "str | None":
+    """평가한 commit 을 ``refs/combined/<train sha>/<commit 앞 12>`` 로 붙잡는다 — 루프가 discard 로 ``reset --hard`` 해도 gc 가 지우지 못해
+    select.py 가 원장 commit 에서 train.py 를 되살릴 수 있다. dirty·commit 없음이면 붙잡지 않는다(그 행은 어차피 풀에서 빠진다)."""
+    if not gs.get("commit") or gs.get("dirty") is not False:
+        return None
+    ref = f"refs/combined/{sha}/{gs['commit']}"
+    p = subprocess.run(["git", "-C", ROOT, "update-ref", ref, gs["commit"]], capture_output=True, text=True)
+    return ref if p.returncode == 0 else None
+
+
 def trial_state() -> dict:
     """n = 평가된 고유 train sha 수(crash 포함). since_keep = 마지막 keep(beats_best True 평가 행) 뒤 새 sha 수.
     stop = n ≥ 150 ∨ (keep 있음 ∧ since_keep ≥ 30)."""
@@ -773,7 +799,8 @@ def beats_c(s: dict, folds: list, conc: dict) -> "tuple[bool, str]":
                       + " · ".join(f"d{k} {v:+.4f}" for k, v in dconc.items()))
 
 
-def integrity(check_cache: bool = True) -> None:
+def integrity(check_cache: bool = True, check_locked: bool = False) -> None:
+    """태그·감시 파일·MANIFEST sha. ``check_locked`` = 잠금 절반 캐시 sha 까지(select.py 만 — 루프 평가마다 해시하지 않는다)."""
     def git(*a):
         return subprocess.run(["git", "-C", ROOT, *a], capture_output=True, text=True)
     if git("rev-parse", "-q", "--verify", f"refs/tags/{PREREG_TAG}").returncode != 0:
@@ -789,6 +816,9 @@ def integrity(check_cache: bool = True) -> None:
         if p.startswith("cache/"):
             if check_cache and sha_file(os.path.join(CACHE, p[6:])) != h:
                 raise SystemExit(f"캐시 {p} sha 불일치 — 평가 거부")
+        elif p.startswith("locked/"):
+            if check_locked and sha_file(os.path.join(LOCKED_CACHE, p[7:])) != h:
+                raise SystemExit(f"잠금 캐시 {p} sha 불일치 — 거부")
         elif p.startswith("ext/"):
             if sha_file(V4._ext_path(p[4:])) != h:
                 raise SystemExit(f"{p} sha 불일치 — 평가 거부")
@@ -802,6 +832,7 @@ def write_manifest() -> None:
         raise SystemExit(f"감시 파일 없음 — 매니페스트 거부: {missing}")
     man = {p: sha_file(os.path.join(ROOT, p)) for p in GUARDED_FILES}
     man.update({f"cache/era_{e}_s0.pkl": sha_file(os.path.join(CACHE, f"era_{e}_s0.pkl")) for e in CACHE_ERAS})
+    man.update({f"locked/era_{e}_s1.pkl": sha_file(os.path.join(LOCKED_CACHE, f"era_{e}_s1.pkl")) for e in CACHE_ERAS})
     man.update({f"ext/{p}": sha_file(V4._ext_path(p)) for p in V4.EXT_GUARDED})
     json.dump(man, open(MANIFEST, "w"), indent=1)
     log(f"MANIFEST.json 기록 — {len(man)} 항목")
@@ -809,21 +840,26 @@ def write_manifest() -> None:
 
 def _fmt(k: str, v) -> str:
     if isinstance(v, dict):
-        v = f"changed {v['changed']:.4f} · dscore {v['dscore']:+.4f} · ok {v['ok']}"
+        v = f"changed {v['changed']:.4f} · dscore {v['dscore']:+.4f} · trades_ok {v.get('trades_ok')} · ok {v['ok']}"
     elif v is None:
         v = "void"
     return f"{k + ':':22s} {v:.6f}" if isinstance(v, float) else f"{k + ':':22s} {v}"
 
 
 def _sandboxed(args: "list[str]", cur: str, stdin: str = ""):
-    """격리 실행 → 결과 dict. 실패하면 crash 행을 원장에 남기고(시행으로 센다) stderr 끝 20줄만 보이고 끝낸다(stdout 은 버린다)."""
-    p = subprocess.run(sandbox_cmd_c(args), capture_output=True, text=True, input=stdin)
-    line = [x for x in p.stdout.splitlines() if x.startswith("@@RESULT@@")]
-    if p.returncode != 0 or not line:
-        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": p.returncode,
+    """격리 실행 → 결과 dict. 실패·시간 초과(``SANDBOX_TIMEOUT_S``)면 crash 행을 원장에 남기고(시행으로 센다) stderr 끝 20줄만 보이고
+    끝낸다(stdout 은 버린다)."""
+    try:
+        p = subprocess.run(sandbox_cmd_c(args), capture_output=True, text=True, input=stdin, timeout=SANDBOX_TIMEOUT_S)
+        rc, err, line = p.returncode, p.stderr, [x for x in p.stdout.splitlines() if x.startswith("@@RESULT@@")]
+    except subprocess.TimeoutExpired as e:
+        err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        rc, line, err = "timeout", [], err + f"\n시간 초과({SANDBOX_TIMEOUT_S}s) — crash"
+    if rc != 0 or not line:
+        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": rc,
                        **git_state(), "evaluator": PREREG_TAG})
-        print("---\nscore:                 crash\n" + "\n".join(p.stderr.splitlines()[-CRASH_TAIL:]))
-        raise SystemExit(p.returncode or 1)
+        print("---\nscore:                 crash\n" + "\n".join(err.splitlines()[-CRASH_TAIL:]))
+        raise SystemExit(rc if isinstance(rc, int) and rc else 1)
     sys.stderr.write("\n".join(x for x in p.stderr.splitlines() if re.match(r"^\[\s*\d+s\] ", x) or x.startswith("경고")) + "\n")
     return json.loads(line[-1][len("@@RESULT@@"):])
 
@@ -836,6 +872,7 @@ def evaluate(workers: int) -> dict:
     os.makedirs(SHADOW, exist_ok=True)                                # 있어야 격리에서 가린다
     t0 = time.time()
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
+    pin_ref(cur, git_state())                                         # crash 여도 commit 을 붙잡는다
     r = _sandboxed(["--inner", "--workers", str(workers)], cur, stdin=f"{causality_seed(TRAIN)}\n")
     s, folds, conc, abl = r["summary"], r["folds"], r["conc"], r["ablation"]
     if s["train_sha"] != cur:

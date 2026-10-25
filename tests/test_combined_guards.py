@@ -14,6 +14,7 @@ import pytest
 from research.autoresearch import prepare as V4
 from research.combined import prepare as P
 
+_REAL_PIN = P.pin_ref
 TOY_FOLDS = [("2022-01-03", "2023-01-02", "2024-01-01"), ("2022-01-03", "2024-01-01", "2025-01-01")]
 
 
@@ -25,6 +26,7 @@ def _iso(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "SHADOW", str(tmp_path / "shadow"))
     monkeypatch.setattr(P, "BEST_HISTORY", str(tmp_path / "BEST_HISTORY.jsonl"))
     monkeypatch.setattr(P, "REFERENCE", str(tmp_path / "REFERENCE.json"))
+    monkeypatch.setattr(P, "pin_ref", lambda sha, gs: None)                       # 진짜 레포에 refs 를 만들지 않는다(전용 시험은 _REAL_PIN)
     V4._EXIT.clear()
     yield
     V4._EXIT.clear()
@@ -816,3 +818,134 @@ def test_eras_keyword_runs_other_era_without_global_swap(tmp_path):
     assert P.ablation({"Z": D}, res, used, eras=eras)["scalp"]["changed"] >= 0.05
     ok, why = P.causality_c({"Z": D}, res, used, workers=4, n_cut=4, eras=eras)
     assert ok, why
+
+
+# ---------------------------------------------------------------- 정정 0: 잠금 캐시 격리·MANIFEST, 시간 초과, refs, 모양 고정
+
+def test_locked_cache_hidden_in_sandbox():
+    from research.combined.data import LOCKED_CACHE
+    assert LOCKED_CACHE in P.sandbox_hide() and not LOCKED_CACHE.startswith(P.CACHE + os.sep)
+    cmd = P.sandbox_cmd_c(["--inner"])
+    binds = [a for a, _ in _pairs(cmd, "--ro-bind")]
+    assert not any(b.startswith(LOCKED_CACHE) for b in binds)
+    if os.path.isdir(LOCKED_CACHE):
+        assert LOCKED_CACHE in [a for a, _ in _pairs(cmd, "--tmpfs")]
+
+
+def test_manifest_and_integrity_cover_locked_cache(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    for rel in P.GUARDED_FILES:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(f"# {rel}\n")
+    cache, locked = tmp_path / "combined", tmp_path / "combined_locked"
+    cache.mkdir()
+    locked.mkdir()
+    for e in P.CACHE_ERAS:
+        (cache / f"era_{e}_s0.pkl").write_bytes(f"s0{e}".encode())
+        (locked / f"era_{e}_s1.pkl").write_bytes(f"s1{e}".encode())
+    man = root / "research/combined/MANIFEST.json"
+    monkeypatch.setattr(P, "ROOT", str(root))
+    monkeypatch.setattr(P, "MANIFEST", str(man))
+    monkeypatch.setattr(P, "CACHE", str(cache))
+    monkeypatch.setattr(P, "LOCKED_CACHE", str(locked))
+    monkeypatch.setattr(V4, "EXT_GUARDED", ())
+    P.write_manifest()
+    m = json.load(open(man))
+    assert {f"locked/era_{e}_s1.pkl" for e in P.CACHE_ERAS} <= set(m) and {f"cache/era_{e}_s0.pkl" for e in P.CACHE_ERAS} <= set(m)
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "prereg")
+    _git(root, "tag", P.PREREG_TAG)
+    P.integrity(check_locked=True)
+    (locked / "era_B_s1.pkl").write_bytes(b"tampered")
+    P.integrity()                                                                    # 루프 평가는 잠금 캐시를 해시하지 않는다
+    with pytest.raises(SystemExit, match="잠금 캐시"):
+        P.integrity(check_locked=True)
+
+
+def test_sandbox_timeout_is_a_crash_trial(tmp_path, monkeypatch, capsys):
+    tr = tmp_path / "train.py"
+    tr.write_text("# slow\n")
+    monkeypatch.setattr(P, "TRAIN", str(tr))
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    monkeypatch.setattr(P, "SANDBOX_TIMEOUT_S", 1)
+    monkeypatch.setattr(P, "sandbox_cmd_c", lambda args: [sys.executable, "-c", "import time, sys; print('SECRET'); sys.stdout.flush(); time.sleep(30)"])
+    with pytest.raises(SystemExit):
+        P.evaluate(1)
+    row = P._read_jsonl(P.RUNS)[-1]
+    assert row["crash"] is True and row["returncode"] == "timeout"
+    out = capsys.readouterr()
+    assert "SECRET" not in out.out + out.err and "시간 초과" in out.out
+    assert P.trial_state()["n"] == 1
+
+
+def test_pin_ref_keeps_discarded_commit_reachable(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    (root / "research/combined").mkdir(parents=True)
+    tr = root / "research/combined/train.py"
+    tr.write_text("# base\n")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    tr.write_text("# exp\n")
+    _git(root, "commit", "-qam", "exp")
+    monkeypatch.setattr(P, "ROOT", str(root))
+    monkeypatch.setattr(P, "TRAIN", str(tr))
+    gs = P.git_state()
+    ref = _REAL_PIN("a" * 16, gs)
+    assert ref == f"refs/combined/{'a' * 16}/{gs['commit']}"
+    _git(root, "reset", "-q", "--hard", "HEAD~1")                                    # 루프의 discard
+    _git(root, "reflog", "expire", "--expire=now", "--all")
+    _git(root, "gc", "-q", "--prune=now")
+    assert _git(root, "show", f"{gs['commit']}:research/combined/train.py").stdout == "# exp\n"
+    tr.write_text("# dirty\n")
+    assert _REAL_PIN("b" * 16, P.git_state()) is None                               # dirty 는 붙잡지 않는다
+    assert _REAL_PIN("c" * 16, {"commit": None, "dirty": None}) is None
+
+
+def test_signals_cannot_swap_V_C_to_pass_shape_check():
+    """기대 모양은 train 코드가 돌기 전에 정한다 — signals 가 V['C'] 를 작은 배열로 바꿔 끼우고 그 모양으로 돌려줘도 거부(Task 4 미뤄 둔 사소)."""
+    D = _toy()
+    V = P.neutral_view(D)
+
+    def sneaky(V, x):
+        V["C"] = V["C"][:1, :5]
+        return {"cand": np.ones((1, 5), bool), "score": np.ones((1, 5))}
+    with pytest.raises(TypeError, match="ndarray"):
+        P.call_signals({"signals": sneaky}, V, {})
+    V = P.neutral_view(D)
+    with pytest.raises(TypeError):
+        P.call_signals({"signals": sneaky}, V, {}, D["C"].shape)
+    ok = P.call_signals({"signals": lambda V, x: {"cand": np.ones(V["C"].shape, bool), "score": V["C"]}}, P.neutral_view(D), {})
+    assert ok["cand"].shape == D["C"].shape
+
+
+def test_ablation_requires_removed_run_to_keep_trading(tmp_path, monkeypatch):
+    """정정 0 M1: 중립 입력에서 거래를 멈추는 뉴스 문(cand & news_known)은 changed·dscore 가 공짜로 서도 자격이 아니다."""
+    D = _toy(n=6, t=780, start="2022-01-03", seed=None)                              # 고르게 오르는 종목 → 거래하면 알파 > 0
+    D["kx"] = np.full(780, 1000.0)
+    D["news_known"][:] = True
+    monkeypatch.setattr(P, "ERAS", {"A": {"folds": TOY_FOLDS}})
+    Ds = {"A": D}
+    fixed = [{"era": "A", "params": {}}] * 2
+    gate = _write_train(tmp_path / "gate.py", "def signals(V, x):\n    return {'cand': (V['C'] > 0) & V['news_known'], 'score': V['C']}\n")
+    res = P.walk_forward_c(Ds, 1, gate, fixed=fixed)
+    ab = P.ablation(Ds, res, gate)["daytrade"]
+    assert ab["changed"] >= P.ABL_MIN_CHANGED and ab["dscore"] > 0                     # 옛 규칙이면 ok 였다(위반 주입이 실제로 선다)
+    assert ab["n_removed"] == 0 and ab["trades_ok"] is False and ab["ok"] is False
+    # 통과(pass-through) 부품: 중립 입력에서 아무것도 막지 않는다 → 제거 실행이 여전히 거래한다
+    thru = _write_train(tmp_path / "thru.py", "def signals(V, x):\n    bad = V['news_known'] & (V['n_feat'] > 1)\n"
+                                             "    return {'cand': (V['C'] > 0) & ~bad, 'score': V['C']}\n")
+    ab2 = P.ablation(Ds, P.walk_forward_c(Ds, 1, thru, fixed=fixed), thru)["daytrade"]
+    assert ab2["trades_ok"] is True and ab2["n_removed"] >= ab2["n_orig"] * P.ABL_MIN_KEEP_TRADES
+
+
+def test_evaluate_pins_commit_even_on_crash(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(P, "pin_ref", lambda sha, gs: seen.append((sha, set(gs))))
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    monkeypatch.setattr(P, "sandbox_cmd_c", lambda args: [sys.executable, "-c", "raise SystemExit(2)"])
+    with pytest.raises(SystemExit):
+        P.evaluate(1)
+    cur = P.hashlib.sha256(open(P.TRAIN, "rb").read()).hexdigest()[:16]
+    assert seen == [(cur, {"commit", "dirty"})]

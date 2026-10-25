@@ -29,7 +29,9 @@
       "Read(**/research/combined/BEST_HISTORY.jsonl)",
       "Read(**/research/combined/last_run.json)",
       "Read(~/.cache/cc-swing/scratch/combined/**)",
-      "Read(~/.cache/cc-swing/combined_ledger/**)"
+      "Read(~/.cache/cc-swing/combined_ledger/**)",
+      "Read(**/research/combined/REFERENCE.json)",
+      "Read(~/.cache/cc-swing/scratch/combined_locked/**)"
     ]
   }
 }
