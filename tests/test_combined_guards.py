@@ -276,7 +276,7 @@ def test_lookahead_sees_news_and_gap_keys(tmp_path, monkeypatch, key, thr):
 
 
 PROBE = "/tmp/claude-1000/-home-young-git/ece1241f-233e-4b80-ba5e-41e11ecd7401/scratchpad/probe/stash_train.py"
-STASH_BODY = ("def signals(V, x):\n    C = V['C']\n    box = np.typecodes.setdefault('zz_stash_t4', [])\n"
+STASH_BODY = ("def signals(V, x):\n    C = V['C']\n    d = np.typecodes\n    box = d.setdefault('zz_stash_t4', [])\n"
               "    if not box or box[0].shape[1] < C.shape[1]:\n        box[:] = [C.copy()]\n"
               "    F = box[0]\n    t = C.shape[1]\n    nxt = pd.DataFrame(F.T).shift(-1).to_numpy().T[:, :t]\n"
               "    return {'cand': V['uni'] & ~(nxt < C * 0.98), 'score': C}\n")
@@ -292,7 +292,7 @@ def test_lint_rejects_module_state_stash():
                 "import numpy as np\nnp.typecodes['zz'] = 1\n", "import numpy as np\ndel np.zz\n", "x = 1\nprint(x)\n",
                 "import numpy as np\nf = lambda: np\n"):
         assert P.lint_train(bad), bad
-    assert P.lint_train("import numpy as np\nx = np.zeros(3)\nd = {}\nd['a'] = np.ones(2)\n") == []
+    assert P.lint_train("import numpy as np\nd = {}\ndef f():\n    x = np.zeros(3)\n    d['a'] = np.ones(2) + x\n") == []
 
 
 def test_causality_isolates_processes_against_stash(tmp_path, monkeypatch):
@@ -323,7 +323,7 @@ def test_causality_one_task_per_process(tmp_path, monkeypatch):
 def test_concentration_rerun_detects_state(tmp_path, monkeypatch):
     """평가 실행과 같은 V·파라미터의 재실행 신호가 다르면(호출 횟수로 바뀜) StateLeak — 쏠림·비용 1배 숫자를 믿을 수 없다."""
     Ds = _toy_loop(monkeypatch)
-    body = ("def signals(V, x):\n    box = np.typecodes.setdefault('zz_calls_c4', [])\n    box.append(1)\n"
+    body = ("def signals(V, x):\n    d = np.typecodes\n    box = d.setdefault('zz_calls_c4', [])\n    box.append(1)\n"
             "    late = len(box) > 2\n    return {'cand': V['uni'] & (V['C'] > (1e9 if late else 0)), 'score': V['C']}\n")
     tr = _write_train(tmp_path / "late.py", body)
     try:
@@ -364,7 +364,7 @@ def test_cfg_reading_signal_stash_is_neutralised_and_voided(tmp_path, monkeypatc
 def test_fresh_cfg_ignores_process_global_stash(tmp_path):
     """lint 를 피한 프로세스 전역 은닉(np.typecodes)도 — cfg 는 새 프로세스에서 계산해 숨긴 값을 못 본다."""
     src = ("import numpy as np\nimport pandas as pd\n"
-           "def signals(V, x):\n    np.typecodes.setdefault('zz_cfg_t4', []).append(1)\n    return {'cand': V['uni'], 'score': V['C']}\n"
+           "def signals(V, x):\n    d = np.typecodes\n    d.setdefault('zz_cfg_t4', []).append(1)\n    return {'cand': V['uni'], 'score': V['C']}\n"
            "def cfg(x):\n    return {'hard': 0.30 if np.typecodes.get('zz_cfg_t4') else 0.20}\n"
            "def get_strategy():\n    return {'params': {}, 'signals': signals, 'cfg': cfg}\n")
     (tmp_path / "g.py").write_text(src)
@@ -396,7 +396,135 @@ def test_causality_checks_training_points(tmp_path, monkeypatch):
     assert not ok, why
     ok, why = P.causality_c(Ds, res, write("fine.py", PLATEAU_STEER.replace("shift(-1)", "shift(1)")), workers=4, n_cut=4)
     assert ok, why
-    assert {x["a"] for x in P.check_points({"a": ("int", 0, 10)}, 2, 0)} - {5}       # 표본에 안 고른 점이 있다
+    assert {x["a"] for x in P.check_points({"a": ("int", 0, 10)}, 2, 0, seed=1)} - {5}   # 표본에 안 고른 점이 있다
+
+
+HEAD_A = "import numpy as np\nimport pandas as pd\n"
+TAIL_A = "def get_strategy():\n    return {'params': {'a': ('int', 0, 10)}, 'signals': signals, 'cfg': lambda x: {'pyramid': 0}}\n"
+RR5 = (HEAD_A + "np.typecodes.setdefault('zz_rr5', []).append(1)\n"
+       "def signals(V, x):\n    nxt = pd.DataFrame(V['C'].T).shift(-1).to_numpy().T\n"
+       "    cand = V['uni'] & (V['C'] > 0)\n    if x['a'] != 5 and len(np.typecodes['zz_rr5']) >= 2:\n"
+       "        cand = cand & ~(nxt > V['C'])\n    return {'cand': cand, 'score': V['C']}\n" + TAIL_A)
+# lint 를 피한 같은 우회: 적재 횟수를 get_strategy 안에서 별칭으로 센다(부모·fork 작업자 ≥ 2, 새 프로세스 1)
+RR5_ALIAS = (HEAD_A + "def signals(V, x):\n    d = np.typecodes\n    nxt = pd.DataFrame(V['C'].T).shift(-1).to_numpy().T\n"
+             "    cand = V['uni'] & (V['C'] > 0)\n    if x['a'] != 5 and len(d.get('zz_rr5b', [])) >= 2:\n"
+             "        cand = cand & ~(nxt > V['C'])\n    return {'cand': cand, 'score': V['C']}\n"
+             "def get_strategy():\n    d = np.typecodes\n    d.setdefault('zz_rr5b', []).append(1)\n"
+             "    return {'params': {'a': ('int', 0, 10)}, 'signals': signals, 'cfg': lambda x: {'pyramid': 0}}\n")
+# 모듈 자기 _C 에 호출 수를 세고 첫 호출 뒤에만 속이는 train(부모가 데운 뒤 fork 작업자는 늘 ≥ 2)
+COUNTER = (HEAD_A + "_C: dict = {}\n"
+           "def signals(V, x):\n    _C['n'] = _C.get('n', 0) + 1\n    nxt = pd.DataFrame(V['C'].T).shift(-1).to_numpy().T\n"
+           "    cand = V['uni'] & (V['C'] > 0)\n    if x['a'] != 5 and _C['n'] >= 2:\n"
+           "        cand = cand & ~(nxt > V['C'])\n    return {'cand': cand, 'score': V['C']}\n" + TAIL_A)
+
+
+def _salt(value="test-salt-0"):
+    os.makedirs(P.SHADOW, exist_ok=True)
+    with open(os.path.join(P.SHADOW, "causality_salt"), "w") as f:
+        f.write(value)
+
+
+def test_lint_rejects_module_top_code_and_module_mutation():
+    assert P.lint_train(RR5)                                                         # 리뷰 rr5 탐침: 모듈 최상위 실행
+    for bad in ("import numpy as np\nnp.typecodes.setdefault('z', [])\n", "import numpy as np\nX = np.zeros(3)\n",
+                "import numpy as np\ndef f():\n    np.typecodes.get('z').append(1)\n",
+                "import pandas as pd\ndef f():\n    pd.options.display.__setitem__('a', 1)\n",
+                "import numpy as np\ndef f():\n    np.typecodes.update({'z': 1})\n", "for i in range(2):\n    pass\n",
+                "import numpy as np\nif True:\n    pass\n"):
+        assert P.lint_train(bad), bad
+    ok = ('"""설명"""\nfrom __future__ import annotations\nimport numpy as np\n_C: dict = {}\nK = (1, -2.5, "a")\nM = {"a": [1, 2]}\n'
+          "def f(a):\n    b = np.sort(a)\n    c = np.append(b, 1)\n    d = {}\n    d.update({'x': 1})\n    return c\n")
+    assert P.lint_train(ok) == []
+
+
+def test_rr5_alias_variant_voided(tmp_path, monkeypatch):
+    """lint 를 피한 rr5(적재 횟수로 부모·fork 에서만 속임) — 고원 선택에 쓴 학습 점 신호 ≠ 새 프로세스 신호로 void."""
+    Ds = _toy_loop(monkeypatch)
+    _salt()
+    (tmp_path / "rr5b.py").write_text(RR5_ALIAS)
+    assert P.lint_train(RR5_ALIAS) == []
+    try:
+        s = P.run_all(Ds, 8, str(tmp_path / "rr5b.py"))["summary"]
+        assert s["void"] and s["lookahead_check"].startswith("fail"), s["lookahead_check"]
+    finally:
+        np.typecodes.pop("zz_rr5b", None)
+
+
+def test_call_counter_cheat_voided(tmp_path, monkeypatch):
+    Ds = _toy_loop(monkeypatch)
+    _salt()
+    (tmp_path / "cnt.py").write_text(COUNTER)
+    assert P.lint_train(COUNTER) == []
+    s = P.run_all(Ds, 8, str(tmp_path / "cnt.py"))["summary"]
+    assert s["void"] and s["lookahead_check"].startswith("fail"), s["lookahead_check"]
+    honest = tmp_path / "hon.py"
+    honest.write_text(COUNTER.replace("shift(-1)", "shift(1)").replace(" and _C['n'] >= 2", ""))
+    assert P.run_all(Ds, 8, str(honest))["summary"]["lookahead_check"].startswith("ok")
+
+
+def test_sampled_point_hash_must_match_worker(tmp_path, monkeypatch):
+    """fork 작업자가 고원 선택에 쓴 신호 지문(point_hash)이 새 프로세스 지문과 다르면 실패 — 절단 검사는 통과하는 경우."""
+    Ds = _toy_loop(monkeypatch)
+    tr = str(tmp_path / "fine.py")
+    (tmp_path / "fine.py").write_text(HEAD_A + PLATEAU_STEER.replace("shift(-1)", "shift(1)") + TAIL_A)
+    pts = [x for fi in range(2) for x in P.training_points({"a": ("int", 0, 10)}, fi, 0)[0]]
+    res = {"folds": [{"era": "A", "params": {"a": 5}}] * 2}
+    assert P.causality_c(Ds, res, tr, workers=4, n_cut=2, check_seed=7)[0]
+    bad = {**res, "point_hash": {"A": {P._xkey(x): "worker-saw-something-else" for x in pts}}}
+    ok, why = P.causality_c(Ds, bad, tr, workers=4, n_cut=2, check_seed=7)
+    assert not ok and "학습 점" in why, why
+
+
+def test_causality_uses_salted_sample_by_default(tmp_path, monkeypatch):
+    """check_seed 없이 부르면 비밀 소금 시드의 표본을 검사한다 — 소금 표본에만 있는 점의 지문이 틀리면 걸린다."""
+    Ds = _toy_loop(monkeypatch)
+    _salt("salt-for-default")
+    tr = str(tmp_path / "fine.py")
+    (tmp_path / "fine.py").write_text(HEAD_A + PLATEAU_STEER.replace("shift(-1)", "shift(1)") + TAIL_A)
+    spec = {"a": ("int", 0, 10)}
+    salted = P.check_points(spec, 2, 0, P.causality_seed(tr))
+    other = {P._xkey(x) for x in P.check_points(spec, 2, 0, 0)}
+    only = [x for x in salted if P._xkey(x) not in other and x != {"a": 5}]
+    assert only
+    res = {"folds": [{"era": "A", "params": {"a": 5}}] * 2, "point_hash": {"A": {P._xkey(x): "bogus" for x in only}}}
+    ok, why = P.causality_c(Ds, res, tr, workers=4, n_cut=2)
+    assert not ok and "학습 점" in why, why
+
+
+def test_signals_error_only_when_truncated_fails(tmp_path, monkeypatch):
+    """절단된 V 에서만 예외를 내는 train(길이·시점을 보고 다르게 군다) — 오류 불일치로 실패."""
+    Ds = _toy_loop(monkeypatch)
+    body = ("def signals(V, x):\n    if V['C'].shape[1] < 700:\n        raise ValueError('short')\n"
+            "    return {'cand': V['uni'], 'score': V['C']}\n")
+    ok, why = P.causality_c(Ds, {"folds": [{"era": "A", "params": {}}]}, _write_train(tmp_path / "err.py", body), workers=4, n_cut=2)
+    assert not ok and "오류 불일치" in why, why
+
+
+def test_check_sample_depends_on_secret(tmp_path):
+    spec = {"a": ("int", 0, 1000)}
+    assert P.check_points(spec, 2, 0, seed=1) != P.check_points(spec, 2, 0, seed=2)
+    assert len(P.check_points(spec, 2, 0, seed=1)) == 2 * P.TRAIN_CHECK_PER_FOLD == 24
+    tr = tmp_path / "t.py"
+    tr.write_text("# a\n")
+    _salt("s1")
+    a = P.causality_seed(str(tr))
+    _salt("s2")
+    assert P.causality_seed(str(tr)) != a                                           # 소금이 바뀌면 표본도 바뀐다
+    tr.write_text("# b\n")
+    assert P.causality_seed(str(tr)) != a
+
+
+def test_evaluate_sends_secret_seed_on_stdin(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    got = tmp_path / "stdin.txt"
+    prog = f"import sys\nopen({str(got)!r}, 'w').write(sys.stdin.read())\nsys.exit(1)\n"
+    seen = []
+    monkeypatch.setattr(P, "sandbox_cmd_c", lambda args: seen.append(list(args)) or [sys.executable, "-c", prog])
+    with pytest.raises(SystemExit):
+        P.evaluate(1)
+    seed = str(P.causality_seed(P.TRAIN))
+    assert got.read_text().strip() == seed
+    assert seen and seed not in " ".join(seen[0])                                    # 격리 명령 인자에는 시드가 없다(stdin 만)
 
 
 def _keep_row(score):
@@ -421,7 +549,7 @@ def test_best_is_latest_keep_in_either_order():
 def test_state_dependent_signals_void(tmp_path, monkeypatch):
     """새 프로세스 첫 호출과 평가 프로세스의 신호가 다르면 void — 호출 횟수·숨긴 상태로 바꾸는 train."""
     Ds = _toy_loop(monkeypatch)
-    body = ("def signals(V, x):\n    box = np.typecodes.setdefault('zz_calls_t4', [])\n    box.append(1)\n"
+    body = ("def signals(V, x):\n    d = np.typecodes\n    box = d.setdefault('zz_calls_t4', [])\n    box.append(1)\n"
             "    good = len(box) > 1\n    return {'cand': V['uni'] & (V['C'] > (0 if good else 1e9)), 'score': V['C']}\n")
     tr = _write_train(tmp_path / "calls.py", body)
     assert P.lint_train(open(tr, encoding="utf-8").read()) == []

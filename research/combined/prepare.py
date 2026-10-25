@@ -29,14 +29,18 @@ v4 와 다른 점(전부):
 11. 미래정보 검사(``causality_c``)는 절단 하나·전체 신호 하나마다 **새 프로세스**(spawn, maxtasksperchild=1)에서 디스크 캐시(또는 넘겨받은
     배열)로 돈다 — 평가 프로세스에 숨긴 상태(모듈 속성 등)가 절단 계산으로 넘어가지 못한다. 그리고 새 프로세스의 전체 신호가 평가에 쓴 신호와
     해시로 같아야 한다(호출 횟수·숨긴 상태로 신호를 바꾸는 train 은 void). 쏠림·비용 1배 재실행 신호도 원래 실행과 같아야 한다.
-    검사 파라미터 = 폴드에서 고른 값 + 학습 점 표본(폴드마다 8개, 시드 고정 — 미래로 고원 선택을 조종하는 train 차단; v4 는 고른 값만).
+    검사 파라미터 = 폴드에서 고른 값 + 학습 점 표본(폴드마다 12개 — 미래로 고원 선택을 조종하는 train 차단; v4 는 고른 값만).
+    표본 시드 = sha256(train sha + 원장 사본 디렉터리의 비밀 소금)(격리가 가리고 stdin 으로만 넘긴다 — train 은 어느 점인지 모른다).
+    표본 학습 점은 절단 검사에 더해, fork 작업자가 고원 선택에 실제로 쓴 신호 지문이 새 프로세스 신호 지문과 같아야 한다.
+    signals 의 예외도 비교한다(같은 x 면 어디서나 같이 실패해야 한다). 학습 점의 cfg 예외는 평가 전체를 crash 로 끝낸다(시행으로 셈).
     cfg(x) 는 signals 를 부른 적 없는 새 프로세스에서만 계산해(``fresh_cfgs``) 학습 점·채점·모든 재실행에 쓴다. 평가 프로세스의 cfg 가
     그 값과 다르면 void(signals 가 숨긴 전체 기간 V 를 cfg 가 읽는 길 차단; v4 는 cfg 를 검사하지 않았다).
     실패 메시지는 "fail: " 로 시작한다. 계산 본체는 ``run_all``(격리 안 ``--inner`` 가 부른다 — 테스트 가능).
     워크포워드 학습 점 풀은 fork 그대로다: 부모는 그 시대의 전체 V 만 보므로 거기서 숨긴 상태는 train 이 이미 보는 것 이상을 주지 못하고,
     점수 실행(A → B 순)의 시대 A 는 B 를 보기 전에 끝난다. 그 뒤 재실행의 시대 간 오염은 위 신호 해시 비교가 잡는다.
-12. 허용 목록(``lint_train``) = v4 + 상태 은닉 금지: 속성 대입·삭제 전부, 모듈 이름(np·pd·math·…)에 뿌리를 둔 첨자 대입·삭제,
-    모듈 이름을 속성 접근 외 값으로 쓰기(별칭·인자·반환), ``print``.
+12. 허용 목록(``lint_train``) = v4 + 상태 은닉 금지: 속성 대입·삭제 전부, 모듈 이름(np·pd·math·…)에 뿌리를 둔 첨자 대입·삭제와
+    변경 메서드 호출(append·update·setdefault·pop·… — ``np.sort`` 같은 모듈 함수 자체는 허용), 모듈 이름을 속성 접근 외 값으로 쓰기,
+    ``print``, 모듈 최상위의 실행문(설명문·import·def/class·리터럴 대입만 — 적재 횟수를 세는 길 차단).
 13. 격리: 캐시 디렉터리를 가리고 era_A·era_B 만 다시 보인다. 원장 사본(평가 전에 만들어 늘 가린다)·~/git/daytrade-it(뉴스 아카이브)·
     ~/git/quant-airflow·~/.config·~/.ssh·v4 캐시·v4 보관본·v4 원장 사본을 가린다.
 14. 무결성: 태그 ``combined-prereg-1``, 감시 파일 = 결합 prepare·data·gaps·news·select + v4 감시 파일 전부, MANIFEST 에 캐시 A·B·C sha.
@@ -111,7 +115,9 @@ NEWS_YEARS = (2023, 2024)
 TOP_DAYS, TOP_TRADE_FRAC = 10, 0.01
 CONC_KEYS = ("top1pct", "top_stock", "top10d")
 CRASH_TAIL = 20
-TRAIN_CHECK_PER_FOLD = 8                                                  # 미래정보 검사에 넣는 학습 점(폴드마다)
+TRAIN_CHECK_PER_FOLD = 12                                                 # 미래정보 검사에 넣는 학습 점(폴드마다, 비밀 시드)
+MUTATORS = {"append", "extend", "insert", "update", "setdefault", "pop", "popitem", "clear", "remove", "add", "discard",
+            "__setitem__", "sort", "reverse"}
 REF_PARAMS = {"theta": 90, "N": 20, "ma_exit": 100, "hard": 0.15, "exit_kind": "ma", "low_w": 20}   # leader_paper ARMS["leader_C"]
 BASELINE_TRAIN_SHA = "9d9ed460ff597f1d"                                   # 기준선 train.py sha256 앞 16자(테스트가 대조)
 _SANDBOX_HIDE_FIXED = tuple(os.path.expanduser(p) for p in (
@@ -149,10 +155,30 @@ def lint_train(src: str) -> "list[str]":
     parent = {ch: n for n in ast.walk(tree) for ch in ast.iter_child_nodes(n)}
 
     def root(n):
-        while isinstance(n, (ast.Attribute, ast.Subscript)):
-            n = n.value
+        while isinstance(n, (ast.Attribute, ast.Subscript, ast.Call)):
+            n = n.func if isinstance(n, ast.Call) else n.value
         return n
+
+    def literal(v):
+        if isinstance(v, ast.Constant):
+            return True
+        if isinstance(v, (ast.Tuple, ast.List, ast.Set)):
+            return all(literal(e) for e in v.elts)
+        if isinstance(v, ast.Dict):
+            return all(k is None or literal(k) for k in v.keys) and all(literal(e) for e in v.values)
+        return isinstance(v, ast.UnaryOp) and literal(v.operand)
+    for i, st in enumerate(tree.body):                               # 모듈 최상위: 설명문·import·def/class·리터럴 대입만(적재 시 실행 금지)
+        ok = (isinstance(st, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef))
+              or (i == 0 and isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str))
+              or (isinstance(st, ast.Assign) and literal(st.value))
+              or (isinstance(st, ast.AnnAssign) and (st.value is None or literal(st.value))))
+        if not ok:
+            bad.append(f"line {st.lineno}: 모듈 최상위 {type(st).__name__} — 설명문·import·def/class·리터럴 대입만")
     for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in MUTATORS
+                and not isinstance(n.func.value, ast.Name)                   # np.sort·np.append 같은 모듈 함수는 새 객체를 낸다
+                and isinstance(root(n.func.value), ast.Name) and root(n.func.value).id in mods):
+            bad.append(f"line {n.lineno}: 모듈 {root(n.func.value).id} 에 닿는 객체 변경 .{n.func.attr}()(상태 은닉 금지)")
         if isinstance(n, ast.Attribute) and isinstance(n.ctx, (ast.Store, ast.Del)):
             bad.append(f"line {n.lineno}: 속성 대입·삭제 .{n.attr}(상태 은닉 금지)")
         elif isinstance(n, ast.Subscript) and isinstance(n.ctx, (ast.Store, ast.Del)):
@@ -263,27 +289,55 @@ def training_points(spec: dict, fi: int, ei: int) -> "tuple[list[dict], np.ndarr
     return sample_params(spec, N_EVAL, SEED + 101 * fi + 7 * ei)
 
 
-def check_points(spec: dict, n_folds: int, ei: int, k: int = TRAIN_CHECK_PER_FOLD) -> "list[dict]":
-    """미래정보 검사에 넣을 학습 점 표본 — 폴드마다 k 개, 시드 고정(고원 선택을 미래로 조종하는 train 차단, 리뷰 IMPORTANT B)."""
+def causality_seed(train_path: str = TRAIN) -> int:
+    """학습 점 표본 시드 = sha256(train sha + 비밀 소금). 소금은 원장 사본 디렉터리에 한 번 만든다(격리가 가린다) — train 은 어느 점이
+    검사될지 모른다."""
+    os.makedirs(SHADOW, exist_ok=True)
+    p = os.path.join(SHADOW, "causality_salt")
+    if not os.path.exists(p):
+        try:
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(fd, os.urandom(16).hex().encode())
+            os.close(fd)
+        except FileExistsError:
+            pass
+    salt = open(p, encoding="utf-8").read().strip()
+    sha = hashlib.sha256(open(train_path, "rb").read()).hexdigest()[:16]
+    return int(hashlib.sha256((sha + salt).encode()).hexdigest()[:12], 16)
+
+
+def check_points(spec: dict, n_folds: int, ei: int, seed: int, k: int = TRAIN_CHECK_PER_FOLD) -> "list[dict]":
+    """미래정보·해시 검사에 넣을 학습 점 표본 — 폴드마다 k 개, 비밀 시드(고원 선택을 미래로 조종하는 train 차단)."""
     out = []
     for fi in range(n_folds):
         pts, _ = training_points(spec, fi, ei)
-        idx = np.random.default_rng(SEED + 503 * fi + 11 * ei).choice(len(pts), size=min(k, len(pts)), replace=False)
+        idx = np.random.default_rng([seed, fi, ei]).choice(len(pts), size=min(k, len(pts)), replace=False)
         out += [pts[int(i)] for i in sorted(idx)]
     return out
+
+
+def _signals_or_err(S: dict, V: dict, x: dict):
+    try:
+        return S["signals"](V, x)
+    except Exception:  # noqa: BLE001 — 오류도 비교 대상(같은 x 면 어디서나 같아야 한다)
+        return None
 
 
 def _train_point(args):
     fi, j, x, cfg = args
     D, S, lo, hi = _G["D"], _G["S"], _G["folds"][fi][0], _G["folds"][fi][1]
+    sig = _signals_or_err(S, _G["V"], x)
+    h = "ERR" if sig is None else sig_hash(sig)                      # 고원 선택에 실제로 쓴 신호의 지문(새 프로세스 값과 비교)
     try:
-        eq, tr = simulate_c(D, S["signals"](_G["V"], x), cfg, lo, hi)
+        if sig is None:
+            raise RuntimeError("signals 실패")
+        eq, tr = simulate_c(D, sig, cfg, lo, hi)
         st = fold_stats(D, eq, lo, hi)
         n = int((tr["entry"] >= lo).sum()) if len(tr) else 0
-        return fi, j, (st["alpha"] if n >= MIN_TRAIN_TRADES_PER_YEAR * st["years"] else -1.0)
+        return fi, j, (st["alpha"] if n >= MIN_TRAIN_TRADES_PER_YEAR * st["years"] else -1.0), h
     except Exception as e:  # noqa: BLE001 — 한 점 실패는 그 점만 버린다
         log(f"학습 점 fold {fi} #{j} 실패: {type(e).__name__}")              # 메시지는 숨긴다(출력 통로 차단)
-        return fi, j, -1.0
+        return fi, j, -1.0, h
 
 
 def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed: "list | None" = None, null: "tuple | None" = None,
@@ -295,7 +349,7 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
     if neutral is not None and neutral not in REPO_KEYS:
         raise ValueError(f"neutral={neutral!r}")
     eras = ERAS if eras is None else eras
-    res = {"folds": [], "trades": [], "months": [], "daily": [], "sig_hash": [], "cfg_mismatch": []}
+    res = {"folds": [], "trades": [], "months": [], "daily": [], "sig_hash": [], "cfg_mismatch": [], "point_hash": {}}
     for ei, (era, E) in enumerate(eras.items()):
         D = D_by_era[era]
         S = load_strategy(train_path)
@@ -315,10 +369,13 @@ def walk_forward_c(D_by_era: dict, workers: int, train_path: str = TRAIN, fixed:
             S["signals"](_G["V"], tasks[0][2])                       # 부모에서 train.py 캐시를 데운다(fork 공유)
             with mp.get_context("fork").Pool(max(1, workers)) as pool:
                 out = pool.map(_train_point, tasks, chunksize=1)
-            chosen = []
+            chosen, ph = [], res["point_hash"].setdefault(era, {})
+            for fi, j, _, h in out:                                  # 같은 x 가 두 폴드에 나오면 지문도 같아야 한다
+                k = _xkey(pts_all[fi][0][j])
+                ph[k] = h if ph.get(k, h) == h else "CONFLICT"
             for fi in range(len(E["folds"])):
                 pts, U = pts_all[fi]
-                y = np.array([v for f, _, v in sorted(out, key=lambda r: (r[0], r[1])) if f == fi])
+                y = np.array([v for f, _, v, _ in sorted(out, key=lambda r: (r[0], r[1])) if f == fi])
                 chosen.append(pts[plateau_pick(U, y)])
         cfgs = fresh_cfgs(train_path, chosen)
         for fi, (_, lo, hi) in enumerate(E["folds"]):
@@ -461,8 +518,10 @@ def _cause_task(args):
     S = load_strategy(train_path)
     out = []
     for x in xs:
-        g = S["signals"](V, x)
-        if mode == "full":
+        g = _signals_or_err(S, V, x)
+        if g is None:
+            out.append((None, None, "ERR"))
+        elif mode == "full":
             out.append((np.asarray(g["cand"], bool), np.asarray(g["score"], float), sig_hash(g)))
         else:
             out.append((np.asarray(g["cand"], bool)[:, :cut + 1], np.asarray(g["score"], float)[:, :cut + 1], None))
@@ -470,22 +529,25 @@ def _cause_task(args):
 
 
 def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int = 4, n_cut: int = 12,
-                sources: "dict | None" = None, eras: "dict | None" = None) -> "tuple[bool, str]":
+                sources: "dict | None" = None, eras: "dict | None" = None, check_seed: "int | None" = None) -> "tuple[bool, str]":
     """허용 0, 시대마다 절단 n_cut 곳(시험 폴드 시작 + 무작위), 절단 · 절단 뒤 시간 섞기 두 방식.
-    검사하는 파라미터 = 그 시대 폴드 파라미터 전부 + 학습 점 표본(폴드마다 ``TRAIN_CHECK_PER_FOLD``, 시드 고정 — 고원 선택 조종 차단).
+    검사하는 파라미터 = 그 시대 폴드 파라미터 전부 + 학습 점 표본(폴드마다 ``TRAIN_CHECK_PER_FOLD``, 비밀 시드 ``check_seed`` — 없으면
+    ``causality_seed``). ``res["point_hash"]`` 가 있으면 표본 학습 점의 fork 작업자 신호(고원 선택에 쓴 것)가 새 프로세스 신호와 같아야 한다.
     전체 신호도 절단 신호도 새 프로세스에서 만든다(평가 프로세스의 숨긴 상태 차단).
     ``sources`` = {시대: 캐시 pickle 경로} — 작업자가 디스크에서 읽는다. 없으면 시대 dict 전체를 작업마다 pickle 로 넘긴다(맞지만 느리고
     작업자 수만큼 메모리를 쓴다 — 큰 시대(select.py 의 C 등)는 경로가 있으면 넘긴다. 메모리에만 있는 잠금 절반은 경로 없이 넘겨도 된다).
     ``res["sig_hash"]`` 가 있으면 새 프로세스 전체 신호가 평가에 쓴 신호와 같아야 한다."""
     eras = ERAS if eras is None else eras
     spec = load_strategy(train_path)["params"]                       # 학습 점 표본용(get_strategy 만 — signals 는 부르지 않는다)
-    tasks, xs_by = [], {}
+    seed = causality_seed(train_path) if check_seed is None else check_seed
+    tasks, xs_by, sampled = [], {}, {}
     for ei, (era, E) in enumerate(eras.items()):
         D = D_by_era[era]
         src = sources[era] if sources else D
         T = D["C"].shape[1]
         xs = []
-        for x in [f["params"] for f in res["folds"] if f["era"] == era] + check_points(spec, len(E["folds"]), ei):
+        sampled[era] = check_points(spec, len(E["folds"]), ei, seed)
+        for x in [f["params"] for f in res["folds"] if f["era"] == era] + sampled[era]:
             if x not in xs:
                 xs.append(x)
         xs_by[era] = xs
@@ -502,12 +564,21 @@ def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int
         for f, h in zip(res["folds"], res["sig_hash"], strict=True):
             if f["era"] in full and full[f["era"]][xs_by[f["era"]].index(f["params"])][2] != h:
                 return False, f"fail: era {f['era']} params {f['params']}: 새 프로세스 신호 ≠ 평가 신호(상태 의존)"
+    for era, ph in (res.get("point_hash") or {}).items():
+        for x in sampled.get(era, []):
+            k = _xkey(x)
+            if k in ph and full[era][xs_by[era].index(x)][2] != ph[k]:
+                return False, f"fail: era {era} 학습 점 {x}: 고원 선택에 쓴 신호 ≠ 새 프로세스 신호(상태 의존)"
     n = 0
     for era, cut, mode, parts in outs:
         if mode == "full":
             continue
         n += 1
-        for x, (ca_full, sa_full, _), (cb, sb, _) in zip(xs_by[era], full[era], parts, strict=True):
+        for x, (ca_full, sa_full, hf), (cb, sb, ht) in zip(xs_by[era], full[era], parts, strict=True):
+            if hf == "ERR" or ht == "ERR":
+                if hf != ht:
+                    return False, f"fail: era {era} cut {cut} {mode} params {x}: 오류 불일치(전체 {hf != 'ERR'} · 절단 {ht != 'ERR'})"
+                continue
             ca = ca_full[:, :cut + 1]
             if ca.shape != cb.shape or (ca != cb).any():
                 return False, f"fail: era {era} cut {cut} {mode} params {x}: cand 불일치 {int((ca != cb).sum()) if ca.shape == cb.shape else 'shape'}칸"
@@ -519,12 +590,13 @@ def causality_c(D_by_era: dict, res: dict, train_path: str = TRAIN, workers: int
 
 # ---------------------------------------------------------------- 계산 본체(격리 안)
 
-def run_all(D_by_era: dict, workers: int, train_path: str = TRAIN, sources: "dict | None" = None, eras: "dict | None" = None) -> dict:
+def run_all(D_by_era: dict, workers: int, train_path: str = TRAIN, sources: "dict | None" = None, eras: "dict | None" = None,
+            check_seed: "int | None" = None) -> dict:
     S = load_strategy(train_path)
     res = walk_forward_c(D_by_era, workers, train_path, eras=eras)
     log("워크포워드 끝")
     s = summarize_c(res)
-    ok, why = causality_c(D_by_era, res, train_path, workers=max(1, workers // 2), sources=sources, eras=eras)
+    ok, why = causality_c(D_by_era, res, train_path, workers=max(1, workers // 2), sources=sources, eras=eras, check_seed=check_seed)
     if ok and res.get("cfg_mismatch"):
         ok, why = False, f"fail: cfg 가 signals 뒤 상태에 따라 바뀐다(폴드 {res['cfg_mismatch']}) — 채점은 새 프로세스 cfg"
     log("미래정보 검사 끝")
@@ -558,7 +630,8 @@ def inner(workers: int) -> None:
     """bwrap 안에서 도는 계산(train.py 코드가 실행되는 유일한 곳) — 결과 JSON 한 줄을 stdout 에. 원장·BEST 는 바깥이 쓴다."""
     from research.combined.data import load
     _G["t0"] = time.time()
-    out = run_all({e: load(e) for e in ERAS}, workers, sources=_sources(ERAS))
+    seed = int(sys.stdin.readline().strip())                         # 비밀 표본 시드 — 바깥이 stdin 으로(격리 안에서는 소금을 못 읽는다)
+    out = run_all({e: load(e) for e in ERAS}, workers, sources=_sources(ERAS), check_seed=seed)
     sys.stdout.write("@@RESULT@@" + json.dumps(out, ensure_ascii=False, default=str) + "\n")
 
 
@@ -719,9 +792,9 @@ def _fmt(k: str, v) -> str:
     return f"{k + ':':22s} {v:.6f}" if isinstance(v, float) else f"{k + ':':22s} {v}"
 
 
-def _sandboxed(args: "list[str]", cur: str):
+def _sandboxed(args: "list[str]", cur: str, stdin: str = ""):
     """격리 실행 → 결과 dict. 실패하면 crash 행을 원장에 남기고(시행으로 센다) stderr 끝 20줄만 보이고 끝낸다(stdout 은 버린다)."""
-    p = subprocess.run(sandbox_cmd_c(args), capture_output=True, text=True)
+    p = subprocess.run(sandbox_cmd_c(args), capture_output=True, text=True, input=stdin)
     line = [x for x in p.stdout.splitlines() if x.startswith("@@RESULT@@")]
     if p.returncode != 0 or not line:
         _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": p.returncode,
@@ -740,7 +813,7 @@ def evaluate(workers: int) -> dict:
     os.makedirs(SHADOW, exist_ok=True)                                # 있어야 격리에서 가린다
     t0 = time.time()
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
-    r = _sandboxed(["--inner", "--workers", str(workers)], cur)
+    r = _sandboxed(["--inner", "--workers", str(workers)], cur, stdin=f"{causality_seed(TRAIN)}\n")
     s, folds, conc, abl = r["summary"], r["folds"], r["conc"], r["ablation"]
     if s["train_sha"] != cur:
         _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "why": "sha mismatch",
