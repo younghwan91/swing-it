@@ -1,7 +1,7 @@
 {
- "at": "2026-10-25T22:04:16",
- "train_sha": "9d9ed460ff597f1d",
- "commit": "5abc30b45d48",
+ "at": "2026-10-25T22:42:35",
+ "train_sha": "2ee5f46b32d26839",
+ "commit": "bd64ba932cc3",
  "dirty": false,
  "params": {
   "theta": 90,
@@ -14,25 +14,25 @@
  "note": "leader_C 고정값(univ top200 은 표현 불가 — 평가기 uni)",
  "evaluator": "combined-prereg-1",
  "summary": {
-  "score": -0.057618538497622274,
-  "raw_score": -0.057618538497622274,
+  "score": -0.05734247641989067,
+  "raw_score": -0.05734247641989067,
   "void": false,
-  "exit_dist_median": 0.31269521789491106,
-  "exit_dist_lt5pct": 0.0046801872074883,
-  "alpha_mean": 0.02596296706827823,
-  "alpha_std": 0.16716301113180101,
+  "exit_dist_median": 0.3127879074549182,
+  "exit_dist_lt5pct": 0.0046875,
+  "alpha_mean": 0.026251575698663866,
+  "alpha_std": 0.16718810423710906,
   "folds_pos": 5,
-  "excess_vs_kospi_mean": 0.0129996888218293,
+  "excess_vs_kospi_mean": 0.013241937877966441,
   "eraA_alpha": 0.0075870388872814835,
-  "eraB_alpha": 0.04433889524927498,
-  "oos_trades": 641,
-  "oos_trades_per_year": 64.80078881815666,
+  "eraB_alpha": 0.04491611251004625,
+  "oos_trades": 640,
+  "oos_trades_per_year": 64.69969554386937,
   "thin_folds": 1,
-  "trade_ret_mean": -0.03352935377718901,
-  "payoff_ratio": 1.4389399026506424,
-  "win_rate": 0.28861154446177845,
-  "ev_net_2x": -0.03352935377718901,
-  "news_folds_score": 0.07744614322416765
+  "trade_ret_mean": -0.03347059797240852,
+  "payoff_ratio": 1.4377619903721555,
+  "win_rate": 0.2890625,
+  "ev_net_2x": -0.03347059797240852,
+  "news_folds_score": 0.07990957197436901
  },
  "folds": [
   {
@@ -238,12 +238,12 @@
     "exit_kind": "ma",
     "low_w": 20
    },
-   "alpha": 0.037745813773421934,
-   "excess": 0.08688906438842978,
+   "alpha": 0.04063190007727826,
+   "excess": 0.0893115549498012,
    "years": 0.9938398357289527,
-   "n": 52,
+   "n": 51,
    "half": 0,
-   "trade_key": "3ddecfcdd756"
+   "trade_key": "be0b9dc65407"
   }
  ]
 }

@@ -19,19 +19,20 @@
       "Edit(**/research/combined/MANIFEST.json)",
       "Edit(**/research/combined/PREREG.md)",
       "Edit(**/research/combined/*.jsonl)",
-      "Edit(**/research/combined/BEST.json)",
+      "Edit(**/research/combined/BEST*.json)",
       "Edit(**/research/combined/BEST_HISTORY*)",
       "Edit(**/research/combined/SELECTION.json)",
       "Edit(**/research/combined/REFERENCE.json)",
       "Edit(**/research/combined/last_run.json)",
       "Read(**/research/combined/RUNS.jsonl)",
-      "Read(**/research/combined/BEST.json)",
+      "Read(**/research/combined/BEST*.json)",
       "Read(**/research/combined/BEST_HISTORY.jsonl)",
       "Read(**/research/combined/last_run.json)",
       "Read(~/.cache/cc-swing/scratch/combined/**)",
       "Read(~/.cache/cc-swing/combined_ledger/**)",
       "Read(**/research/combined/REFERENCE.json)",
-      "Read(~/.cache/cc-swing/scratch/combined_locked/**)"
+      "Read(~/.cache/cc-swing/scratch/combined_locked/**)",
+      "Read(~/.cache/cc-swing/scratch/combined_frozen/**)"
     ]
   }
 }
