@@ -1,20 +1,27 @@
 """세 레포 종합 autoresearch — 사후 후보 선택기(루프가 끝난 뒤 메인 세션이 한 번). 에이전트는 이 파일을 고치지도 돌리지도 않는다.
 
 설계 "후보 고르기"(docs/superpowers/specs/2026-10-25-combined-autoresearch-design.md):
-1. 풀(``pool``): 원장 RUNS 의 ``eligible`` ∧ ¬void 시도 중 keep 전부 ∪ score 상위 10, 최대 10(score 순). 같은 sha 는 한 번.
+1. 풀(``pool``): 원장 RUNS 의 ``eligible`` ∧ ¬void ∧ commit 있음 ∧ ¬dirty 시도 중 keep 전부 ∪ score 상위 10, 최대 10(score 순). 같은 sha 는 한 번.
+   dirty·commit 없는 행은 train.py 를 commit 에서 되살릴 수 없어 풀에서 빼고 사유를 남긴다(``pool_rejects``).
 2. 거르개(``screen``, 탐색 절반·선택 10폴드 A·B): score > 0, 거래당 순기대값(2배) > 0, 상위 1% 거래 제거 > 0, 최대 기여 한 종목 제거 > 0,
-   연 체결 ≥ 20, 같은 메뉴 무작위 파라미터 널 100회의 95 백분위 초과(v4 ``null=("params", seed)``), 원장 score 재현.
+   연 체결 ≥ 20, 원장 score 재현, 같은 메뉴 무작위 파라미터 널 100회의 95 백분위 초과(v4 ``null=("params", seed)``, 유한 널 ≥ 90 이어야 함).
    팩터 NW t·DSR(N = 루프 고유 시행 + swing 280)은 기록만 한다.
 3. 확인(``confirm``): 시대 C 탐색 절반 — 학습 창 2023-01~2024-12 고원 → 시험 2025-01-02~2026-09-12 한 번. sha 마다 평생 1회.
    폴드가 하나라 σ 가 없다 → 확인 score = 그 폴드의 선택 알파. 최대인 하나를 고른다(동점이면 train.py 줄 수 적은 쪽).
 4. 잠금(``lockbox``): 고른 하나만 잠금 절반(half 1)에서 A·B 10폴드 + C 1폴드를 같은 절차로. 바 = 11폴드 score > 0 ∧ 거래당 순기대값(2배) > 0.
    평생 1회(sha 무관). 실패하면 다음 순위로 넘어가지 않는다 → chosen = null.
-확인·잠금 원장(CONFIRM.jsonl·LOCKBOX.jsonl)은 작업 트리 + ~/.cache 사본 두 곳에 덧붙이고, 거부 검사는 **두 사본의 합집합**으로 한다
-(한쪽을 지워도 다시 열리지 않는다). 결과는 원장에 쓴 뒤에만 출력한다.
+5. ``frozen_params`` = 고른 후보의 확인 행 params = **탐색 절반**의 시대 C 학습 창(2023-01~2024-12) 고원 값(정정 판정 18). 잠금 절반에서
+   다시 고른 C 폴드 파라미터는 LOCKBOX 행에 기록만 하고 전진 팔에 쓰지 않는다.
 
-사람 열람 바(v4 b8): ``--screen`` 은 풀·거르개만 돌리고(보류 구간을 열지 않는다) 통과한 train.py 를 scratch 에 꺼내 경로를 보여 준다.
-사람이 그 파일들을 읽고(e104063 구조 재제출 여부 포함 — program·PREREG) ``--confirm --reviewed <sha16>,<sha16>…`` 로 통과 목록 **전부**를
-정확히 적어야 확인·잠금이 열린다. 거르개 뒤 원장이 바뀌었으면 거부한다(--screen 다시).
+보류 구간 원장(CONFIRM.jsonl·LOCKBOX.jsonl)은 작업 트리 + ~/.cache 사본 두 곳에 덧붙인다. **열기 전에 기록한다**: 사전 검사 뒤
+``status: "opened"`` 행을 먼저 쓰고 계산하며, 결과는 두 번째 행(``status: "result"``)이다. 계산 중 죽어도 그 시도는 소모된 것이다.
+거부 검사는 두 사본의 합집합으로 한다(한쪽을 지워도 다시 열리지 않는다). 결과는 원장에 쓴 뒤에만 출력한다.
+
+사람 열람 바(v4 b8): ``--screen`` 은 풀·거르개만 돌리고(보류 구간을 열지 않는다) 통과한 train.py 를 RUNS 의 commit 에서 scratch 로 꺼내
+경로를 보여 준다. 사람이 그 파일들을 읽고(e104063 구조 재제출 여부 포함 — program·PREREG) ``--confirm --reviewed <sha16>,<sha16>…`` 로
+통과 목록 **전부**를 정확히 적어야 확인·잠금이 열린다. ``confirm``·``lockbox`` 함수도 마지막 거르개 통과·reviewed 집합을 스스로 검사한다
+(import 로 우회 불가). 거르개 뒤 원장이 바뀌었으면 거부한다(--screen 다시). 실행할 train.py 는 내용 sha 를 확인한 읽기 전용 사본으로 고정하고,
+로드한 전략의 ``sha`` 를 계산 앞뒤로 대조한다(TOCTOU).
 
 사용(작업 트리 루트, 루프가 멈춘 뒤):
   uv run --with numba python research/combined/select.py --screen
@@ -27,8 +34,10 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 
@@ -47,10 +56,11 @@ SELECTION = os.path.join(HERE, "SELECTION.json")
 SCRATCH = os.path.expanduser("~/.cache/cc-swing/scratch/combined_select")   # 풀 commit 의 train.py(사람이 읽는 사본)
 TRAIN_REL = "research/combined/train.py"
 POOL_MAX, POOL_TOP = 10, 10
-N_NULL, NULL_Q = 100, 0.95
+N_NULL, NULL_Q, MIN_NULL_FINITE = 100, 0.95, 90
 MIN_TRADES_PER_YEAR = 20
 N_SWING_TRIALS = 280                                                       # 같은 데이터의 swing 루프 시행(DSR N 에 더한다)
-SEARCH_ERAS, CONFIRM_ERAS = ("A", "B"), ("C",)
+SEARCH = {e: ERAS_C[e] for e in ("A", "B")}                                # 선택 구간(루프와 같은 10폴드)
+CONF = {"C": ERAS_C["C"]}                                                  # 확인 구간 1폴드
 
 
 # ---------------------------------------------------------------- 원장(두 사본)
@@ -65,8 +75,17 @@ def _rows_both(path: str) -> list:
     return out
 
 
-def _sha_of(path: str) -> str:
-    return hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
+def _opened(path: str, sha: str) -> None:
+    """보류 구간을 열기 직전의 증인 행 — 계산 전에 두 사본에 쓴다."""
+    P._append(path, {"train_sha": sha, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "status": "opened", "evaluator": P.PREREG_TAG})
+
+
+def _results(path: str) -> dict:
+    return {r["train_sha"]: r for r in _rows_both(path) if r.get("status") == "result"}
+
+
+def _sha_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()[:16]
 
 
 def _lines(path: str) -> int:
@@ -75,14 +94,25 @@ def _lines(path: str) -> int:
 
 
 @contextmanager
-def _eras(names: tuple):
-    """walk_forward_c 가 도는 시대를 잠시 바꾼다(prepare.ERAS 는 루프 시대 A·B — 확인 C 는 여기서만)."""
-    old = P.ERAS
-    P.ERAS = {e: ERAS_C[e] for e in names}
+def _pinned(train_path: str, sha: str):
+    """내용 sha 를 확인한 train.py 를 새 임시 디렉터리에 읽기 전용으로 고정 → 로드한 전략 sha 대조(앞) → 경로 → 다시 대조(뒤)."""
+    b = open(train_path, "rb").read()
+    if _sha_bytes(b) != sha:
+        raise SystemExit(f"train.py sha {_sha_bytes(b)} ≠ {sha} — 사람이 읽은 그 파일만 연다")
+    os.makedirs(SCRATCH, exist_ok=True)
+    d = tempfile.mkdtemp(prefix="pin_", dir=SCRATCH)
+    p = os.path.join(d, "train.py")
     try:
-        yield
+        with open(p, "wb") as f:
+            f.write(b)
+        os.chmod(p, 0o400)
+        if P.load_strategy(p)["sha"] != sha:
+            raise SystemExit(f"로드한 전략 sha ≠ {sha} — 거부")
+        yield p
+        if P.load_strategy(p)["sha"] != sha:
+            raise SystemExit(f"계산 중 train.py 가 바뀌었다(전략 sha ≠ {sha}) — 결과 무효")
     finally:
-        P.ERAS = old
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- 적재·git
@@ -105,51 +135,52 @@ def load_locked(era: str) -> dict:
     return _slice(F, 1)
 
 
-def _git(*a: str) -> str:
-    p = subprocess.run(["git", "-C", ROOT, *a], capture_output=True, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"git {' '.join(a)}: {p.stderr.strip()}")
-    return p.stdout
-
-
-def train_commits() -> dict:
-    """train.py 내용 sha(앞 16) → 그 내용을 가진 commit. 루프는 버린 시도를 ``reset --hard`` 하므로 reflog 까지 본다(모든 워크트리)."""
-    out = {}
-    for c in _git("rev-list", "--all", "--reflog", "--", TRAIN_REL).split():
-        try:
-            blob = _git("show", f"{c}:{TRAIN_REL}")
-        except RuntimeError:
-            continue                                                        # 그 commit 에서 파일이 지워졌다
-        out.setdefault(hashlib.sha256(blob.encode()).hexdigest()[:16], c)
-    return out
-
-
 def extract_train(commit: str, sha: str) -> str:
-    """``git show <commit>:research/combined/train.py`` → scratch/<sha>/train.py. 내용 sha 가 다르면 거부."""
+    """``git show <commit>:research/combined/train.py`` → scratch/<sha>/train.py. 내용 sha 가 원장과 다르면 거부."""
+    p = subprocess.run(["git", "-C", ROOT, "show", f"{commit}:{TRAIN_REL}"], capture_output=True)
+    if p.returncode != 0:
+        raise SystemExit(f"git show {commit}:{TRAIN_REL} 실패: {p.stderr.decode(errors='replace').strip()}")
+    if _sha_bytes(p.stdout) != sha:
+        raise SystemExit(f"commit {commit} 의 train.py sha {_sha_bytes(p.stdout)} ≠ 원장 {sha}")
     d = os.path.join(SCRATCH, sha)
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, "train.py")
-    with open(p, "w", encoding="utf-8") as f:
-        f.write(_git("show", f"{commit}:{TRAIN_REL}"))
-    if _sha_of(p) != sha:
-        raise SystemExit(f"commit {commit} 의 train.py sha {_sha_of(p)} ≠ 원장 {sha}")
-    return p
+    out = os.path.join(d, "train.py")
+    with open(out, "wb") as f:
+        f.write(p.stdout)
+    return out
 
 
 # ---------------------------------------------------------------- 1. 풀
 
-def pool(runs: list) -> list:
-    """eligible ∧ ¬void 평가 행(참고 실행·accept 행 제외, sha 당 첫 행) 중 keep 전부 ∪ score 상위 10 → score 순 최대 10."""
-    keep_sha = {r["train_sha"] for r in runs if r.get("accept")}
+def _eval_rows(runs: list) -> list:
+    """평가 행(accept·crash·참고 제외), sha 당 첫 행, eligible ∧ ¬void ∧ 유한 score."""
     rows, seen = [], set()
     for r in runs:
         sha = r.get("train_sha")
-        if r.get("accept") or r.get("reference") or "folds" not in r or sha in seen:
+        if r.get("accept") or r.get("crash") or r.get("reference") or "folds" not in r or sha in seen:
             continue
         seen.add(sha)
         if r.get("eligible") is True and not r.get("void") and isinstance(r.get("score"), (int, float)) and math.isfinite(r["score"]):
             rows.append(r)
-    rows.sort(key=lambda r: -r["score"])                                   # 안정 정렬 — 동점은 원장 순서
+    return rows
+
+
+def _reject_reason(r: dict) -> "str | None":
+    if not r.get("commit"):
+        return "commit 없음 — train.py 를 되살릴 수 없다"
+    if r.get("dirty") is not False:
+        return f"dirty={r.get('dirty')} — 평가한 train.py 가 commit 과 다를 수 있다"
+    return None
+
+
+def pool_rejects(runs: list) -> list:
+    return [{"train_sha": r["train_sha"], "score": r["score"], "reason": why} for r in _eval_rows(runs) if (why := _reject_reason(r))]
+
+
+def pool(runs: list) -> list:
+    """자격 행 중 commit 있고 ¬dirty 인 것 → keep(beats_best) 전부 ∪ score 상위 10 → score 순 최대 10."""
+    rows = sorted((r for r in _eval_rows(runs) if _reject_reason(r) is None), key=lambda r: -r["score"])   # 안정 정렬
+    keep_sha = {r["train_sha"] for r in runs if r.get("accept")}
     keep = [r for r in rows if r.get("beats_best") is True or r["train_sha"] in keep_sha]
     union = {r["train_sha"]: r for r in [*keep, *rows[:POOL_TOP]]}
     return sorted(union.values(), key=lambda r: -r["score"])[:POOL_MAX]
@@ -157,14 +188,14 @@ def pool(runs: list) -> list:
 
 # ---------------------------------------------------------------- 2. 거르개
 
-def concentration(D_by_era: dict, res: dict, train_path: str) -> dict:
-    return P.concentration(D_by_era, res, train_path)
+def concentration(D_by_era: dict, res: dict, train_path: str, eras: dict) -> dict:
+    return P.concentration(D_by_era, res, train_path, eras=eras)
 
 
-def factor_record(D_by_era: dict, res: dict) -> dict:
+def factor_record(D_by_era: dict, res: dict, eras: dict) -> dict:
     """팩터(KOSPI·KOSDAQ·MOM·SMB·LV) 회귀 절편과 NW t — 기록만(바 아님)."""
     try:
-        F = pd.concat([P.factor_months(D_by_era[e]) for e in P.ERAS])
+        F = pd.concat([P.factor_months(D_by_era[e]) for e in eras])
         a, t = P.factor_t(res["months"], F)
         return {"alpha_m": a, "t_nw": t}
     except Exception as e:  # noqa: BLE001 — 기록용 값이라 실패는 사유를 남기고 넘어간다
@@ -181,14 +212,13 @@ def dsr_record(res: dict, n_trials: int) -> dict:
 
 
 def screen(rec: dict, D_by_era: dict, train_path: str, workers: int = 1, n_null: int = N_NULL) -> dict:
-    """탐색 절반·선택 구간 거르개. 앞 바가 떨어지면 널은 돌리지 않는다(널 바 = False 로 기록)."""
+    """탐색 절반·선택 구간(A·B) 거르개. 앞 바가 떨어지면 널은 돌리지 않는다(널 바 = False 로 기록)."""
     sha = rec["train_sha"]
-    if _sha_of(train_path) != sha:
-        raise SystemExit(f"train.py sha {_sha_of(train_path)} ≠ 후보 {sha}")
-    with _eras(SEARCH_ERAS):
-        res = P.walk_forward_c(D_by_era, workers, train_path)
+    reasons = []
+    with _pinned(train_path, sha) as tp:
+        res = P.walk_forward_c(D_by_era, workers, tp, eras=SEARCH)
         s = P.summarize_c(res)
-        conc = concentration(D_by_era, res, train_path)
+        conc = concentration(D_by_era, res, tp, SEARCH)
         bars = {"repro_ledger": bool(math.isclose(s["score"], rec["score"], rel_tol=1e-9, abs_tol=1e-12)),
                 "score_pos": bool(s["score"] > 0 and not s["void"]),
                 "ev_net_2x_pos": bool(s["ev_net_2x"] > 0),
@@ -196,30 +226,53 @@ def screen(rec: dict, D_by_era: dict, train_path: str, workers: int = 1, n_null:
                 "top_stock_removed_pos": bool(conc["top_stock"] > 0),
                 "trades_per_year_ge_20": bool(s["oos_trades_per_year"] >= MIN_TRADES_PER_YEAR),
                 "beats_null_p95": False}
-        nulls, nvoid = [], 0
+        nulls, nvoid, p95 = [], 0, float("nan")
         if all(v for k, v in bars.items() if k != "beats_null_p95"):
             for r in range(n_null):
-                ns = P.summarize_c(P.walk_forward_c(D_by_era, 1, train_path, fixed=res["folds"], null=("params", r + 1)))
+                ns = P.summarize_c(P.walk_forward_c(D_by_era, 1, tp, fixed=res["folds"], null=("params", r + 1), eras=SEARCH))
                 nvoid += bool(ns["void"])
                 if np.isfinite(ns["raw_score"]):
                     nulls.append(float(ns["raw_score"]))
-            p95 = float(np.quantile(nulls, NULL_Q)) if nulls else float("nan")
-            bars["beats_null_p95"] = bool(nulls and s["score"] > p95)
+            if len(nulls) < MIN_NULL_FINITE:
+                reasons.append(f"null 표본 부족({len(nulls)}/{n_null} 유한, 최소 {MIN_NULL_FINITE})")
+            else:
+                p95 = float(np.quantile(nulls, NULL_Q))
+                bars["beats_null_p95"] = bool(s["score"] > p95)
         else:
-            p95 = float("nan")
-        n_dsr = P.trial_state()["n"] + N_SWING_TRIALS
-        out = {"train_sha": sha, "commit": rec.get("commit"), "pass": all(bars.values()), "bars": bars, "score": s["score"],
-               "ledger_score": rec["score"], "void": s["void"], "ev_net_2x": s["ev_net_2x"], "payoff_ratio": s["payoff_ratio"],
-               "oos_trades": s["oos_trades"], "trades_per_year": s["oos_trades_per_year"], "folds_pos": s["folds_pos"],
-               "top1pct_removed": conc["top1pct"], "top_stock_removed": conc["top_stock"], "top10d_removed": conc.get("top10d"),
-               "null_kind": "params", "null_n": len(nulls), "null_void": nvoid, "null_p95": p95,
+            reasons.append("앞 바 실패 — 널 생략")
+        reasons += [f"바 실패: {k}" for k, v in bars.items() if not v and not (k == "beats_null_p95" and reasons)]
+        out = {"train_sha": sha, "commit": rec.get("commit"), "pass": all(bars.values()), "bars": bars, "reasons": reasons,
+               "score": s["score"], "ledger_score": rec["score"], "void": s["void"], "ev_net_2x": s["ev_net_2x"],
+               "payoff_ratio": s["payoff_ratio"], "oos_trades": s["oos_trades"], "trades_per_year": s["oos_trades_per_year"],
+               "folds_pos": s["folds_pos"], "top1pct_removed": conc["top1pct"], "top_stock_removed": conc["top_stock"],
+               "top10d_removed": conc.get("top10d"), "null_kind": "params", "null_n": len(nulls), "null_void": nvoid, "null_p95": p95,
                "null_median": float(np.median(nulls)) if nulls else float("nan"),
-               "factor": factor_record(D_by_era, res), "dsr": dsr_record(res, n_dsr), "train_lines": _lines(train_path),
-               "folds": [{k: f[k] for k in ("era", "test", "params", "alpha", "n")} for f in res["folds"]]}
+               "factor": factor_record(D_by_era, res, SEARCH), "dsr": dsr_record(res, P.trial_state()["n"] + N_SWING_TRIALS),
+               "train_lines": _lines(tp), "folds": [{k: f[k] for k in ("era", "test", "params", "alpha", "n")} for f in res["folds"]]}
     return out
 
 
-# ---------------------------------------------------------------- 3. 확인(sha 당 1회)
+# ---------------------------------------------------------------- 보류 구간 공통 검사
+
+def _current_screen() -> dict:
+    """마지막 거르개 기록 — 지금 원장의 풀·시행 수와 같아야 한다(다르면 --screen 다시)."""
+    scr = P._read_jsonl(SCREEN)
+    if not scr:
+        raise SystemExit("거르개 기록이 없다 — 먼저 select.py --screen")
+    scr = scr[-1]
+    if [r["train_sha"] for r in pool(P._read_jsonl(P.RUNS))] != scr["pool"] or P.trial_state()["n"] != scr["n_trials"]:
+        raise SystemExit("거르개 뒤 원장이 바뀌었다 — select.py --screen 을 다시 돌리고 다시 열람")
+    return scr
+
+
+def _gate(sha: str, reviewed: set) -> dict:
+    scr = _current_screen()
+    if sha not in scr["survivors"]:
+        raise SystemExit(f"{sha} 는 마지막 거르개 통과 목록에 없다 — 보류 구간을 열지 않는다")
+    if sha not in reviewed:
+        raise SystemExit(f"{sha} 는 --reviewed 에 없다 — 사람이 읽은 train.py 만 연다(v4 b8)")
+    return scr
+
 
 def _ev(res: dict) -> "tuple[float, float, int]":
     tr = pd.concat(res["trades"]) if res["trades"] else pd.DataFrame(columns=["ret"])
@@ -228,49 +281,52 @@ def _ev(res: dict) -> "tuple[float, float, int]":
     return (float(tr["ret"].mean()) if len(tr) else float("nan")), pr, int(len(tr))
 
 
-def confirm(sha: str, train_path: str, workers: int = 1, commit: "str | None" = None) -> dict:
-    """시대 C 탐색 절반 — 학습 창 고원 → 2025-01-02~2026-09-12 시험 한 번. CONFIRM.jsonl(+ 사본)에 덧붙인 뒤 돌려준다."""
+# ---------------------------------------------------------------- 3. 확인(sha 당 1회)
+
+def confirm(sha: str, train_path: str, reviewed: set, workers: int = 1, commit: "str | None" = None) -> dict:
+    """시대 C 탐색 절반 — 학습 창 고원 → 2025-01-02~2026-09-12 시험 한 번. 열기 전 opened 행, 끝나면 result 행(CONFIRM.jsonl + 사본)."""
     if _rows_both(LOCKBOX):
         raise SystemExit("잠금 절반이 이미 열렸다 — 선택은 끝났다, 확인 구간을 더 열지 않는다")
     if any(r.get("train_sha") == sha for r in _rows_both(CONFIRM)):
         raise SystemExit(f"확인 구간은 {sha} 에 이미 열렸다(CONFIRM.jsonl) — 두 번 열지 않는다")
-    if _sha_of(train_path) != sha:
-        raise SystemExit(f"train.py sha {_sha_of(train_path)} ≠ {sha} — 사람이 읽은 그 파일만 연다")
-    with _eras(CONFIRM_ERAS):
-        res = P.walk_forward_c({"C": load_search("C")}, workers, train_path)
+    _gate(sha, reviewed)
+    with _pinned(train_path, sha) as tp:
+        D = {"C": load_search("C")}
+        _opened(CONFIRM, sha)
+        res = P.walk_forward_c(D, workers, tp, eras=CONF)
+        lines = _lines(tp)
     f = res["folds"][0]
     ev, pr, n = _ev(res)
     alpha = float(f["alpha"])
-    row = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": sha, "commit": commit, "era": "C", "half": 0,
+    row = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": sha, "status": "result", "commit": commit, "era": "C", "half": 0,
            "test": [str(x) for x in f["test"]], "params": f["params"], "alpha": alpha,
            "score": alpha if math.isfinite(alpha) else float("nan"), "excess": f.get("excess"), "n": n,
            "trades_per_year": n / max(float(f.get("years") or 0), 1e-9), "ev_net_2x": ev, "payoff_ratio": pr,
-           "trade_key": f.get("trade_key"), "train_lines": _lines(train_path), "evaluator": P.PREREG_TAG}
+           "trade_key": f.get("trade_key"), "train_lines": lines, "evaluator": P.PREREG_TAG}
     P._append(CONFIRM, row)                                                # 쓰고 나서 돌려준다(출력은 그 뒤)
     return row
 
 
 # ---------------------------------------------------------------- 4. 잠금(평생 1회)
 
-def lockbox(sha: str, train_path: str, workers: int = 1, commit: "str | None" = None) -> dict:
-    """잠금 절반 — A·B 10폴드 + C 1폴드(같은 절차). 바 = 11폴드 score > 0 ∧ 거래당 순기대값(2배) > 0. LOCKBOX.jsonl(+ 사본)."""
+def lockbox(sha: str, train_path: str, reviewed: set, workers: int = 1, commit: "str | None" = None) -> dict:
+    """잠금 절반 — A·B 10폴드 + C 1폴드(같은 절차). 바 = 11폴드 score > 0 ∧ 거래당 순기대값(2배) > 0. 열기 전 opened 행(LOCKBOX.jsonl + 사본)."""
     if _rows_both(LOCKBOX):
         raise SystemExit("잠금 절반은 이미 열렸다(LOCKBOX.jsonl) — 최대 1회, 다음 순위로 넘어가지 않는다")
-    if not any(r.get("train_sha") == sha for r in _rows_both(CONFIRM)):
-        raise SystemExit(f"{sha} 의 확인 기록이 없다 — 확인 구간 순위로 고른 것만 잠금을 연다")
-    if _sha_of(train_path) != sha:
-        raise SystemExit(f"train.py sha {_sha_of(train_path)} ≠ {sha} — 사람이 읽은 그 파일만 연다")
-    D = {e: load_locked(e) for e in (*SEARCH_ERAS, *CONFIRM_ERAS)}
-    with _eras(SEARCH_ERAS):
-        ab = P.walk_forward_c({e: D[e] for e in SEARCH_ERAS}, workers, train_path)
-        s_ab = P.summarize_c(ab)
-    with _eras(CONFIRM_ERAS):
-        c = P.walk_forward_c({e: D[e] for e in CONFIRM_ERAS}, workers, train_path)
+    if sha not in _results(CONFIRM):
+        raise SystemExit(f"{sha} 의 확인 결과가 없다 — 확인 구간 순위로 고른 것만 잠금을 연다")
+    _gate(sha, reviewed)
+    with _pinned(train_path, sha) as tp:
+        D = {e: load_locked(e) for e in (*SEARCH, *CONF)}                 # DB 불일치 거부는 opened 전(1회를 태우지 않는다)
+        _opened(LOCKBOX, sha)
+        ab = P.walk_forward_c({e: D[e] for e in SEARCH}, workers, tp, eras=SEARCH)
+        c = P.walk_forward_c({e: D[e] for e in CONF}, workers, tp, eras=CONF)
+    s_ab = P.summarize_c(ab)                                               # A·B 만(시대 C 에는 summarize 를 쓰지 않는다)
     both = {"folds": ab["folds"] + c["folds"], "trades": ab["trades"] + c["trades"]}
     score = P.score_of([f["alpha"] for f in both["folds"]])
     ev, pr, n = _ev(both)
     bars = {"score_pos": bool(score > 0), "ev_net_2x_pos": bool(ev > 0)}
-    row = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": sha, "commit": commit, "half": 1, "score": score,
+    row = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": sha, "status": "result", "commit": commit, "half": 1, "score": score,
            "score_ab": P.score_of([f["alpha"] for f in ab["folds"]]), "alpha_c": c["folds"][0]["alpha"], "void_ab": s_ab["void"],
            "ev_net_2x": ev, "ev_net_2x_ab": _ev(ab)[0], "ev_net_2x_c": _ev(c)[0], "payoff_ratio": pr, "n": n,
            "bars": bars, "pass": all(bars.values()), "evaluator": P.PREREG_TAG,
@@ -293,28 +349,25 @@ def run_screen(workers: int) -> dict:
     P.integrity()
     st = _need_loop_done()
     runs = P._read_jsonl(P.RUNS)
-    pl = pool(runs)
-    commits = train_commits()
-    D = {e: load_search(e) for e in SEARCH_ERAS}
+    pl, rej = pool(runs), pool_rejects(runs)
+    D = {e: load_search(e) for e in SEARCH}
     results, review = {}, []
     for r in pl:
-        sha, commit = r["train_sha"], commits.get(r["train_sha"])
-        if commit is None:
-            results[sha] = {"train_sha": sha, "commit": None, "pass": False, "reason": "train.py 내용의 commit 을 찾지 못함(reflog 밖)"}
-            continue
-        path = extract_train(commit, sha)
-        results[sha] = screen({**r, "commit": commit}, D, path, workers=workers)
-        P.log(f"거르개 {sha} ({commit[:10]}): pass {results[sha]['pass']}")
+        sha = r["train_sha"]
+        path = extract_train(r["commit"], sha)
+        results[sha] = screen(r, D, path, workers=workers)
+        P.log(f"거르개 {sha} ({r['commit']}): pass {results[sha]['pass']}")
         if results[sha]["pass"]:
-            review.append({"train_sha": sha, "commit": commit, "path": path, "lines": _lines(path)})
-    rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n_trials": st["n"], "pool": [r["train_sha"] for r in pl],
-           "pool_rows": [{k: r.get(k) for k in ("train_sha", "score", "beats_best", "ev_net_2x", "oos_trades_per_year", "conc")} for r in pl],
+            review.append({"train_sha": sha, "commit": r["commit"], "path": path, "lines": _lines(path)})
+    rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "n_trials": st["n"], "pool": [r["train_sha"] for r in pl], "pool_rejects": rej,
+           "pool_rows": [{k: r.get(k) for k in ("train_sha", "commit", "score", "beats_best", "ev_net_2x", "oos_trades_per_year", "conc")}
+                         for r in pl],
            "results": results, "survivors": [x["train_sha"] for x in review], "review": review, "evaluator": P.PREREG_TAG}
     P._append(SCREEN, rec)
     print(json.dumps(rec, ensure_ascii=False, indent=1, default=str))
     print("\n사람 열람: 아래 파일을 읽고(e104063 구조 재제출 여부 포함) 통과 목록 전부를 --reviewed 에 적는다.")
     for x in review:
-        print(f"  {x['train_sha']}  {x['commit'][:10]}  {x['lines']}줄  {x['path']}")
+        print(f"  {x['train_sha']}  {x['commit']}  {x['lines']}줄  {x['path']}")
     print(f"  → select.py --confirm --reviewed {','.join(rec['survivors'])}")
     return rec
 
@@ -324,17 +377,19 @@ def run_confirm(reviewed: "list[str]", workers: int) -> dict:
     P.integrity()
     if _rows_both(LOCKBOX):
         raise SystemExit("잠금 절반이 이미 열렸다 — 선택은 끝났다(SELECTION.json)")
-    st = _need_loop_done()
-    scr = P._read_jsonl(SCREEN)
-    if not scr:
-        raise SystemExit("거르개 기록이 없다 — 먼저 select.py --screen")
-    scr = scr[-1]
-    if [r["train_sha"] for r in pool(P._read_jsonl(P.RUNS))] != scr["pool"] or st["n"] != scr["n_trials"]:
-        raise SystemExit("거르개 뒤 원장이 바뀌었다 — select.py --screen 을 다시 돌리고 다시 열람")
+    _need_loop_done()
+    scr = _current_screen()
     survivors = scr["survivors"]
-    if sorted(set(reviewed)) != sorted(survivors) or len(reviewed) != len(set(reviewed)):
+    rv = set(reviewed)
+    if sorted(rv) != sorted(survivors) or len(reviewed) != len(rv):
         raise SystemExit(f"--reviewed {sorted(reviewed)} ≠ 거르개 통과 {sorted(survivors)} — 통과한 train.py 전부를 사람이 읽고 정확히 적는다(v4 b8)")
-    sel = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "chosen": None, "frozen_params": None, "picked": None, "reasons": [],
+    opened = {r["train_sha"] for r in _rows_both(CONFIRM)}
+    done = _results(CONFIRM)
+    stuck = sorted(opened - set(done))
+    if stuck:
+        raise SystemExit(f"확인 중단 — 사람 판단: {stuck} 은 열렸지만 결과가 없다(계산 중 중단). 그 sha 는 소모됐다 — 다시 돌리지 않는다")
+    sel = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "chosen": None, "frozen_params": None, "picked": None,
+           "reasons": [f"풀 제외(dirty·commit 없음): {x['train_sha']} — {x['reason']}" for x in scr.get("pool_rejects", [])],
            "reviewed": sorted(reviewed), "pool": scr["pool_rows"], "screen": scr["results"], "confirm": [], "lockbox": None,
            "evaluator": P.PREREG_TAG}
     if not survivors:
@@ -342,21 +397,20 @@ def run_confirm(reviewed: "list[str]", workers: int) -> dict:
         _write_selection(sel)
         return sel
     by = {x["train_sha"]: x for x in scr["review"]}
-    done = {r["train_sha"]: r for r in _rows_both(CONFIRM)}
     paths = {}
-    for sha in survivors:                                                  # 이어 하기: 이미 연 sha 는 기록을 읽기만 한다
+    for sha in survivors:                                                  # 이어 하기: 결과가 있는 sha 는 기록을 읽기만 한다
         paths[sha] = extract_train(by[sha]["commit"], sha)
-        sel["confirm"].append(done[sha] if sha in done else confirm(sha, paths[sha], workers, commit=by[sha]["commit"]))
+        sel["confirm"].append(done[sha] if sha in done else confirm(sha, paths[sha], rv, workers, commit=by[sha]["commit"]))
     order = sorted(sel["confirm"], key=lambda r: (-(r["score"] if math.isfinite(r["score"]) else -math.inf), r["train_lines"]))
     top = order[0]
     sel["picked"] = {"train_sha": top["train_sha"], "commit": top["commit"], "confirm_score": top["score"], "train_lines": top["train_lines"]}
     sel["reasons"].append(f"확인 score 최대 {top['train_sha']}(동점이면 train.py 줄 수 적은 쪽) — 확인 {len(order)}개 중")
-    lk = lockbox(top["train_sha"], paths[top["train_sha"]], workers, commit=top["commit"])
+    lk = lockbox(top["train_sha"], paths[top["train_sha"]], rv, workers, commit=top["commit"])
     sel["lockbox"] = lk
     if lk["pass"]:
         sel["chosen"] = {"train_sha": top["train_sha"], "commit": top["commit"]}
         sel["frozen_params"] = top["params"]
-        sel["reasons"].append("잠금 절반 바 통과(11폴드 score > 0 ∧ 거래당 순기대값 2배 > 0) — frozen_params = 시대 C 학습 창(2023~2024) 고원 값")
+        sel["reasons"].append("잠금 절반 바 통과(11폴드 score > 0 ∧ 거래당 순기대값 2배 > 0) — frozen_params = 탐색 절반 시대 C 학습 창(2023~2024) 고원 값")
     else:
         sel["reasons"].append(f"잠금 절반 바 실패 {lk['bars']} — 다음 순위로 넘어가지 않는다. 판정: 후보 없음")
     _write_selection(sel)
