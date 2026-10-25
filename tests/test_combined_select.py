@@ -507,10 +507,11 @@ def test_lockbox_top_stock_bar(tmp_path, monkeypatch):
 
 def test_parse_exclude_only_enumerated_reasons():
     assert S.parse_exclude(["a" * 16 + ":e104063", "b" * 16 + ":news_param"]) == {"a" * 16: "e104063", "b" * 16: "news_param"}
+    assert S.parse_exclude(["c" * 16 + ":price_lattice"]) == {"c" * 16: "price_lattice"}          # 정정 0-3 M-1
     for bad in (["a" * 16], ["a" * 16 + ":마음에 안 듦"], ["a" * 16 + ":e104063", "a" * 16 + ":news_param"]):
         with pytest.raises(SystemExit):
             S.parse_exclude(bad)
-    assert set(S.EXCLUDE_REASONS) == {"e104063", "neutral_input", "date_code_target", "news_param", "cross_stock_uni_off"}
+    assert set(S.EXCLUDE_REASONS) == {"e104063", "neutral_input", "date_code_target", "news_param", "cross_stock_uni_off", "price_lattice"}
 
 
 def test_exclude_recorded_before_confirm_and_frozen_after(tmp_path, monkeypatch, _iso):

@@ -555,6 +555,9 @@ def _cut(D: dict, cut: int, shuffle_seed: "int | None" = None) -> dict:
             out[k] = v[:, :cut + 1] if v.ndim == 2 else v[:cut + 1] if len(v) == T else v
     if "vmult" in D:                                                  # 종목별 가격 배수(시간 축 없음) — 절단 V 도 같은 배수로(K1)
         out["vmult"] = np.array(D["vmult"], copy=True)
+        out["mkt_real"] = np.array(D["mkt_real"], copy=True)          # 격자 반올림은 그 칸의 날짜·시장 호가표로(섞어도 칸과 날짜가 같이 움직인다)
+        days = pd.DatetimeIndex(D["days"])
+        out["days"] = days[perm] if perm is not None else days[:cut + 1]
     return out
 
 
@@ -778,6 +781,25 @@ def island_of(sha: str) -> str:
     raise SystemExit(f"브랜치 {b!r} 는 섬이 아니다(combined-loop-1~4) — 평가 거부(기준선 train.py 만 main 에서 평가된다)")
 
 
+def check_island_path(island: str) -> None:
+    """섬 ↔ 워크트리 경로 대응을 숨긴 원장 디렉터리 ``islands.json`` 에 첫 사용 때 기록하고 그 뒤로는 대조한다(정정 0-3 사소 4).
+    같은 섬을 다른 워크트리에서, 또는 한 워크트리를 다른 섬 브랜치로 돌리면 거부한다. 섬 main(기준선)은 검사하지 않는다."""
+    if island == "main":
+        return
+    p = os.path.join(SHADOW, "islands.json")
+    with ledger_lock():
+        m = json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {}
+        if island in m and m[island] != ROOT:
+            raise SystemExit(f"섬 {island} 은 워크트리 {m[island]} 에 묶여 있다(지금 {ROOT}) — 평가 거부")
+        other = [k for k, v in m.items() if v == ROOT and k != island]
+        if other:
+            raise SystemExit(f"워크트리 {ROOT} 는 섬 {other[0]} 에 묶여 있다 — 브랜치를 바꿔 다른 섬으로 쓰지 않는다")
+        if island not in m:
+            m[island] = ROOT
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(m, f, ensure_ascii=False, indent=1)
+
+
 def _isl(r: dict) -> str:
     return r.get("island", "main")
 
@@ -816,8 +838,10 @@ def trial_state() -> dict:
             continue
         new = sha not in seen
         seen.add(sha)
-        if r.get("beats_best") is True:
+        if r.get("beats_best") is True and new:
             kept, since = True, 0
+        elif r.get("beats_best") is True:
+            kept = True                                              # 이미 센 sha 의 keep 은 연속 무 keep 을 되돌리지 않는다(정정 0-3 사소 5)
         elif new and kept:
             since += 1
     n = len(seen)
@@ -929,12 +953,23 @@ def _sandboxed(args: "list[str]", cur: str, stdin: str = "", island: str = "main
         err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         rc, line, err = "timeout", [], err + f"\n시간 초과({SANDBOX_TIMEOUT_S}s) — crash"
     if rc != 0 or not line:
-        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": rc,
+        _crash_append({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "returncode": rc,
                        **git_state(), "island": island, "evaluator": PREREG_TAG})
         print("---\nscore:                 crash\n" + "\n".join(err.splitlines()[-CRASH_TAIL:]))
         raise SystemExit(rc if isinstance(rc, int) and rc else 1)
     sys.stderr.write("\n".join(x for x in p.stderr.splitlines() if re.match(r"^\[\s*\d+s\] ", x) or x.startswith("경고")) + "\n")
     return json.loads(line[-1][len("@@RESULT@@"):])
+
+
+def _crash_append(rec: dict) -> None:
+    """crash·sha 불일치 행도 결과 행과 같은 자물쇠·상한 재검사 아래서 덧붙인다(정정 0-3 사소 3) — 실행 중 다른 섬이 상한을 채웠고 이 sha 가
+    새것이면 기록하지 않는다(151 번째 crash 도 끼지 못한다)."""
+    with ledger_lock():
+        st = trial_state()
+        if st["stop"] and rec["train_sha"] not in st["shas"]:
+            print(_stop_msg(st) + " — 실행 중 다른 섬이 상한을 채웠다, crash 를 기록하지 않는다", file=sys.stderr)
+            return
+        _append(RUNS, rec)
 
 
 def _stop_msg(st: dict) -> str:
@@ -948,6 +983,7 @@ def evaluate(workers: int) -> dict:
         raise SystemExit(_stop_msg(st))
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
     isl = island_of(cur)                                              # 섬이 아닌 브랜치는 기준선만
+    check_island_path(isl)
     integrity()
     os.makedirs(SHADOW, exist_ok=True)                                # 있어야 격리에서 가린다
     t0 = time.time()
@@ -955,7 +991,7 @@ def evaluate(workers: int) -> dict:
     r = _sandboxed(["--inner", "--workers", str(workers)], cur, stdin=f"{causality_seed(TRAIN)}\n", island=isl)
     s, folds, conc, abl = r["summary"], r["folds"], r["conc"], r["ablation"]
     if s["train_sha"] != cur:
-        _append(RUNS, {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "why": "sha mismatch",
+        _crash_append({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "train_sha": cur, "crash": True, "why": "sha mismatch",
                        **git_state(), "island": isl, "evaluator": PREREG_TAG})
         raise SystemExit("격리 실행이 다른 train.py 를 평가했다 — 거부")
     with ledger_lock():                                               # 상한 재검사 + keep 판정 + 덧붙이기를 한 자물쇠 안에서
@@ -1000,6 +1036,7 @@ def accept() -> None:
     integrity(check_cache=False)
     cur = hashlib.sha256(open(TRAIN, "rb").read()).hexdigest()[:16]
     isl = island_of(cur)
+    check_island_path(isl)
     with ledger_lock():
         evals = [r for r in _read_jsonl(RUNS) if "folds" in r and _isl(r) == isl]
         if not evals or evals[-1]["train_sha"] != cur or not evals[-1]["beats_best"]:

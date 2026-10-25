@@ -137,3 +137,20 @@ def test_news_exclusion_single_switch(tmp_path, monkeypatch):
     monkeypatch.setattr(cd, "NEWS_EXCLUDE", False)                                   # 사용자가 뉴스 부품을 빼면 끄는 스위치 하나
     u3, det = cd.apply_news_exclusion(uni, ["000001", "999999"], days, tmp_path)
     assert det == {"enabled": False} and u3.all()
+
+
+
+def test_frozen_append_only_first_value_wins(tmp_path):
+    fr = {"status": {"000001": "ok"}, "universe": {"2026-09-11": ["000001"]}}
+    cd.write_frozen(fr, str(tmp_path))
+    f2 = cd.load_frozen(str(tmp_path))
+    before = {k: set(f2.get(k, {})) for k in ("status", "universe")}
+    f2["universe"]["2026-10-23"] = ["000002"]                                         # 전진 빌더가 처음 계산
+    f2["status"]["000009"] = "nofile"
+    assert cd.append_frozen(f2, before, str(tmp_path)) == 2
+    f3 = cd.load_frozen(str(tmp_path))
+    assert f3["universe"]["2026-10-23"] == ["000002"] and f3["status"]["000009"] == "nofile"
+    with open(tmp_path / cd.FROZEN_ADDED, "a") as fh:                                 # 나중에 다른 값이 덧붙어도
+        fh.write('{"kind": "universe", "key": "2026-10-23", "value": ["999999"]}\n')
+    assert cd.load_frozen(str(tmp_path))["universe"]["2026-10-23"] == ["000002"]     # 먼저 적힌 값이 이긴다
+    assert cd.load_frozen(str(tmp_path))["universe"]["2026-09-11"] == ["000001"]

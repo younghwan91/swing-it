@@ -26,7 +26,7 @@ import pandas as pd
 
 from research.autoresearch.prepare import VIEW_KEYS as VIEW_KEYS_V4
 from research.autoresearch.prepare import half_of, log, slice_half
-from research.combined.gaps import gap_arrays
+from research.combined.gaps import gap_arrays, tick_dated_vec
 from research.combined.news import (
     NEWS_START,
     apply_collect,
@@ -43,6 +43,7 @@ CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/combined")
 LOCKED_CACHE = os.path.expanduser("~/.cache/cc-swing/scratch/combined_locked")    # 잠금 절반(격리가 가린다)
 FROZEN = os.path.expanduser("~/.cache/cc-swing/scratch/combined_frozen")        # 뉴스 제외 분류·수집 대상(격리가 가린다)
 FROZEN_FILES = ("news_status.json", "news_universe.json")
+FROZEN_ADDED = "news_added.jsonl"      # 전진 빌더가 처음 계산한 수집 대상·분류(덧붙이기 전용 — 먼저 적힌 값이 이긴다, 정정 0-3)
 PRICE_SALT = os.path.expanduser("~/.cache/cc-swing/combined_ledger/price_salt")   # 원장 사본 디렉터리(격리가 가린다) — 출력 금지
 FRAC_LEAK_TOL = 0.05
 NEWS_EXCLUDE = True    # 뉴스 구간 종목 제외 규칙 스위치(사용자가 뉴스 부품을 빼기로 하면 False — 그때는 PREREG 정정으로)
@@ -69,14 +70,23 @@ REPO_KEYS = {"scalp": GAP_KEYS, "daytrade": NEWS_KEYS}   # swing 은 엔진·청
 PRICE_KEYS = ("O", "H", "L", "C")
 
 
+def round_to_tick(p: np.ndarray, days, mkt: np.ndarray) -> np.ndarray:
+    """수정가를 그날 호가표(시장별 옛 표·통합 표)의 자기 수준 격자로 반올림(단조 — H ≥ C ≥ L 유지; 구간 경계는 두 틱의 공배수)."""
+    p = np.asarray(p, float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        tk = tick_dated_vec(p, pd.DatetimeIndex(days), mkt)
+        return np.round(p / tk) * tk
+
+
 def view_c(D: dict) -> dict:
-    """train.py 에 넘기는 묶음 — 복사본, 날짜·종목코드 없음. O·H·L·C 에는 종목별 비밀 배수 ``vmult`` 를 곱한다(K1). 캐시(``load``)는
-    vmult 가 없으면 거부한다. 장난감 D 처럼 vmult 키가 없으면 1."""
+    """train.py 에 넘기는 묶음 — 복사본, 날짜·종목코드 없음. ``vmult`` 가 있으면 O·H·L·C 를 그날 호가 격자로 반올림한 뒤(정정 0-3 K1-bis:
+    소급 수정가가 격자 밖이라 남던 미래 수정 사건·폐지 표지 제거) 종목별 비밀 배수(한 자릿수 log-균등)를 곱한다. 캐시(``load``)는 vmult 가
+    없으면 거부한다. 장난감 D 처럼 vmult 키가 없으면 그대로."""
     V = {k: np.array(D[k], copy=True) for k in VIEW_KEYS_C}
     if "vmult" in D:
         m = np.asarray(D["vmult"], float)[:, None]
         for k in PRICE_KEYS:
-            V[k] = V[k] * m
+            V[k] = round_to_tick(D[k], D["days"], D["mkt_real"]) * m
     V.update(kx=np.array(D["kx"], copy=True), kq=np.array(D["kq"], copy=True), regime_on=np.array(D["regime_on"], copy=True))
     return V
 
@@ -150,17 +160,18 @@ def price_salt(path: str = PRICE_SALT) -> str:
 
 
 def price_mult(codes: "list[str]", salt: str) -> np.ndarray:
-    """종목별 배수 U[1,2) = 1 + sha256(소금:코드) 앞 52비트 / 2^52. 같은 코드는 모든 시대·절반에서 같다."""
-    return np.array([1.0 + int(hashlib.sha256(f"{salt}:{c}".encode()).hexdigest()[:13], 16) / 16 ** 13 for c in codes])
+    """종목별 배수 10^U[0,1)(한 자릿수 log-균등, 정정 0-3) — U = sha256(소금:코드) 앞 52비트 / 2^52. 같은 코드는 모든 시대·절반에서 같다.
+    log-균등이라 격자 간격(틱 × 배수)의 가수가 종목과 무관하게 고르다(U[1,2) 는 가수 [1,2)·[5,10) 에 몰렸다)."""
+    return np.array([10.0 ** (int(hashlib.sha256(f"{salt}:{c}".encode()).hexdigest()[:13], 16) / 16 ** 13) for c in codes])
 
 
-def check_price_frac_leak(C: np.ndarray, vmult: np.ndarray, uni: np.ndarray, tol: float = FRAC_LEAK_TOL) -> dict:
-    """K1 빌드 검사: 원 수정가 C 의 비정수 칸(= t 뒤 가격 수정 사건 있음)과 정수 칸 사이에서, V 가 보는 가격(C × vmult)의 소수부 분포
-    KS 가 ``tol`` 이상이면 ValueError. 배수가 없으면(=1) 정수 칸 소수부가 전부 0 이라 걸린다."""
+def check_price_frac_leak(C: np.ndarray, VC: np.ndarray, uni: np.ndarray, tol: float = FRAC_LEAK_TOL) -> dict:
+    """K1 빌드 검사: 원 수정가 C 의 비정수 칸(= t 뒤 가격 수정 사건 있음)과 정수 칸 사이에서, V 가 보는 종가 ``VC`` 의 소수부 분포
+    KS 가 ``tol`` 이상이면 ValueError. 배수가 없으면 정수 칸 소수부가 전부 0 이라 걸린다."""
     C = np.asarray(C, float)
     ok = np.asarray(uni, bool) & np.isfinite(C)
     nonint = np.abs(C - np.round(C)) > 1e-6
-    v = C * np.asarray(vmult, float)[:, None]
+    v = np.asarray(VC, float)
     fr = v - np.floor(v)
     a, b = fr[ok & nonint], fr[ok & ~nonint]
     out = {"nonint_share_uni": float(nonint[ok].mean()) if ok.any() else 0.0,
@@ -170,15 +181,86 @@ def check_price_frac_leak(C: np.ndarray, vmult: np.ndarray, uni: np.ndarray, tol
     return out
 
 
+LATTICE_W, LATTICE_TOL, LATTICE_N = 20, 0.02, 1000
+
+
+def lattice_flags(V: dict, W: int = LATTICE_W) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+    """리뷰어(3차) 격자 탐지기: t 까지 W 일 창의 O·H·L·C(V) 0 아닌 최소 간격 d 로 (i) r = d/(tickp[t]·C[t−1]) 가 정수가 아니다(|r−k| > 0.12·max(k,1)
+    또는 k < 1), (ii) d 의 가수 ∈ [2.05, 4.95) 면 표지. → (표지 bool[N,T], 계산된 칸 bool[N,T], N = C/d float[N,T])."""
+    from numpy.lib.stride_tricks import sliding_window_view as swv
+    P = np.stack([np.asarray(V[k], float) for k in PRICE_KEYS], -1)
+    n, T, _ = P.shape
+    flag, ok, nn = np.zeros((n, T), bool), np.zeros((n, T), bool), np.full((n, T), np.nan)
+    if T < W + 1:
+        return flag, ok, nn
+    t = np.arange(W - 1, T)
+    tp = np.asarray(V["tickp"], float)
+    for i in range(n):
+        w = np.sort(swv(P[i], W, axis=0).reshape(T - W + 1, -1), 1)
+        df = np.diff(w, axis=1)
+        df = np.where(df > 1e-6 * np.abs(w[:, 1:]) + 1e-9, df, np.inf)
+        d = df.min(1)
+        with np.errstate(all="ignore"):
+            r = d / (tp[i, t] * P[i, t - 1, 3])
+            k = np.round(r)
+            mant = d / 10 ** np.floor(np.log10(d))
+            flag[i, t] = (np.abs(r - k) > 0.12 * np.maximum(k, 1)) | (k < 1) | ((mant >= 2.05) & (mant < 4.95))
+            nn[i, t] = P[i, t, 3] / d
+        ok[i, t] = np.isfinite(r) & np.all(np.isfinite(w), 1)
+    return flag, ok, nn
+
+
+def check_lattice_leak(V: dict, uni: np.ndarray, labels: dict, tol: float = LATTICE_TOL) -> dict:
+    """빌드 수용 검사(판정 32): 라벨(미래 수정 사건 있음/없음, 폐지/생존)마다 탐지기 표지율 차 < ``tol`` — uni 칸 전체와 N = C/d > 1000 칸 둘 다.
+    어기면 ValueError(캐시를 쓰지 않는다). 값 dict 를 돌려준다."""
+    flag, ok, nn = lattice_flags(V)
+    ok = ok & np.asarray(uni, bool)
+    out, bad = {}, []
+    for sub_name, sub in (("all", ok), ("n1000", ok & (nn > LATTICE_N))):
+        for lab, L in labels.items():
+            L = np.broadcast_to(np.asarray(L, bool), ok.shape)
+            a, b = sub & L, sub & ~L
+            if not a.any() or not b.any():
+                out[f"{lab}_{sub_name}"] = None
+                continue
+            fa, fb = float(flag[a].mean()), float(flag[b].mean())
+            out[f"{lab}_{sub_name}"] = {"flag_label": fa, "flag_other": fb, "diff": fa - fb, "cells": int(a.sum()), "cells_other": int(b.sum())}
+            if abs(fa - fb) >= tol:
+                bad.append(f"{lab}/{sub_name} {fa:.3f} vs {fb:.3f}")
+    if bad:
+        raise ValueError(f"격자 탐지기 표지율 차 ≥ {tol} — " + "; ".join(bad))
+    return out
+
+
 def load_frozen(path: str = FROZEN) -> dict:
-    """얼린 뉴스 제외 분류·수집 대상 → {"status": {코드: 분류}, "universe": {날: [코드]}}. 없으면 빈 dict(빌드가 채운다)."""
+    """얼린 뉴스 제외 분류·수집 대상 → {"status": {코드: 분류}, "universe": {날: [코드]}}. 없으면 빈 dict(빌드가 채운다).
+    태그 전 빌드의 두 JSON 위에 ``news_added.jsonl``(전진 빌더가 처음 계산한 값)을 얹는다 — 이미 있는 키는 덮지 않는다(먼저 적힌 값이 이긴다)."""
     fr = {}
     for k, f in zip(("status", "universe"), FROZEN_FILES, strict=True):
         q = os.path.join(path, f)
         if os.path.exists(q):
             with open(q, encoding="utf-8") as fh:
                 fr[k] = json.load(fh)
+    q = os.path.join(path, FROZEN_ADDED)
+    if os.path.exists(q):
+        with open(q, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    r = json.loads(line)
+                    fr.setdefault(r["kind"], {}).setdefault(r["key"], r["value"])
     return fr
+
+
+def append_frozen(frozen: dict, before: dict, path: str = FROZEN) -> int:
+    """``before``(빌드 시작 때 키 집합) 뒤에 새로 계산된 분류·수집 대상을 ``news_added.jsonl`` 에 덧붙인다(전진 빌더용). 덧붙인 줄 수."""
+    os.makedirs(path, exist_ok=True)
+    n = 0
+    with open(os.path.join(path, FROZEN_ADDED), "a", encoding="utf-8") as fh:
+        for kind in ("status", "universe"):
+            for k in sorted(set(frozen.get(kind, {})) - set(before.get(kind, ()))):
+                fh.write(json.dumps({"kind": kind, "key": k, "value": frozen[kind][k]}, ensure_ascii=False) + "\n")
+                n += 1
+    return n
 
 
 def write_frozen(fr: dict, path: str = FROZEN) -> None:
@@ -215,17 +297,21 @@ def _delisted_codes(con) -> set:
     return set(pd.read_sql_query("SELECT code FROM delisted_stocks", con)["code"].astype(str))
 
 
-def build_era(con, era: str, end: "str | None" = None, frozen: "dict | None" = None, salt: "str | None" = None) -> dict:
+def build_era(con, era: str, end: "str | None" = None, frozen: "dict | None" = None, salt: "str | None" = None,
+              persist: "str | None" = None) -> dict:
     """prepare.build_era 단계 (ERAS_C) + 갭·뉴스 배열 + 뉴스 구간 uni 끄기 + 누수 검사 셋(어기면 ValueError — 캐시를 쓰지 않는다).
 
     ``end`` = 데이터 끝 날짜 바꾸기(전진 빌더: 시대 C 를 끝 날짜만 굴린다 — PREREG 정정 0 M6a). 없으면 ERAS_C 그대로.
     ``frozen`` = 얼린 뉴스 제외 분류·수집 대상(``load_frozen``) — 없는 항목은 계산해 이 dict 에 더한다(``build_all`` 이 파일로 쓴다).
-    ``salt`` = 가격 배수 소금(없으면 ``price_salt()``)."""
+    ``salt`` = 가격 배수 소금(없으면 ``price_salt()``).
+    ``persist`` = 얼린 디렉터리 — 주면 이 빌드가 처음 계산한 수집 대상·분류를 거기 ``news_added.jsonl`` 에 덧붙인다(전진 빌더: 한 번 정한
+    U(d) 를 다시 계산하지 않는다 — 정정 0-3 사소 2)."""
     import research.experiments.indep30 as I30
     from swing_it.features.eps_asof import eps_ok, eps_yoy
     from swing_it.features.korea import cost_rt
     from swing_it.storage import read_index
     frozen = {} if frozen is None else frozen
+    before = {k: set(frozen.get(k, {})) for k in ("status", "universe")}
     E = ERAS_C[era]
     data = (E["data"][0], end or E["data"][1])
     D = I30.build(con, data, E["eps"])
@@ -258,19 +344,26 @@ def build_era(con, era: str, end: "str | None" = None, frozen: "dict | None" = N
     # --- 결합 추가분
     mkt_real, miss, n_dis = _market_real(con, codes)
     out["mkt_real"] = mkt_real
-    out.update(gap_arrays(D["O"], D["C"], D["reopen"], D["lu"], days, mkt_real))
+    Or, Cr = round_to_tick(D["O"], days, mkt_real), round_to_tick(D["C"], days, mkt_real)   # V 와 같은 반올림 가격으로(갭·tickp)
+    out.update(gap_arrays(Or, Cr, D["reopen"], D["lu"], days, mkt_real))
     out.update(news)
     tk = check_tickp_leak(out["tickp"], D["uni"], isdel)
     out["vmult"] = price_mult(codes, price_salt() if salt is None else salt)
-    fl = check_price_frac_leak(D["C"], out["vmult"], D["uni"])
+    Vfull = view_c(out)
+    fl = check_price_frac_leak(D["C"], Vfull["C"], D["uni"])
+    lat = check_lattice_leak(Vfull, D["uni"],
+                             {"event": np.abs(D["C"] - np.round(D["C"])) > 1e-6, "delisted": isdel[:, None]})
     win = np.asarray(pd.DatetimeIndex(days) >= NEWS_START)[None, :] & D["uni"]
     uc = D["uni"].sum(1)
     out["diag"] = {**D["diag"], "eps_up_share": float(up[ci, s].mean()),
                    **{f"tickp_leak_{k}": v for k, v in tk.items()}, **{f"price_frac_leak_{k}": v for k, v in fl.items()},
+                   **{f"price_lattice_{k}": v for k, v in lat.items()},
                    "news_collect_share_uni_window": float(collect[win].mean()) if win.any() else None,
                    **{f"news_exclusion_{k}": v for k, v in excl.items()}, **{f"news_leak_{k}": v for k, v in news_leak.items()},
                    "mkt_unmapped_uni_cells": {c: int(uc[codes.index(c)]) for c in miss if uc[codes.index(c)] > 0},
                    "mkt_stocks_vs_delisted_disagree": n_dis}
+    if persist is not None:
+        out["diag"]["news_frozen_appended"] = append_frozen(frozen, before, persist)
     return out
 
 

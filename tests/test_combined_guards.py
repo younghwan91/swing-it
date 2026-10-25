@@ -971,27 +971,35 @@ def test_price_mult_salted_deterministic_in_range(tmp_path):
     assert cd.price_salt(str(tmp_path / "led" / "price_salt")) == salt                 # 한 번만 만든다
     codes = [f"{i:06d}" for i in range(500)]
     m = cd.price_mult(codes, salt)
-    assert ((m >= 1) & (m < 2)).all() and len(set(m)) == 500 and m.std() > 0.2
+    lm = np.log10(m)
+    assert ((m >= 1) & (m < 10)).all() and len(set(m)) == 500 and 0.25 < lm.std() < 0.33 and abs(lm.mean() - 0.5) < 0.05   # 한 자릿수 log-균등
     assert np.array_equal(cd.price_mult(codes[::-1], salt), m[::-1])                  # 종목마다 같은 배수(시대·절반 무관)
     assert not np.allclose(cd.price_mult(codes, salt + "x"), m)                       # 소금 없이는 모른다
 
 
-def test_view_scales_prices_only_and_baseline_trades_invariant(tmp_path, monkeypatch):
+def test_view_rounds_to_tick_then_scales_and_baseline_trades_invariant(tmp_path, monkeypatch):
     from research.combined import data as cd
     D = _toy(n=6, t=780, start="2022-01-03", seed=3)
-    V0 = cd.view_c(D)
+    D["C"] = D["C"] * 37.3                                                           # 여러 호가 구간에 걸치게
+    for k in ("O", "H", "L"):
+        D[k] = D[k] * 37.3
+    D["mkt_real"] = np.array([0, 1, 0, 1, 0, 1], np.int8)
+    D1 = {**D, "vmult": np.ones(6)}
     D2 = {**D, "vmult": cd.price_mult(D["codes"], "s")}
-    V = cd.view_c(D2)
+    V1, V2 = cd.view_c(D1), cd.view_c(D2)
+    from research.combined.gaps import tick_dated_vec
     for k in ("O", "H", "L", "C"):
-        assert np.allclose(V[k], V0[k] * D2["vmult"][:, None]) and not np.allclose(V[k], V0[k])
-    assert np.allclose(V["C"][:, 1:] / V["C"][:, :-1], V0["C"][:, 1:] / V0["C"][:, :-1])   # 수익률 그대로
-    for k in set(V) - {"O", "H", "L", "C"}:
-        assert np.array_equal(V[k], V0[k], equal_nan=True)
+        tk = tick_dated_vec(V1[k], D["days"], D["mkt_real"])
+        assert np.allclose(V1[k] / tk, np.round(V1[k] / tk))                         # 그날 호가 격자 위
+        assert np.allclose(V2[k], V1[k] * D2["vmult"][:, None])
+    assert (V1["H"] >= V1["C"]).all() and (V1["C"] >= V1["L"]).all()                # 단조 반올림: 순서 유지
+    for k in set(V2) - {"O", "H", "L", "C"}:
+        assert np.array_equal(V2[k], cd.view_c(D)[k], equal_nan=True)
     monkeypatch.setattr(P, "ERAS", {"A": {"folds": TOY_FOLDS}})
     fixed = [{"era": "A", "params": dict(P.REF_PARAMS)}] * 2
-    r0 = P.walk_forward_c({"A": D}, 1, P.TRAIN, fixed=fixed)
-    r1 = P.walk_forward_c({"A": D2}, 1, P.TRAIN, fixed=fixed)
-    assert [f["trade_key"] for f in r0["folds"]] == [f["trade_key"] for f in r1["folds"]] and sum(f["n"] for f in r0["folds"]) > 0
+    r1 = P.walk_forward_c({"A": D1}, 1, P.TRAIN, fixed=fixed)
+    r2 = P.walk_forward_c({"A": D2}, 1, P.TRAIN, fixed=fixed)
+    assert [f["trade_key"] for f in r1["folds"]] == [f["trade_key"] for f in r2["folds"]] and sum(f["n"] for f in r1["folds"]) > 0
 
 
 def test_price_frac_leak_check_fires_without_multiplier():
@@ -1002,8 +1010,10 @@ def test_price_frac_leak_check_fires_without_multiplier():
     C[n // 2:] = C[n // 2:] * 0.8731                                                  # 뒤에 분할·증자: 소급 수정 → 비정수
     uni = np.ones((n, t), bool)
     with pytest.raises(ValueError, match="소수부"):
-        cd.check_price_frac_leak(C, np.ones(n), uni)                                  # 위반 주입: 배수 없음
-    out = cd.check_price_frac_leak(C, cd.price_mult([f"{i:06d}" for i in range(n)], "salt"), uni)
+        cd.check_price_frac_leak(C, C, uni)                                           # 위반 주입: 배수 없음
+    days = pd.bdate_range("2024-01-02", periods=t)
+    VC = cd.round_to_tick(C, days, np.zeros(n, int)) * cd.price_mult([f"{i:06d}" for i in range(n)], "salt")[:, None]
+    out = cd.check_price_frac_leak(C, VC, uni)
     assert out["ks"] < cd.FRAC_LEAK_TOL and 0.45 < out["nonint_share_uni"] < 0.55
 
 
@@ -1071,6 +1081,7 @@ def test_accept_per_island(monkeypatch):
     P.accept()
     assert os.path.exists(P.best_path("combined-loop-1")) and not os.path.exists(P.BEST)
     assert P._read_jsonl(P.BEST_HISTORY)[-1]["island"] == "combined-loop-1"
+    os.remove(os.path.join(P.SHADOW, "islands.json"))                               # 경로 대응 검사는 따로 시험한다
     monkeypatch.setattr(P, "current_branch", lambda: "combined-loop-2")
     with pytest.raises(SystemExit, match="combined-loop-2"):
         P.accept()
@@ -1148,9 +1159,100 @@ def test_cut_view_keeps_price_multiplier():
     (2026-10-25 태그 전 스모크에서 실제로 era A cut 731 cand 1칸 불일치)."""
     from research.combined import data as cd
     D = _toy(n=4, t=60, seed=5)
-    D["vmult"] = cd.price_mult(D["codes"], "s")
+    D["vmult"], D["mkt_real"] = cd.price_mult(D["codes"], "s"), np.zeros(4, np.int8)
     full = cd.view_c(D)
     for mode in (None, 7):
         V = cd.view_c(P._cut(D, 30, shuffle_seed=mode))
         for k in ("O", "H", "L", "C"):
             assert np.array_equal(V[k][:, :31], full[k][:, :31])
+
+
+# ---------------------------------------------------------------- 정정 0-3: 격자 탐지기·사소
+
+def _lattice_panel(adjust: bool, n: int = 300, t: int = 80, seed: int = 0):
+    """생존 절반은 호가 격자 위 원 가격, 나머지 절반은 소급 수정가(× 0.8731 — 미래 수정 사건, 격자 밖)."""
+    rng = np.random.default_rng(seed)
+    days = pd.bdate_range("2024-01-02", periods=t)
+    base = np.exp(rng.uniform(np.log(3_000), np.log(300_000), n))[:, None] * np.cumprod(1 + rng.normal(0, 0.02, (n, t)), axis=1)
+    from research.combined import data as cd
+    mk = np.zeros(n, np.int8)
+    ev = np.arange(n) >= n // 2
+    D = {"days": days, "codes": [f"{i:06d}" for i in range(n)], "mkt_real": mk, "C": base}
+    for k in ("O", "H", "L"):
+        D[k] = base * (1 + rng.normal(0, 0.01, (n, t)))
+    D["H"], D["L"] = np.maximum.reduce([D["O"], D["H"], D["C"]]), np.minimum.reduce([D["O"], D["L"], D["C"]])
+    for k in ("O", "H", "L", "C"):
+        D[k] = cd.round_to_tick(D[k], days, mk)                                       # 원 가격: 호가 격자 위
+        if adjust:
+            D[k][ev] = D[k][ev] * 0.8731                                              # 뒤에 수정 사건: 소급 수정가(격자 밖)
+    return D, ev, cd
+
+
+def _tickp_of(V, cd, D):
+    from research.combined.gaps import coarse2, tick_dated_vec
+    C = np.asarray(V["C"], float) / (np.asarray(D["vmult"], float)[:, None] if "vmult" in D else 1.0)
+    tp = np.full(C.shape, np.nan)
+    with np.errstate(all="ignore"):
+        tp[:, 1:] = coarse2(tick_dated_vec(C[:, :-1], D["days"][1:], D["mkt_real"]) / C[:, :-1])
+    return tp
+
+
+def test_lattice_detector_fires_on_raw_and_uniform_multiplier_passes_rounded():
+    """판정 32 위반 주입: (a) 반올림·배수 없는 V, (b) U[1,2) 배수만 — 둘 다 걸린다. (c) 격자 반올림 + log-균등 배수 — 미래 사건 라벨에서 통과."""
+    D, ev, cd = _lattice_panel(adjust=True)
+    uni = np.ones(D["C"].shape, bool)
+    lab = {"event": ev[:, None]}
+    V = {k: D[k] for k in ("O", "H", "L", "C")}
+    V["tickp"] = _tickp_of(V, cd, {**D})                                              # 원 가격의 tickp
+    with pytest.raises(ValueError, match="격자 탐지기"):
+        cd.check_lattice_leak(V, uni, lab)
+    m = 1 + np.random.default_rng(1).random(len(ev))
+    Vu = {k: D[k] * m[:, None] for k in ("O", "H", "L", "C")}
+    Vu["tickp"] = V["tickp"]
+    with pytest.raises(ValueError, match="격자 탐지기"):
+        cd.check_lattice_leak(Vu, uni, lab)
+    D2 = {**D, "vmult": cd.price_mult(D["codes"], "salt"), "tickp": np.zeros(D["C"].shape), "kx": np.ones(len(D["days"])),
+          "kq": np.ones(len(D["days"])), "regime_on": np.ones(len(D["days"]), bool)}
+    Vr = {k: cd.round_to_tick(D[k], D["days"], D["mkt_real"]) * D2["vmult"][:, None] for k in ("O", "H", "L", "C")}
+    Vr["tickp"] = _tickp_of(Vr, cd, D2)
+    out = cd.check_lattice_leak(Vr, uni, lab, tol=1.0)                                # 값만(장난감 300 종목 — 아래 주석)
+    assert abs(out["event_all"]["diff"]) < 0.05 and abs(out["event_all"]["diff"]) < 0.1 * abs(0.83)
+    # N > 1000 칸은 장난감에서도 라벨 간 가격 구간 구성이 달라(× 0.8731) 차이가 남는다 — 실데이터에서도 같은 현상(정정 0-3 보고)
+
+
+def test_since_keep_not_reset_by_rerun_of_counted_sha():
+    P._append(P.RUNS, {"train_sha": "k0", "folds": [], "beats_best": True})
+    for i in range(5):
+        P._append(P.RUNS, {"train_sha": f"n{i}", "folds": [], "beats_best": False})
+    P._append(P.RUNS, {"train_sha": "k0", "folds": [], "beats_best": True})          # 이미 센 sha 를 다시 돌려 keep
+    assert P.trial_state()["since_keep"] == 5
+    P._append(P.RUNS, {"train_sha": "new", "folds": [], "beats_best": True})
+    assert P.trial_state()["since_keep"] == 0
+
+
+def test_crash_row_respects_cap_recheck(monkeypatch):
+    for i in range(149):
+        P._append(P.RUNS, {"train_sha": f"s{i}", "island": "combined-loop-1", "folds": [], "beats_best": False})
+    monkeypatch.setattr(P, "integrity", lambda *a, **k: None)
+    cur = P.hashlib.sha256(open(P.TRAIN, "rb").read()).hexdigest()[:16]
+
+    def fill_then_crash(args):
+        P._append(P.RUNS, {"train_sha": "late", "island": "combined-loop-3", "folds": [], "beats_best": False})
+        return [sys.executable, "-c", "raise SystemExit(2)"]
+    monkeypatch.setattr(P, "sandbox_cmd_c", fill_then_crash)
+    with pytest.raises(SystemExit):
+        P.evaluate(1)
+    assert cur not in {r["train_sha"] for r in P._read_jsonl(P.RUNS)} and P.trial_state()["n"] == 150
+
+
+def test_island_worktree_mapping_recorded_and_enforced(monkeypatch):
+    P.check_island_path("combined-loop-1")
+    assert json.load(open(os.path.join(P.SHADOW, "islands.json"))) == {"combined-loop-1": P.ROOT}
+    P.check_island_path("combined-loop-1")                                           # 같은 대응은 통과
+    with pytest.raises(SystemExit, match="묶여"):
+        P.check_island_path("combined-loop-2")                                       # 같은 워크트리를 다른 섬으로
+    monkeypatch.setattr(P, "ROOT", "/elsewhere/wt")
+    with pytest.raises(SystemExit, match="묶여"):
+        P.check_island_path("combined-loop-1")                                       # 같은 섬을 다른 워크트리에서
+    P.check_island_path("combined-loop-2")                                           # 다른 워크트리의 새 섬은 기록
+    P.check_island_path("main")                                                      # 기준선은 검사 안 함

@@ -71,7 +71,8 @@ EXCLUDE_REASONS = {"e104063": "은퇴한 e104063 구조(시장 대비 수축 + �
                    "neutral_input": "중립 입력(0·False)을 감지하거나 중립 입력에서 통과(pass-through)하지 않는 부품",
                    "date_code_target": "날짜·종목(배열 위치 포함)을 겨냥하는 규칙",
                    "news_param": "뉴스 부품에 숫자 파라미터(params 의 창 길이·개수 문턱 등)",
-                   "cross_stock_uni_off": "uni 가 꺼진 종목의 교차 종목 정보 사용(동종·상관 종목 고르기 — 정정 0-2 판정 28)"}
+                   "cross_stock_uni_off": "uni 가 꺼진 종목의 교차 종목 정보 사용(동종·상관 종목 고르기 — 정정 0-2 판정 28)",
+                   "price_lattice": "가격 끝자리·호가 격자·가격 간격·가격 수준을 쓰는 규칙(미래 수정 사건·폐지 표지 통로 — 정정 0-3 M-1)"}
 N_SWING_TRIALS = 280                                                       # 같은 데이터의 swing 루프 시행(DSR N 에 더한다)
 SEARCH = {e: ERAS_C[e] for e in ("A", "B")}                                # 선택 구간(루프와 같은 10폴드)
 CONF = {"C": ERAS_C["C"]}                                                  # 확인 구간 1폴드
