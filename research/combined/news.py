@@ -40,15 +40,22 @@ def _read(path: Path) -> pd.DataFrame:
             rows.append(
                 (
                     a.get("id"),
+                    t,
                     a.get("createdAt"),
                     bool(FEAT_RE.search(t)),
                     bool(EXCL_RE.search(t)),
                     bool(MOVE_RE.search(t)),
                 )
             )
-    df = pd.DataFrame(rows, columns=["id", "ts", "feat", "excl", "move"])
+    df = pd.DataFrame(rows, columns=["id", "title", "ts", "feat", "excl", "move"])
     df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
-    return df.dropna(subset=["ts"]).drop_duplicates("id")  # (id, code): 파일이 종목별
+    if df["ts"].dt.tz is not None:
+        raise ValueError(f"createdAt 이 tz-aware: {path} (tz-naive 로컬시각 가정)")
+    df = df.dropna(subset=["ts"])
+    # (id, code) 중복 제거: 파일이 종목별이라 id 만. id 가 없는 행은 (title, ts) 로 따로 본다.
+    nid = df["id"].isna()
+    keep = ~(df["id"].duplicated() & ~nid) & ~(df.duplicated(["title", "ts"]) & nid)
+    return df[keep]
 
 
 def news_arrays(codes: list[str], days: pd.DatetimeIndex, archive: Path) -> dict:
