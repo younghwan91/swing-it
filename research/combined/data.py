@@ -46,12 +46,44 @@ def view_c(D: dict) -> dict:
     return V
 
 
-def _market_real(con, codes: list) -> np.ndarray:
-    """종목별 실제 시장 int8 — 0 코스피(·기타), 1 코스닥. 폐지 종목은 delisted_stocks."""
+MARKET_MAP = {"코스닥": 1, "거래소": 0, "유가증권": 0, "코넥스": 1}
+
+
+def market_codes(m: pd.Series, codes: list) -> "tuple[np.ndarray, list]":
+    """code→market 문자열 표 → (int8[N], 시장 없음·ETF 등 미분류 코드 목록). 표 밖 문자열은 오류, 없음은 0(코스피 표)."""
+    m = m.reindex(codes)
+    bad = sorted(set(m.dropna().astype(str)) - set(MARKET_MAP))
+    if bad:
+        raise ValueError(f"예상 밖 market 문자열: {bad}")
+    miss = m.isna().to_numpy()
+    arr = m.map(MARKET_MAP).fillna(0).to_numpy(np.int8)
+    return arr, [c for c, x in zip(codes, miss, strict=True) if x]
+
+
+def _market_real(con, codes: list) -> "tuple[np.ndarray, list, int]":
+    """종목별 실제(현재) 시장 int8 + 시장 없는 코드 + stocks/delisted_stocks 불일치 수."""
     mk = pd.read_sql_query("SELECT code, market FROM stocks", con)
     dk = pd.read_sql_query("SELECT code, market FROM delisted_stocks", con)
+    both = mk.merge(dk, on="code")
+    n_dis = int((both["market_x"] != both["market_y"]).sum())
     m = pd.concat([dk, mk]).drop_duplicates("code", keep="last").set_index("code")["market"]
-    return m.reindex(codes).astype(str).str.upper().isin(("KOSDAQ", "코스닥")).to_numpy(np.int8)
+    arr, miss = market_codes(m, codes)
+    return arr, miss, n_dis
+
+
+def fill_raw_with_adj(raw: np.ndarray, C: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
+    """원주가 결측 칸을 수정 종가로 채운다(indep30 px_cap 과 같은 방식). 결측 여부가 미래 폐지를 알리는 표지가 되지 않게 한다."""
+    miss = ~np.isfinite(raw)
+    return np.where(miss, C, raw), miss
+
+
+def check_tickp_leak(tickp: np.ndarray, uni: np.ndarray, delisted: np.ndarray, tol: float = 0.01) -> "tuple[float, float]":
+    """uni 칸의 tickp NaN 몫이 폐지·생존 종목 사이에서 tol 이상 다르면 오류(NaN 이 폐지 표지가 되는 누수)."""
+    nan = np.isnan(tickp)
+    sh = [float(nan[g[:, None] & uni].mean()) if (g[:, None] & uni).any() else 0.0 for g in (delisted, ~delisted)]
+    if abs(sh[0] - sh[1]) >= tol:
+        raise ValueError(f"tickp NaN 몫이 폐지 {sh[0]:.4f} vs 생존 {sh[1]:.4f} — 폐지 표지 누수")
+    return sh[0], sh[1]
 
 
 def _raw_wide(con, data: tuple, days: pd.DatetimeIndex, codes: list) -> np.ndarray:
@@ -95,12 +127,19 @@ def build_era(con, era: str) -> dict:
     for k in ("adv", "cap", "tv"):
         out[k] = np.asarray(out[k], np.float32)
     # --- 결합 추가분
-    mkt_real = _market_real(con, codes)
-    raw = _raw_wide(con, E["data"], days, codes)
+    mkt_real, miss, n_dis = _market_real(con, codes)
+    raw, fb = fill_raw_with_adj(_raw_wide(con, E["data"], days, codes), D["C"])
     out["mkt_real"] = mkt_real
     out.update(gap_arrays(D["O"], D["C"], raw, D["reopen"], D["lu"], days, mkt_real))
     out.update(news_arrays(codes, days, archive_dir()))
-    out["diag"] = {**D["diag"], "eps_up_share": float(up[ci, s].mean())}
+    isdel = np.isin(codes, list(D["delisted"]))
+    nd, na = check_tickp_leak(out["tickp"], D["uni"], isdel)
+    uc = D["uni"].sum(1)
+    out["diag"] = {**D["diag"], "eps_up_share": float(up[ci, s].mean()),
+                   "tickp_adj_fallback_share_uni": float(fb[D["uni"]].mean()),
+                   "tickp_nan_share_uni_delisted": nd, "tickp_nan_share_uni_alive": na,
+                   "mkt_unmapped_uni_cells": {c: int(uc[codes.index(c)]) for c in miss if uc[codes.index(c)] > 0},
+                   "mkt_stocks_vs_delisted_disagree": n_dis}
     return out
 
 
@@ -120,6 +159,9 @@ def diagnostics(D: dict) -> dict:
          "tickp_nan_share_uni": float(np.isnan(D["tickp"][uni]).mean()) if uni.any() else float("nan"),
          "gap_event_share_uni": float(D["gap_event"][uni].mean()) if uni.any() else float("nan"),
          "reopen_cells": D["diag"].get("reopen_cells")}
+    for k in ("tickp_adj_fallback_share_uni", "tickp_nan_share_uni_delisted", "tickp_nan_share_uni_alive",
+              "mkt_unmapped_uni_cells", "mkt_stocks_vs_delisted_disagree"):
+        d[k] = D["diag"].get(k)
     for y in (2023, 2024):
         m = np.asarray(days.year == y)[None, :] & uni
         if m.any():
