@@ -143,7 +143,20 @@ def sector_cap(con, df: pd.DataFrame, last_date: str) -> pd.DataFrame:
     """기간말 섹터 시가총액(억) — 비중 변화의 분모."""
     codes = df[["code", "sector", "market"]].drop_duplicates("code").copy()
     codes["date"] = last_date
-    codes["cap"] = market_cap_asof_bulk(con, codes[["code", "date"]]).to_numpy() / EOK
+    if "cap" in df.columns:
+        known = (
+            df.loc[df["date"] == last_date, ["code", "cap"]]
+            .drop_duplicates("code")
+            .set_index("code")["cap"]
+        )
+        codes["cap"] = codes["code"].map(known)
+        miss = ~codes["code"].isin(known.index)
+        if miss.any():
+            codes.loc[miss, "cap"] = (
+                market_cap_asof_bulk(con, codes.loc[miss, ["code", "date"]]).to_numpy() / EOK
+            )
+    else:
+        codes["cap"] = market_cap_asof_bulk(con, codes[["code", "date"]]).to_numpy() / EOK
     return codes.dropna(subset=["cap"])
 
 
@@ -158,15 +171,34 @@ def sector_cap_monthly(con, df: pd.DataFrame, dates: list[str]) -> dict:
     months: dict[str, str] = {}
     for d in dates:
         months[d[:7]] = d                      # 각 월의 마지막 거래일
+    if not months:
+        return {}
     codes = df[["code", "sector", "market"]].drop_duplicates("code")
+    ym_items = sorted(months.items())
+    q_all = pd.concat(
+        [codes.assign(ym=ym, date=last) for ym, last in ym_items],
+        ignore_index=True,
+    )
+    if "cap" in df.columns:
+        end_dates = {last for _, last in ym_items}
+        known = (
+            df.loc[df["date"].isin(end_dates), ["code", "date", "cap"]]
+            .drop_duplicates(["code", "date"])
+        )
+        q_all = q_all.merge(known, on=["code", "date"], how="left")
+        miss = ~q_all.set_index(["code", "date"]).index.isin(
+            known.set_index(["code", "date"]).index
+        )
+        if miss.any():
+            q_all.loc[miss, "cap"] = (
+                market_cap_asof_bulk(con, q_all.loc[miss, ["code", "date"]]).to_numpy() / EOK
+            )
+    else:
+        q_all["cap"] = market_cap_asof_bulk(con, q_all[["code", "date"]]).to_numpy() / EOK
+    m = q_all.dropna(subset=["cap"])
     out: dict = {}
-    for ym, last in sorted(months.items()):
-        q = codes[["code"]].copy()
-        q["date"] = last
-        q["cap"] = market_cap_asof_bulk(con, q).to_numpy() / EOK
-        m = q.merge(codes, on="code").dropna(subset=["cap"])
-        for (mk, sec), g in m.groupby(["market", "sector"]):
-            out.setdefault(mk, {}).setdefault(sec, {})[ym] = round(float(g["cap"].sum()), 1)
+    for (ym, mk, sec), g in m.groupby(["ym", "market", "sector"]):
+        out.setdefault(mk, {}).setdefault(sec, {})[ym] = round(float(g["cap"].sum()), 1)
     return out
 
 
