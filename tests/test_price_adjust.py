@@ -523,3 +523,44 @@ def test_read_inputs_prefers_supply_demand_then_raw_table():
     got = pa.read_inputs(con).sort_values("date")["raw_close"].tolist()
     assert got == [100, 101, 102]
     con.close()
+
+
+def test_canary_056730_capital_reduction_after_suspension_keeps_db():
+    # 056730 2017-01-13: 오랜 거래정지 뒤 감자(6.0035:1) 재상장. 주주 수익률 5,000/(578×6.0035) = 1.441 = r_db 이고
+    # m(1.086)은 평가가격 기준가 대비라 주주 수익률이 아니다. r_db 가 ×2 안이므로 both_off 로 보지 않는다.
+    raw = [578, 578, 578, 5000, 5050, 5100]
+    db = [578 * 6.0035, 578 * 6.0035, 578 * 6.0035, 5000, 5050, 5100]
+    flu = _flu(raw)
+    flu[3] = 858
+    adj = pa.adjust_prices(_frame(db, raw, flu))["close"].tolist()
+    assert abs(_rets(adj)[2] - 5000 / (578 * 6.0035)) < 1e-9
+    assert adj == [float(x) for x in db]
+
+
+def test_transfer_listing_day_is_not_an_unreflected_event():
+    # 107640 2024-06-24 류: 코넥스 → 코스닥 이전상장 첫날. 기준가가 공모가(30,000)로 재설정돼 m = +13.3% 지만 주주가 본
+    # 움직임은 원 종가 55,000 → 34,000. 앞 20일 거래가 얇으면(평균 < 그날 1%) 기업행동으로 보지 않는다.
+    n_pre = 25
+    raw = [55000] * n_pre + [34000, 33000, 32500]
+    flu = [None] + [0.0] * (n_pre - 1) + [1333.0, round((33000 / 34000 - 1) * 1e4, 2), round((32500 / 33000 - 1) * 1e4, 2)]
+    df = _frame(list(raw), raw, flu)
+    df["volume"] = [2000] * n_pre + [3_000_000, 900_000, 500_000]
+    adj = pa.adjust_prices(df)["close"].tolist()
+    assert adj == [float(x) for x in raw]
+    # 거래가 두꺼웠다면 같은 모양은 미반영 기업행동이다
+    df["volume"] = [1_000_000] * len(raw)
+    assert pa.diagnose(df)["kind"].tolist() == ["unreflected"]
+
+
+def test_benchmark_etf_raw_only_last_day_snapshot_dropped():
+    # supply_demand 행이 없는 ETF(069500 등)는 원주가 표뿐 — 그 표의 마지막 날 19:00 스냅숏은 쓰지 않는다.
+    con = storage.connect(":memory:")
+    con.execute("CREATE TABLE daily_bars_raw (code TEXT, date TEXT, close INTEGER, PRIMARY KEY (code, date))")
+    for d, c, raw in [("2026-10-28", 100, 100), ("2026-10-29", 101, 101), ("2026-10-30", 102, 110)]:
+        con.execute("INSERT INTO daily_bars(code,date,open,high,low,close,volume,trade_value) VALUES (?,?,?,?,?,?,?,?)",
+                    ("069500", d, c, c, c, c, 1, 1))
+        con.execute("INSERT INTO daily_bars_raw(code,date,close) VALUES (?,?,?)", ("069500", d, raw))
+    con.commit()
+    got = pa.read_inputs(con).sort_values("date")["raw_close"].tolist()
+    assert got[:2] == [100, 101] and np.isnan(got[2])
+    con.close()

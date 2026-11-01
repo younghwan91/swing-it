@@ -53,7 +53,7 @@ def load(cache: Path | None) -> tuple[pd.DataFrame, ...]:
     for y in range(2016, 2027):
         for lo, hi in (("01-01", "06-30"), ("07-01", "12-31")):  # 반년씩 — 한 문장 60s 안
             t0 = time.time()
-            parts.append(pa.read_inputs(con, cols="d.code,d.date,d.close,d.source",
+            parts.append(pa.read_inputs(con, cols="d.code,d.date,d.close,d.volume,d.source",
                                         date_from=f"{y}-{lo}", date_to=f"{y}-{hi}"))
             print(f"inputs {y}-{lo}: {len(parts[-1]):,}행 {time.time() - t0:.0f}s", flush=True)
     inputs = pd.concat(parts, ignore_index=True)
@@ -131,6 +131,8 @@ CANARIES = [
     ("207940", "2026-10-02", "db"),
     # 리뷰(PR #12)가 짚은 칸
     ("076610", "2024-01-08", "flu"),   # 이음매 날 감자 — 두 후보 다 틀림, 그날 수익률 = flu_rt
+    ("056730", "2017-01-13", "db"),    # 오랜 정지 뒤 감자 재상장 6.0035:1 — 주주 수익률 = r_db(m 은 평가가격 기준)
+    ("107640", "2024-06-24", "raw"),   # 코넥스 → 이전상장 첫날 — 기준가 = 공모가, 원주가 움직임 그대로
     ("139050", "2023-06-28", None),    # 네이버 백필 12.77:1 병합(+1442%) — |r|<0.3
     ("138360", "2023-01-27", "db"),    # m 이 제한폭 밖(−52.9%) — 심판으로 안 쓴다
 ]

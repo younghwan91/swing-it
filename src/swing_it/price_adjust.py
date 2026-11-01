@@ -34,8 +34,13 @@ q ≠ 1(계단)은 둘 중 하나다:
 - 계단이 없는데(q = 1) 원주가가 ±30% 가격제한폭 밖으로 뛰었으면 수정주가도 같이 뛴 것이다 — 매일 덧붙인
   최근 구간에서 수정주가가 아직 반영 못 한 기업행동이다. m 이 그 점프를 설명하지 못하면(기준가 재설정) 그날
   수익률을 m 으로 맞춘다. m 도 같이 뛰었으면 진짜 움직임이다(정리매매처럼 가격제한이 없는 날) → 그대로.
-- 같은 날 두 후보가 모두 심판과 어긋나고 고른 쪽이 제한폭 밖이면 이음매와 기업행동이 겹친 날이다(076610 2024-01-08
+- 같은 날 두 후보가 모두 심판과 어긋나고 둘 다 ×2 넘게 뛰었으면 이음매와 큰 기업행동이 겹친 날이다(076610 2024-01-08
   수집 이음매 날의 감자) → 그날 수익률을 m 으로 맞춘다. m 자체가 제한폭 밖인 날(정리매매·재상장)은 심판으로 안 쓴다.
+- 앞 20거래일 거래가 극히 얇다가(평균이 그날의 1% 미만) 기준가가 재설정된 날은 코넥스 → 코스닥·코스피 이전상장
+  첫날이다 — 기준가가 공모가라 m 이 주주 수익률이 아니므로 미반영 기업행동으로 보지 않는다(``THIN_*``).
+- **알려진 한계**: 키움 수정주가가 배당락(`dividend`)까지 반영한 계단에서 KRX 기준가는 그대로면(심판이 원주가 편) 그
+  수정을 이음매로 되돌린다(036220 등 연말 계단 12칸, 2~12%). 심판 없는 큰 병합 중 정리매매가 바로 이어지는 것은
+  옛 규칙의 3일 유지 검사에서 빠진다(052670 2026-02-09 ×300 — ``UP_NOREF`` 주석).
 - 심판이 없는 날(`supply_demand` 키움 행이 2017-01-02 부터 — 2016-09-09~ 행은 네이버 폐지 백필뿐이고 flu_rt 가 없다):
   원주가가 제한폭 밖이고 수정주가가 안이면 기업행동, 반대면 이음매. 둘 다 제한폭 안인 계단은 **같은 날
   ``CLUSTER_MIN`` 종목 이상**에서 나올 때만 이음매로 본다. 아니면 그대로 둔다. 이 전제는 2016-12-28 에서 틀린다 —
@@ -99,13 +104,18 @@ REF_TOL = 0.02  # 심판(m)과 두 후보가 모두 이만큼(로그) 넘게 어
 # e 에 그 역수 1/q 계단이 생긴다(207940 09-17 ×0.9923 ↔ 10-02 권리락 −0.77%, 117670 10-06 ×0.5 ↔ 10-21). 짝이 있으면
 # 앞이 이음매, 뒤가 기업행동이다. 짝이 없는 작은 계단(|log q| < AM_SMALL)은 심판 잡음(전일 애프터마켓 괴리)보다 작아
 # 가를 수 없다 — 이력 전체를 다시 곱하지 않고 그대로 둔다.
-PAIR_WINDOW = 30  # 거래일
+PAIR_WINDOW = 20  # 거래일(재기록 창 15일 + 여유)
 PAIR_TOL = 0.003
 AM_SMALL = 0.10
 # 심판 없이 같이 뛴 날을 병합으로 볼 문턱. 거래정지 뒤 변경상장·스팩 합병 재상장 첫날은 평가가격의 50~200% 에서 시가가
-# 정해져 +45~59% 가 진짜로 나온다(366330 2023-06-02, 404950 2023-09-22, 405350 2023-07-14, 065560 2024-07-23 — v2 와 같이
-# 그대로 둔다). 그보다 큰 ×2 초과만 병합(139050 2023-06-28 12.77:1)으로 옛 규칙에 넘긴다.
+# 정해져 +45~59% 가 진짜로 나온다(366330 2023-06-02, 404950 2023-09-22, 405350 2023-07-14, 065560 2024-07-23 — 상장주식수
+# 그대로라 병합이 아니다). 그보다 큰 ×2 초과만 병합(139050 2023-06-28 12.77:1)으로 옛 규칙에 넘긴다.
+# **남은 구멍**: 옛 규칙은 3일 유지를 요구해 병합 직후 정리매매가 이어지면 놓친다(052670 2026-02-09 ×300, 상장주식수
+# 29,129,064 → 19,419 = 1500:1). 상장주식수가 줄어든 ×2 초과 점프가 20여 건 더 있다(024810·035480·050320 … 미확인;
+# 060910·090970 은 진짜 움직임). 후속: shares_outstanding_history 비율을 심판으로.
 UP_NOREF = 2.0
+BOTH_OFF_MIN = float(np.log(2))  # both_off 는 두 후보가 모두 ×2 넘게 뛴 날만(이음매와 큰 감자·병합이 겹친 날)
+THIN_DAYS, THIN_RATIO = 20, 0.01  # 미반영 기업행동 판정 제외: 앞 20거래일 평균 거래량이 그날의 1% 미만(이전상장)
 
 
 def _legacy_events(close: np.ndarray, allowed: np.ndarray) -> list[tuple[int, float]]:
@@ -144,8 +154,23 @@ def _step_tol(db: np.ndarray, pdb: np.ndarray) -> np.ndarray:
         return STEP_TOL + ROUND_K * (1 / np.abs(db) + 1 / np.abs(pdb))
 
 
+def _thin_before(volume: np.ndarray | None) -> np.ndarray:
+    """행 t 앞 THIN_DAYS 거래일 평균 거래량이 t 거래량의 THIN_RATIO 미만인가(거래량을 모르면 False)."""
+    if volume is None:
+        return np.zeros(0, dtype=bool)
+    v = np.where(np.isfinite(volume), volume, 0.0)
+    c = np.r_[0.0, np.cumsum(v)]
+    idx = np.arange(len(v))
+    lo = np.maximum(idx - THIN_DAYS, 0)
+    cnt = idx - lo
+    with np.errstate(invalid="ignore", divide="ignore"):
+        avg = (c[idx] - c[lo]) / cnt
+        return (cnt > 0) & np.isfinite(volume) & (volume > 0) & (avg < THIN_RATIO * volume)
+
+
 def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
-              aftermarket: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+              aftermarket: np.ndarray | None = None,
+              volume: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """한 종목(시간순)의 날마다 조정 배수를 고른다. ``aftermarket[t]`` = 전일(t−1)이 AFTERMARKET_FROM 이후.
 
     반환 (factor, kind, amb_q):
@@ -162,6 +187,8 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     w0, w1 = raw[:-1], raw[1:]
     m = ref[1:]
     m_prev = ref[:-1]
+    if volume is None or len(volume) != n:
+        volume = np.full(n, np.nan)
     am = np.zeros(n - 1, dtype=bool) if aftermarket is None else np.asarray(aftermarket, bool)[1:]
     # 애프터마켓 뒤에는 원주가 비가 ±30% 를 넘을 수 있다 — 심판 없는 날의 제한폭을 그만큼 넓힌다
     widen = np.where(am, BAND_HI / BAND_LO, 1.0)
@@ -207,11 +234,14 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     k1[seam] = "seam"
     k1[s_ref & ~seam] = "event"
     k1[s_ref & am & ~seam & ~pair_event & (np.abs(lq) < AM_SMALL)] = "ambiguous_am"
-    # 1b) 둘 다 심판과 어긋나고 고른 쪽 수익률이 가격제한폭 밖이면 이음매와 기업행동이 같은 날 겹친 것이다
+    # 1b) 둘 다 심판과 어긋나고 두 후보가 모두 ×2 넘게 뛰었으면 이음매와 기업행동이 같은 날 겹친 것이다
     #     (076610 2024-01-08: 이음매 날 감자 upd_rt 436.54%, r_db 4.2·r_raw 4.9·m 0.907) → 그날 수익률 = m.
+    #     한쪽이라도 ×2 안이면 그 후보가 맞다 — 오랜 거래정지 뒤 감자 재상장은 기준가가 평가가격이라 m 이 주주 수익률이
+    #     아니다(056730 2017-01-13: 감자 6.0035:1, 주주 수익률 5,000/(578×6.0035) = 1.441 = r_db, m 1.086).
     with np.errstate(invalid="ignore", divide="ignore"):
         chosen = np.where(seam, r_raw, r_db)
         both_off = (s_ref & ~am & (np.minimum(d_db, d_raw) > REF_TOL)
+                    & (np.minimum(np.abs(np.log(r_db)), np.abs(np.log(r_raw))) > BOTH_OFF_MIN)
                     & ~((chosen >= BAND_LO - BAND_EPS) & (chosen <= BAND_HI + BAND_EPS)))
         f1[both_off] = (r_db / m)[both_off]
     k1[both_off] = "both_off"
@@ -230,10 +260,17 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     flat_jump = has_raw & ~step & np.where(am, True, ~raw_in)
     with np.errstate(invalid="ignore", divide="ignore"):
         unrefl = flat_jump & has_ref & ((gap < gap_lo) | (gap > gap_hi)) & _in_band(m, BAND_EPS)
+        # 코넥스 → 코스닥·코스피 이전상장 첫날은 기준가가 공모가로 재설정돼 m 이 주주 수익률이 아니다(107640 2024-06-24,
+        # 176750 2024-12-20, 214610 2020-10-22, 244920 2020-11-20, 277880 2020-07-22, 037030 2018-06-07 — corporate_actions 없음,
+        # 앞 20일 평균 거래량 2천~3만 주 → 그날 수백만 주). 앞 거래가 극히 얇았으면 원주가 움직임 그대로 둔다.
+        thin = _thin_before(volume)[1:]
+        transfer = unrefl & thin
+        unrefl &= ~thin
         f1[unrefl] = (r_db / m)[unrefl]  # 그날 수익률 = m(기준가 대비 시장 수익률)
     flat_jump &= ~am | ~raw_in
+    k1[transfer] = "transfer_listing"
     k1[unrefl] = "unreflected"
-    k1[flat_jump & ~unrefl] = "genuine_jump"
+    k1[flat_jump & ~unrefl & ~transfer] = "genuine_jump"
     # 3b) 심판 없이 원주가·수정주가가 같이 ×2 넘게 뛴 날은 진짜 움직임으로 볼 근거가 없다 — 가격제한 없는 날의
     #     ×2 넘는 급등은 병합이다(139050 2023-06-28 네이버 백필 426 → 6,570, 상장주식수 12.77:1 — UP_NOREF 주석).
     #     옛 규칙(+3일 유지)으로 넘긴다. 아래로의 급락은 정리매매라 그대로 둔다(99칸 중 98칸 v2 일치).
@@ -285,16 +322,17 @@ def _plan(df: pd.DataFrame) -> pd.DataFrame:
         "close": col("close"),
         "raw": col("raw_close"),
         "ref": 1 + col("flu_rt") / 1e4,
+        "volume": col("volume"),
         "_row": np.arange(n),
     }).sort_values(["code", "date"], kind="stable").reset_index(drop=True)
-    close, raw, ref = (work[c].to_numpy(float) for c in ("close", "raw", "ref"))
+    close, raw, ref, vol = (work[c].to_numpy(float) for c in ("close", "raw", "ref", "volume"))
     am = work["date"].to_numpy() >= AFTERMARKET_FROM  # 행 t 의 날짜 — _classify 는 [1:] 와 짝지은 전일로 본다
     am_prev = np.r_[False, am[:-1]]
     fac = np.ones(n)
     kind = np.full(n, "", dtype=object)
     amb = np.full(n, np.nan)
     for s, e in _segments(work["code"].to_numpy()):
-        fac[s:e], kind[s:e], amb[s:e] = _classify(close[s:e], raw[s:e], ref[s:e], am_prev[s:e])
+        fac[s:e], kind[s:e], amb[s:e] = _classify(close[s:e], raw[s:e], ref[s:e], am_prev[s:e], vol[s:e])
     # 심판 없는 제한폭 안 계단: 같은 날 CLUSTER_MIN 종목 이상이면 수집 이음매 날
     is_amb = np.isfinite(amb)
     if is_amb.any():
@@ -406,7 +444,8 @@ def read_inputs(con: Any, *, cols: str = INPUT_COLS,
         # 그날 19:00 스냅숏이라(애프터마켓이 20:00 까지 — 2026-10-30 실측 1,813/2,588 종목, 최대 11.1%) 확정 봉과 다르다.
         # daily_finalize 가 supply_demand 를 확정치로 덮으므로 그쪽이 먼저다. supply_demand 가 없는 날만 원주가 표.
         raw_join = "LEFT JOIN daily_bars_raw r ON r.code = d.code AND r.date = d.date" + rng.format(t="r") + " "
-        raw_expr = "COALESCE(s.close, r.close)"
+        # supply_demand 행이 없는 종목(ETF 069500·229200·278530 — 벤치마크)은 원주가 표뿐이라 마지막 날 스냅숏은 뺀다
+        raw_expr = ("COALESCE(s.close, CASE WHEN r.date < (SELECT max(date) FROM daily_bars_raw) THEN r.close END)")
         params += rng_params
     sd_join = "LEFT JOIN supply_demand s ON s.code = d.code AND s.date = d.date" + rng.format(t="s")
     params += rng_params
