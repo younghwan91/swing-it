@@ -47,3 +47,27 @@ def test_fallback_source_is_not_mixed_across_days():
     _, _, seam, info = seam_guard(np.array(["A"]), DATES, _ret(adj), adj, [src1, src2], pd.DataFrame(
         {"code": [], "date": []}))
     assert seam[0, 2] and info["seam_cells"] == 1
+
+
+def test_secondary_source_needs_impossible_move_po3():
+    """PO-3.3 — supply_demand(두 번째 원천)만 근거면 |수정 수익| > 0.3 일 때만 이음매. 첫 원천 규칙은 그대로."""
+    adj = np.array([
+        [16950.0, 16950.0, 14645.0, 14700.0, 14800.0],  # 221610 형: 재개일 −13.6% 는 실제 움직임
+        [1780.0, 1780.0, 29179.0, 29300.0, 29000.0],    # 두 번째 원천만 있는데 +1539% — 이음매
+        [1000.0, 1000.0, 1300.0, 1310.0, 1320.0],       # 첫 원천 근거 +30% 대 원 +1% — 이음매(그대로)
+    ])
+    src1 = np.array([[np.nan] * 5, [np.nan] * 5, [1000.0, 1000.0, 1010.0, 1020.0, 1030.0]])
+    src2 = np.array([
+        [339.0, 339.0, 14650.0, 14700.0, 14800.0],      # 정지 중 339 에 멈췄다가 재개일에 따라잡는다(원 +42.2)
+        [1780.0, 1780.0, 1810.0, 1817.0, 1798.0],
+        [np.nan] * 5,
+    ])
+    ev = pd.DataFrame({"code": [], "date": []})
+    codes = np.array(["221610", "025620", "X"])
+    _, _, old, _ = seam_guard(codes, DATES, _ret(adj), adj, [src1, src2], ev)
+    assert old[0, 2] and old[1, 2] and old[2, 2]  # PO-2 동작: 셋 다 이음매
+    rf, _, seam, info = seam_guard(codes, DATES, _ret(adj), adj, [src1, src2], ev, secondary_min_abs_ret=0.3)
+    assert not seam[0, 2] and np.isclose(rf[0, 2], 14645.0 / 16950.0 - 1.0)
+    assert seam[1, 2] and seam[2, 2] and seam.sum() == 2
+    assert info["seam_cells_by_source"] == [1, 1] and info["candidates_by_source"] == [1, 2]
+    assert info["kept_secondary_undeterminable"] == 1 and info["kept_secondary_abs_ret_gt_0.1"] == 1

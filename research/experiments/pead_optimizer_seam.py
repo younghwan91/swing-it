@@ -2,6 +2,10 @@
 
 수정 종가 비 ρ_adj 와 원 종가 비 ρ_raw 가 20% 넘게 어긋나는데 그 사이에 ``corporate_actions`` 사건이 없으면
 수정주가 표의 이음매로 보고 그 수익 셀을 버린다(NaN). 예: 025620 2021-07-29 수정 1780→29179, 원 1780→1810.
+
+정정 PO-3.3: 두 번째 원천(``supply_demand``)은 거래정지 중 종가가 멈춰 있어 재개일 실제 움직임을 이음매로 오판한다
+(221610 −13.6% 등). ``secondary_min_abs_ret`` 를 주면 두 번째 이후 원천 근거의 셀은 |수정 수익| 이 그 값을 넘을 때만
+이음매로 보고, 나머지는 판정 불가로 남긴다. 기본 ``None`` 은 PO-2 동작이다.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ def seam_guard(
     raw_sources: list[np.ndarray],
     events: pd.DataFrame,
     thr: float = THRESHOLD,
+    secondary_min_abs_ret: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
     """(ret 고친 것, close 고친 것, 이음매 마스크, 보고) 를 낸다.
 
@@ -34,7 +39,8 @@ def seam_guard(
     N, T = ret.shape
     rho_adj = 1.0 + ret
     rho_raw = np.full((N, T), np.nan)
-    for src in raw_sources:
+    src_id = np.full((N, T), -1, dtype=np.int8)
+    for k, src in enumerate(raw_sources):
         src = np.asarray(src, dtype=np.float64)
         with np.errstate(divide="ignore", invalid="ignore"):
             pair = src[:, 1:] / src[:, :-1]
@@ -42,6 +48,7 @@ def seam_guard(
         fill = np.isnan(rho_raw[:, 1:]) & ok
         sub = rho_raw[:, 1:]
         sub[fill] = pair[fill]
+        src_id[:, 1:][fill] = k
     explained = np.zeros((N, T), dtype=bool)
     if len(events):
         cidx = pd.Index([str(c) for c in codes])
@@ -54,7 +61,13 @@ def seam_guard(
     with np.errstate(divide="ignore", invalid="ignore"):
         dev = np.abs(rho_adj / rho_raw - 1.0)
     big = det & (dev > thr)
-    seam = big & ~explained
+    cand = big & ~explained
+    if secondary_min_abs_ret is None:
+        seam = cand
+        kept_secondary = np.zeros_like(cand)
+    else:
+        seam = cand & ((src_id == 0) | (np.abs(ret) > secondary_min_abs_ret))
+        kept_secondary = cand & ~seam
     ret_f = ret.copy()
     ret_f[seam] = np.nan
     jump = np.where(seam, np.log(np.where(seam, rho_adj, 1.0)), 0.0)
@@ -81,5 +94,10 @@ def seam_guard(
         "seam_top_dates": by_date.most_common(10),
         "seam_top_codes": by_code.most_common(10),
         "seam_cells_largest": cells[:30],
+        "secondary_min_abs_ret": secondary_min_abs_ret,
+        "seam_cells_by_source": [int((seam & (src_id == k)).sum()) for k in range(len(raw_sources))],
+        "candidates_by_source": [int((cand & (src_id == k)).sum()) for k in range(len(raw_sources))],
+        "kept_secondary_undeterminable": int(kept_secondary.sum()),
+        "kept_secondary_abs_ret_gt_0.1": int((kept_secondary & (np.abs(ret) > 0.1)).sum()),
     }
     return ret_f, close_f, seam, info
