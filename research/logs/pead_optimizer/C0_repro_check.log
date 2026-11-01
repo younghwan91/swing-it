@@ -1,0 +1,3 @@
+[    34s]   모델 52개 → models_noguard.pkl
+[    67s]   모델 102개 → models_guard_v3.pkl
+[   124s] PO2.json 재현(5자리) True
