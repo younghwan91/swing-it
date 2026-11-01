@@ -18,8 +18,8 @@
 ## 무엇을 하는가 (원주가 대조)
 
 같은 날 **두 수익률**을 비교한다: `daily_bars` 수익률 r_db 와 원주가 수익률 r_raw
-(`daily_bars_raw.close`, 없으면 `supply_demand.close` — 키움 행은 `daily_bars_raw` 와 겹치는 날 100% 같다,
-네이버 폐지 백필 행은 네이버 원 종가). 비율 q = r_db / r_raw 가 1 이면 그날 수정 기준이 그대로다.
+(`supply_demand.close`, 없으면 `daily_bars_raw.close` — 확정된 날은 둘이 100% 같다, 네이버 폐지 백필 행은
+네이버 원 종가). 비율 q = r_db / r_raw 가 1 이면 그날 수정 기준이 그대로다.
 q ≠ 1(계단)은 둘 중 하나다:
 
 1. **기업행동** — 원주가가 기준가 재설정으로 뛰었고 수정주가는 이를 이미 반영했다 → 그대로 둔다.
@@ -34,9 +34,16 @@ q ≠ 1(계단)은 둘 중 하나다:
 - 계단이 없는데(q = 1) 원주가가 ±30% 가격제한폭 밖으로 뛰었으면 수정주가도 같이 뛴 것이다 — 매일 덧붙인
   최근 구간에서 수정주가가 아직 반영 못 한 기업행동이다. m 이 그 점프를 설명하지 못하면(기준가 재설정) 그날
   수익률을 m 으로 맞춘다. m 도 같이 뛰었으면 진짜 움직임이다(정리매매처럼 가격제한이 없는 날) → 그대로.
-- 심판이 없는 날(`supply_demand` 가 2017-01-02 부터라 그 전, 네이버 폐지 백필): 원주가가 제한폭 밖이고 수정주가가
-  안이면 기업행동, 반대면 이음매. 둘 다 제한폭 안인 계단은 **같은 날 ``CLUSTER_MIN`` 종목 이상**에서 나올 때만
-  이음매로 본다 — 실제 기업행동은 그렇게 몰리지 않는다. 아니면 그대로 둔다.
+- 같은 날 두 후보가 모두 심판과 어긋나고 고른 쪽이 제한폭 밖이면 이음매와 기업행동이 겹친 날이다(076610 2024-01-08
+  수집 이음매 날의 감자) → 그날 수익률을 m 으로 맞춘다. m 자체가 제한폭 밖인 날(정리매매·재상장)은 심판으로 안 쓴다.
+- 심판이 없는 날(`supply_demand` 키움 행이 2017-01-02 부터 — 2016-09-09~ 행은 네이버 폐지 백필뿐이고 flu_rt 가 없다):
+  원주가가 제한폭 밖이고 수정주가가 안이면 기업행동, 반대면 이음매. 둘 다 제한폭 안인 계단은 **같은 날
+  ``CLUSTER_MIN`` 종목 이상**에서 나올 때만 이음매로 본다. 아니면 그대로 둔다. 이 전제는 2016-12-28 에서 틀린다 —
+  그날은 연말 주식배당 배당락일이라 몰린 계단 일부(48칸 중 10칸이 v2 와 1% 넘게 다름)가 실제 기업행동이다.
+  영향은 심판이 없는 2016-09~12 뿐이다. 심판 없이 원주가·수정주가가 같이 ×2 넘게 뛴 날(병합 — 139050
+  2023-06-28 네이버 백필)은 옛 규칙으로 넘긴다. 아래로 뛴 날은 정리매매라 그대로 둔다.
+- 애프터마켓 뒤(아래)에는 심판의 기준가(전일 정규장 종가)와 원 종가(통합가)의 기준이 달라 **작은 계단은 판정 신뢰도가
+  낮다** — 계단 짝(``PAIR_*``)으로 가르고, 짝이 없는 |log q| < ``AM_SMALL`` 계단은 이력을 다시 곱하지 않는다.
 - **원주가가 없는 날**(`daily_bars_raw`·`supply_demand` 둘 다 없는 행): 옛 규칙(±30% 초과 + 3일 유지)으로
   돌아간다. 원주가 없이는 이음매와 진짜 움직임을 가를 수 없어서다. 이 경로만 옛 오탐·누락을 그대로 가진다.
   `raw_close` 열이 없는 입력(옛 호출)도 전부 이 경로다.
@@ -44,9 +51,9 @@ q ≠ 1(계단)은 둘 중 하나다:
 - **2026-09-14~(KRX 애프터마켓)**: 원 종가는 20:00 통합가, flu_rt 기준가는 전일 정규장 종가라 둘이 그 세션 등락만큼
   다르다(최대 35% 실측). 그래서 원주가 비로 제한폭을 재지 않고(0035S0 2026-09-30 상한가가 원주가 비 +43.6%),
   기준가 재설정은 "기준가 / 전일 원 종가"가 전일 flu_rt 로 본 가능 범위 밖일 때만 인정한다(``AFTERMARKET_FROM`` 주석).
-- **원주가 표의 마지막 날은 쓰지 않는다**(``read_inputs``): 그날 19:00 스냅숏이라 확정 봉과 다르다(2026-10-30 실측
-  1,813/2,588 종목, 최대 11.1%) — 쓰면 마지막 날에 가짜 이음매가 생겨 그 종목 이력 전체에 배수가 곱해진다.
-  그날은 `supply_demand.close`(daily_finalize 가 확정치로 덮는다)로 대신한다.
+- **원 종가는 `supply_demand.close` 가 먼저다**(``read_inputs``): `daily_bars_raw` 의 마지막 날은 그날 19:00 스냅숏이라
+  확정 봉과 다르다(2026-10-30 실측 1,813/2,588 종목, 최대 11.1%) — 쓰면 마지막 날에 가짜 이음매가 생겨 그 종목 이력
+  전체에 배수가 곱해진다. 확정된 날은 둘이 100% 같다. 수집이 중간에 죽어도 날짜 하나에 기대지 않는다.
 
 `daily_bars` 는 수정 뒤 정수로 반올림돼 있어 작은 값(수정 종가 100원 등)에서 하루 수익률이 1% 가까이
 흔들린다. 계단 문턱은 그 반올림 폭보다 크게 잡는다(``_step_tol``).
@@ -87,6 +94,18 @@ EVENT_TOL = 0.02  # q=1·원주가 제한폭 밖일 때 기준가가 전일 원 
 AFTERMARKET_FROM = "2026-09-14"
 GAP_EPS = 0.005  # 가능 범위의 틱 반올림 여유
 CLUSTER_MIN = 10  # 심판 없는 제한폭 안 계단이 같은 날 이 종목 수 이상이면 수집 이음매 날
+REF_TOL = 0.02  # 심판(m)과 두 후보가 모두 이만큼(로그) 넘게 어긋나면 둘 다 틀린 것(이음매와 기업행동이 같은 날)
+# 애프터마켓 뒤 계단 짝: 16:00 수집의 15일 재기록 창은 이벤트 e 의 수정분을 창 시작 s 부터만 덮는다 — s 에 이음매 q,
+# e 에 그 역수 1/q 계단이 생긴다(207940 09-17 ×0.9923 ↔ 10-02 권리락 −0.77%, 117670 10-06 ×0.5 ↔ 10-21). 짝이 있으면
+# 앞이 이음매, 뒤가 기업행동이다. 짝이 없는 작은 계단(|log q| < AM_SMALL)은 심판 잡음(전일 애프터마켓 괴리)보다 작아
+# 가를 수 없다 — 이력 전체를 다시 곱하지 않고 그대로 둔다.
+PAIR_WINDOW = 30  # 거래일
+PAIR_TOL = 0.003
+AM_SMALL = 0.10
+# 심판 없이 같이 뛴 날을 병합으로 볼 문턱. 거래정지 뒤 변경상장·스팩 합병 재상장 첫날은 평가가격의 50~200% 에서 시가가
+# 정해져 +45~59% 가 진짜로 나온다(366330 2023-06-02, 404950 2023-09-22, 405350 2023-07-14, 065560 2024-07-23 — v2 와 같이
+# 그대로 둔다). 그보다 큰 ×2 초과만 병합(139050 2023-06-28 12.77:1)으로 옛 규칙에 넘긴다.
+UP_NOREF = 2.0
 
 
 def _legacy_events(close: np.ndarray, allowed: np.ndarray) -> list[tuple[int, float]]:
@@ -97,7 +116,9 @@ def _legacy_events(close: np.ndarray, allowed: np.ndarray) -> list[tuple[int, fl
         return out
     with np.errstate(invalid="ignore", divide="ignore"):
         ratio = close[1:] / close[:-1]
-    cand = np.where(np.isfinite(ratio) & ((ratio < DOWN) | (ratio > UP)) & allowed[1:])[0] + 1
+        # 수정가 정수 반올림으로 −30% 하한가가 0.69996 처럼 DOWN 아래로 떨어진다(101390 2021-11-09) — 그 폭만큼 내린다
+        down = DOWN - _step_tol(close[1:], close[:-1])
+    cand = np.where(np.isfinite(ratio) & ((ratio < down) | (ratio > UP)) & allowed[1:])[0] + 1
     for t in cand:
         if t >= n - PERSIST_DAYS or not (close[t - 1] > 0):
             continue
@@ -167,20 +188,35 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     k1 = np.full(n - 1, "", dtype=object)
     a1 = np.full(n - 1, np.nan)
 
-    # 1) 계단 + 심판: m 에 가까운 쪽이 맞다. 애프터마켓 뒤에는 각 가설이 함의하는 R/I(이음매: gap, 기업행동:
-    #    r_db/m)가 가능 범위 안인지 먼저 보고, 한쪽만 가능하면 그쪽이다.
-    s_ref = step & has_ref
+    # 1) 계단 + 심판(가격제한이 있는 날만 — m 이 제한폭 밖이면 기준가 자체가 특수한 날이다, 138360 2023-01-27):
+    #    m 에 가까운 쪽이 맞다. 애프터마켓 뒤에는 계단 짝(PAIR_*)을 먼저 보고, 다음으로 각 가설이 함의하는
+    #    R/I(이음매: gap, 기업행동: r_db/m)가 가능 범위 안인지, 마지막으로 가까운 쪽 — 단 작은 계단은 그대로 둔다.
     with np.errstate(invalid="ignore"):
+        m_in = _in_band(m, BAND_EPS)
+        s_ref = step & has_ref & m_in
         seam_ok = (gap >= gap_lo) & (gap <= gap_hi)
         ev_gap = r_db / m
         ev_ok = (ev_gap >= gap_lo) & (ev_gap <= gap_hi)
+        lq = np.log(q)
     nearest = d_raw < d_db
-    seam = s_ref & np.where(am, seam_ok & (~ev_ok | nearest), nearest)
+    pair_seam, pair_event = _pairs(np.flatnonzero(s_ref & am), lq, n - 1)
+    am_pick = np.where(pair_seam, True, np.where(pair_event, False,
+                                                 seam_ok & (~ev_ok | nearest) & (np.abs(lq) >= AM_SMALL)))
+    seam = s_ref & np.where(am, am_pick, nearest)
     f1[seam] = q[seam]
     k1[seam] = "seam"
     k1[s_ref & ~seam] = "event"
-    # 2) 계단, 심판 없음: 제한폭으로 가른다
-    s_nr = step & ~has_ref
+    k1[s_ref & am & ~seam & ~pair_event & (np.abs(lq) < AM_SMALL)] = "ambiguous_am"
+    # 1b) 둘 다 심판과 어긋나고 고른 쪽 수익률이 가격제한폭 밖이면 이음매와 기업행동이 같은 날 겹친 것이다
+    #     (076610 2024-01-08: 이음매 날 감자 upd_rt 436.54%, r_db 4.2·r_raw 4.9·m 0.907) → 그날 수익률 = m.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        chosen = np.where(seam, r_raw, r_db)
+        both_off = (s_ref & ~am & (np.minimum(d_db, d_raw) > REF_TOL)
+                    & ~((chosen >= BAND_LO - BAND_EPS) & (chosen <= BAND_HI + BAND_EPS)))
+        f1[both_off] = (r_db / m)[both_off]
+    k1[both_off] = "both_off"
+    # 2) 계단, 심판 없음(또는 m 이 제한폭 밖): 제한폭으로 가른다
+    s_nr = step & ~(has_ref & m_in)
     k1[s_nr & ~raw_in & db_in] = "event"
     seam2 = s_nr & raw_in & ~db_in
     f1[seam2] = q[seam2]
@@ -198,16 +234,35 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     flat_jump &= ~am | ~raw_in
     k1[unrefl] = "unreflected"
     k1[flat_jump & ~unrefl] = "genuine_jump"
+    # 3b) 심판 없이 원주가·수정주가가 같이 ×2 넘게 뛴 날은 진짜 움직임으로 볼 근거가 없다 — 가격제한 없는 날의
+    #     ×2 넘는 급등은 병합이다(139050 2023-06-28 네이버 백필 426 → 6,570, 상장주식수 12.77:1 — UP_NOREF 주석).
+    #     옛 규칙(+3일 유지)으로 넘긴다. 아래로의 급락은 정리매매라 그대로 둔다(99칸 중 98칸 v2 일치).
+    with np.errstate(invalid="ignore"):
+        up_noref = flat_jump & ~has_ref & (r_raw > UP_NOREF)
 
     factor[1:], kind[1:], amb_q[1:] = f1, k1, a1
 
-    # 4) 원주가 없는 날 — 옛 규칙
+    # 4) 원주가 없는 날(과 3b) — 옛 규칙
     allowed = np.zeros(n, dtype=bool)
-    allowed[1:] = ok_db & ~has_raw
+    allowed[1:] = (ok_db & ~has_raw) | up_noref
     for t, r in _legacy_events(close, allowed):
         factor[t] = r
         kind[t] = "legacy_split"
     return factor, kind, amb_q
+
+
+def _pairs(idx: np.ndarray, lq: np.ndarray, n: int) -> tuple[np.ndarray, np.ndarray]:
+    """계단 위치 ``idx``(시간순) 가운데 PAIR_WINDOW 안에서 log q 가 서로 역수인 짝: (앞 = 이음매, 뒤 = 기업행동)."""
+    seam = np.zeros(n, dtype=bool)
+    event = np.zeros(n, dtype=bool)
+    for a_i, i in enumerate(idx):
+        for j in idx[a_i + 1:]:
+            if j - i > PAIR_WINDOW:
+                break
+            if not event[j] and abs(lq[i] + lq[j]) < PAIR_TOL:
+                seam[i] = event[j] = True
+                break
+    return seam, event
 
 
 def _segments(codes: np.ndarray) -> list[tuple[int, int]]:
@@ -327,7 +382,7 @@ def read_inputs(con: Any, *, cols: str = INPUT_COLS,
                 date_from: str | None = None, date_to: str | None = None) -> pd.DataFrame:
     """``daily_bars`` + 원 종가 ``raw_close`` + 키움 등락률 ``flu_rt`` — ``adjust_prices`` 입력.
 
-    raw_close = ``daily_bars_raw.close``(마지막 날 19:00 스냅숏은 빼고), 없으면 ``supply_demand.close``. flu_rt 는 키움 행만(네이버 백필은 NULL).
+    raw_close = ``supply_demand.close``(확정치), 없으면 ``daily_bars_raw.close``. flu_rt 는 키움 행만(네이버 백필은 NULL).
     ``daily_bars_raw`` 가 없는 DB(sqlite)는 ``supply_demand`` 만 본다. ``date_from``/``date_to``(포함)는 비교
     스크립트가 나눠 읽을 때만 쓴다 — 운영 재계산은 종목 전체 이력이 필요하다.
     """
@@ -347,12 +402,11 @@ def read_inputs(con: Any, *, cols: str = INPUT_COLS,
     params: list[str] = []
     raw_join, raw_expr = "", "s.close"
     if has_raw:
-        # 원주가 표의 마지막 날은 그날 19:00 스냅숏이다(daily_bars_raw DAG — 애프터마켓이 20:00 까지라 최종 봉과 다르다,
-        # 2026-10-30 실측 1,813/2,588 종목, 최대 11.1%). 다음 날 19:00 에 최근 5일을 다시 받아야 확정이므로 마지막 날은
-        # 원주가로 쓰지 않는다 — 그날은 supply_demand.close(daily_finalize 가 확정치로 덮는다)로 대신한다.
-        raw_join = ("LEFT JOIN daily_bars_raw r ON r.code = d.code AND r.date = d.date"
-                    " AND r.date < (SELECT max(date) FROM daily_bars_raw)" + rng.format(t="r") + " ")
-        raw_expr = "COALESCE(r.close, s.close)"
+        # supply_demand.close 를 먼저 쓴다: 확정된 날은 daily_bars_raw.close 와 100% 같고(약 520만 행), 원주가 표의 마지막 날은
+        # 그날 19:00 스냅숏이라(애프터마켓이 20:00 까지 — 2026-10-30 실측 1,813/2,588 종목, 최대 11.1%) 확정 봉과 다르다.
+        # daily_finalize 가 supply_demand 를 확정치로 덮으므로 그쪽이 먼저다. supply_demand 가 없는 날만 원주가 표.
+        raw_join = "LEFT JOIN daily_bars_raw r ON r.code = d.code AND r.date = d.date" + rng.format(t="r") + " "
+        raw_expr = "COALESCE(s.close, r.close)"
         params += rng_params
     sd_join = "LEFT JOIN supply_demand s ON s.code = d.code AND s.date = d.date" + rng.format(t="s")
     params += rng_params
@@ -367,6 +421,19 @@ def read_inputs(con: Any, *, cols: str = INPUT_COLS,
     df = pd.read_sql(sql, con, params=params or None)
     df["date"] = df["date"].astype(str)
     return df
+
+
+def read_inputs_by_year(con: Any, *, cols: str = INPUT_COLS) -> pd.DataFrame:
+    """``read_inputs`` 를 해마다 나눠 읽어 잇는다 — 세 표 조인 한 문장이 60초를 넘은 적이 있어(리뷰 실측) 문장 하나를
+    짧게 둔다. 날짜 조건이 세 표 모두에 걸려 해마다 1~3초, 전체 약 25초(한 문장 약 36초)."""
+    cur = con.cursor()
+    cur.execute("SELECT min(date), max(date) FROM daily_bars")
+    lo, hi = cur.fetchone()
+    if lo is None:
+        return read_inputs(con, cols=cols)
+    parts = [read_inputs(con, cols=cols, date_from=f"{y}-01-01", date_to=f"{y}-12-31")
+             for y in range(int(str(lo)[:4]), int(str(hi)[:4]) + 1)]
+    return pd.concat(parts, ignore_index=True)
 
 
 def rebuild_adjusted_table(con: Any, *, adjust_volume: bool = False) -> int:
@@ -384,7 +451,7 @@ def rebuild_adjusted_table(con: Any, *, adjust_volume: bool = False) -> int:
     # source 도 함께 읽어 그대로 전파한다 — 백테스트가 읽는 건 조정가 테이블이라,
     # "이 행의 trade_value 는 close*volume 근사치(폐지 종목 백필)"라는 사실이 여기
     # 없으면 ADV 문턱을 다루는 코드가 그걸 알 방법이 없다.
-    df = read_inputs(con)
+    df = read_inputs_by_year(con)
     adjusted = adjust_prices(df, adjust_volume=adjust_volume)
     records = list(adjusted[ADJUSTED_BAR_COLUMNS].itertuples(index=False, name=None))
     return upsert_daily_bars_adjusted(con, records)

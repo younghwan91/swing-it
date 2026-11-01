@@ -58,7 +58,7 @@ def load(cache: Path | None) -> tuple[pd.DataFrame, ...]:
             print(f"inputs {y}-{lo}: {len(parts[-1]):,}행 {time.time() - t0:.0f}s", flush=True)
     inputs = pd.concat(parts, ignore_index=True)
     old = read_prices(con, cols=("code", "date", "close"), table="daily_bars_adjusted", require_delisted=False)
-    v2 = read_prices(con, cols=("code", "date", "close", "close_src"), table="daily_bars_adj_v2",
+    v2 = read_prices(con, cols=("code", "date", "close", "close_src", "factor"), table="daily_bars_adj_v2",
                      require_delisted=False)
     # quant-airflow data_checks.check_adjusted_vs_raw 를 흉내 내려고 이벤트일만(대조에서 건너뛴다)
     ca = pd.read_sql("SELECT code, date FROM corporate_actions WHERE upd_rt <> 0", con)
@@ -86,14 +86,20 @@ def build(inputs: pd.DataFrame, old: pd.DataFrame, v2: pd.DataFrame, ca: pd.Data
     df = (inputs[["code", "date", "close", "raw_close", "flu_rt", "source"]].rename(columns={"close": "db"})
           .assign(new=new["close"].to_numpy()))
     df = df.merge(old.rename(columns={"close": "old"}), on=["code", "date"], how="left")
-    df = df.merge(v2.rename(columns={"close": "v2"}), on=["code", "date"], how="left")
+    df = df.merge(v2.rename(columns={"close": "v2", "factor": "v2_factor"}), on=["code", "date"], how="left")
     df = df.merge(plan, on=["code", "date"], how="left")
     df = df.sort_values(["code", "date"], kind="stable").reset_index(drop=True)
-    for c in ("db", "raw_close", "flu_rt", "new", "old", "v2"):
+    for c in ("db", "raw_close", "flu_rt", "new", "old", "v2", "v2_factor"):
         df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
     for c in ("db", "raw_close", "new", "old", "v2"):
         df["r_" + c] = _ret(df, c)
     df["pdate"] = df.groupby("code")["date"].shift(1)
+    # 기준이 다른 v2(2026-09-14~ 정규장 분봉)와도 비교할 수 있게 "조정 계수"의 일간 변화를 본다: 계수 = 조정가 / 원 종가.
+    # v2 계수는 corporate_actions 누적계수라 기준가(정규장·통합)와 무관하다.
+    for c in ("new", "old"):
+        df["f_" + c] = df[c] / df["raw_close"]
+        df["fs_" + c] = df["f_" + c] / df.groupby("code")["f_" + c].shift(1)
+    df["fs_v2"] = df["v2_factor"] / df.groupby("code")["v2_factor"].shift(1)
     return df
 
 
@@ -121,6 +127,12 @@ CANARIES = [
     ("0035S0", "2026-09-30", "raw"),   # 애프터마켓 뒤 진짜 상한가 — 원주가 비 +43.6% 그대로
     ("117670", "2026-10-06", "raw"),   # 16:00 수집 15일 창이 만든 daily_bars 자체 이음매
     ("298000", "2026-06-15", "db"),    # 키움 이벤트에 없는 기준가 재설정 — 수정주가가 맞다
+    ("207940", "2026-09-17", "raw"),   # 15일 재기록 창 이음매 ×0.9923 ↔ 10-02 권리락 짝
+    ("207940", "2026-10-02", "db"),
+    # 리뷰(PR #12)가 짚은 칸
+    ("076610", "2024-01-08", "flu"),   # 이음매 날 감자 — 두 후보 다 틀림, 그날 수익률 = flu_rt
+    ("139050", "2023-06-28", None),    # 네이버 백필 12.77:1 병합(+1442%) — |r|<0.3
+    ("138360", "2023-01-27", "db"),    # m 이 제한폭 밖(−52.9%) — 심판으로 안 쓴다
 ]
 
 
@@ -135,7 +147,8 @@ def canaries(df: pd.DataFrame) -> pd.DataFrame:
         if want is None:
             ok = abs(x.r_new - 1) < 0.3
         elif isinstance(want, str):
-            ok = abs(x.r_new / (x.r_raw_close if want == "raw" else x.r_db) - 1) < 0.005
+            ref = {"raw": x.r_raw_close, "db": x.r_db, "flu": 1 + x.flu_rt / 1e4}[want]
+            ok = abs(x.r_new / ref - 1) < 0.005
         else:
             ok = abs(x.r_new / want - 1) < 0.005
         rows.append({"code": code, "date": d, "r_db": x.r_db, "r_raw": x.r_raw_close, "r_old": x.r_old,
@@ -162,6 +175,21 @@ def airflow_check(df: pd.DataFrame, ca: pd.DataFrame, rawspan: pd.DataFrame, col
                     (w.r_raw_close >= 0.7) & (w.r_raw_close <= 1.3))
     w = w[band]
     return w[(w["r_" + col] / w.r_raw_close - 1).abs() > 0.2]
+
+
+def factor_agreement(df: pd.DataFrame, lo: str, hi: str) -> pd.DataFrame:
+    w = df[(df.date >= lo) & (df.date <= hi) & df.pdate.notna()]
+    rows = []
+    for name in ("old", "new"):
+        ok = w["fs_" + name].notna() & w.fs_v2.notna()
+        dev = (w["fs_" + name] / w.fs_v2 - 1).abs()[ok]
+        row = {"표": "지금 표" if name == "old" else "새 계산", "비교 칸": int(ok.sum())}
+        for t in THRESH:
+            sel = w[ok][dev > t]
+            row[f">{t:.0%} 칸"] = len(sel)
+            row[f">{t:.0%} 종목"] = sel.code.nunique()
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def residual_class(r: pd.Series) -> str:
@@ -215,6 +243,17 @@ def main() -> int:
     print(agreement(df, a.lo, a.hi).to_string(index=False))
     print("\n## 같은 표, 2026-09-14 이후 포함 전 구간")
     print(agreement(df, "0000", "9999").to_string(index=False))
+    print("\n## 조정 계수 일간 변화 vs v2 계수(기준가와 무관 — 애프터마켓 뒤도 비교 가능)")
+    for lo, hi in ((a.lo, a.hi), ("2026-09-14", "9999")):
+        print(f"[{lo}~{hi}]")
+        print(factor_agreement(df, lo, hi).to_string(index=False))
+    w0 = df[(df.date >= a.lo) & (df.date <= a.hi) & df.pdate.notna() & df.r_v2.notna()]
+    dn, do = (w0.r_new / w0.r_v2 - 1).abs(), (w0.r_old / w0.r_v2 - 1).abs()
+    worse = w0[(dn > 0.01) & (do <= 0.01)]
+    print(f"\n## 지금 표보다 나빠진 칸(v2 대비 새 >1%·지금 ≤1%): {len(worse)}칸, 그중 새 >20%: {(dn[worse.index] > 0.2).sum()}칸")
+    worse.assign(dn=dn[worse.index])[["code", "pdate", "date", "r_db", "r_raw_close", "flu_rt", "r_new", "r_old", "r_v2",
+                                      "_kind", "dn"]].sort_values("dn", ascending=False).to_csv(a.out / "worse_than_old.csv",
+                                                                                                 index=False)
 
     w = df[(df.date >= a.lo) & (df.date <= a.hi) & df.pdate.notna()].copy()
     chg = (w.r_new / w.r_old - 1).abs()

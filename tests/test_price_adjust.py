@@ -210,9 +210,9 @@ def test_canary_001380_limit_down_is_not_a_split():
     adj = pa.adjust_prices(_frame(db, raw, _flu(raw)))["close"].tolist()
     assert abs(_rets(adj)[3] - 0.70) < 1e-3
     assert adj == [float(x) for x in db]  # 아무것도 곱하지 않는다
-    # 옛 규칙(원주가 없음)은 같은 입력을 분할로 오독한다 — 고친 대상이 맞는지 확인
+    # 원주가가 없어 옛 규칙으로 가도 반올림 폭만큼 내린 문턱(DOWN − _step_tol)이라 분할로 읽지 않는다
     legacy = pa.adjust_prices(_frame(db))["close"].tolist()
-    assert abs(_rets(legacy)[3] - 1) < 1e-3
+    assert abs(_rets(legacy)[3] - 0.70) < 1e-3
 
 
 def test_canary_086900_limit_down_without_referee():
@@ -439,4 +439,87 @@ def test_raw_snapshot_on_last_raw_day_is_not_used():
     rebuild_adjusted_table(con)
     adj = pd.read_sql_query("SELECT close FROM daily_bars_adjusted ORDER BY date", con)["close"].tolist()
     assert adj == [float(x) for x in closes]
+    con.close()
+
+
+# --- 리뷰(PR #12) 반영 ---------------------------------------------------------------------------------------------
+def test_canary_076610_seam_and_capital_reduction_same_day():
+    # 076610 2024-01-08: 수집 이음매 날에 감자(upd_rt 436.54%)가 겹쳤다. r_db 4.21·r_raw 4.87 둘 다 심판(m 0.907)과
+    # 어긋난다 — 가까운 쪽을 고르면 +321% 가 남는다. 둘 다 틀리면 그날 수익률 = m.
+    raw = [300, 305, 312, 1518, 1500, 1490]
+    db = [x * 1315 / 4.214744 / 312 for x in raw[:3]] + [1315, 1300, 1290]  # 이음매 날 r_db = 4.214744
+    flu = _flu(raw)
+    flu[3] = -932  # m = 0.9068
+    adj = pa.adjust_prices(_frame(db, raw, flu))["close"].tolist()
+    assert abs(_rets(adj)[2] - 0.9068) < 1e-4, _rets(adj)
+    assert pa.diagnose(_frame(db, raw, flu))["kind"].tolist() == ["both_off"]
+
+
+def test_canary_139050_unrefereed_consolidation_goes_to_legacy():
+    # 139050 2023-06-28 네이버 폐지 백필: 426 → 6,570(+1442%, 상장주식수 12.77:1 병합). 심판이 없고 원주가·수정주가가
+    # 같이 뛰어 q=1 — ×2 를 넘으면 옛 규칙(3일 유지)으로 분할 처리한다.
+    raw = [430, 428, 426, 6570, 6600, 6550, 6500, 6520]
+    adj = pa.adjust_prices(_frame(list(raw), raw))["close"].tolist()
+    assert abs(_rets(adj)[2] - 1) < 0.3
+
+
+def test_spac_relisting_jump_without_referee_is_kept():
+    # 366330 2023-06-02 류: 거래정지(2,200 고정) 뒤 스팩 합병 재상장 첫날 +55.7% — 시가가 평가가격의 50~200% 에서 정해져
+    # 진짜로 나온다. ×2 안이라 그대로 둔다(v2 와 같다).
+    raw = [2200, 2200, 2200, 3425, 3570, 4380, 4090]
+    adj = pa.adjust_prices(_frame(list(raw), raw))["close"].tolist()
+    assert adj == [float(x) for x in raw]
+
+
+def test_canary_138360_referee_outside_limit_is_not_used():
+    # 138360 2023-01-27: flu_rt −52.9%(가격제한 없는 날). 그런 m 은 심판으로 쓰지 않고 제한폭 규칙으로 — 수정주가 그대로.
+    raw = [4000, 4075, 4480, 2110, 2120, 2130]
+    db = [8000, 8150, 2240, 2110, 2120, 2130]
+    db[2] = 2110 / 0.941964
+    db[1] = db[2] / (4480 / 4075)
+    db[0] = db[1] / (4075 / 4000)
+    flu = _flu(raw)
+    flu[3] = -5290
+    adj = pa.adjust_prices(_frame(db, raw, flu))["close"].tolist()
+    assert abs(_rets(adj)[2] - 0.941964) < 1e-6
+
+
+def test_aftermarket_small_seam_paired_with_later_event():
+    # 207940: 15일 재기록 창이 10-02 권리락(−0.77%) 수정분을 09-17 부터만 덮었다 → 09-17 이음매 ×0.9923, 10-02 에 그
+    # 역수 계단. 짝이 있으면 앞은 이음매(원주가 수익률), 뒤는 기업행동(수정주가 그대로).
+    raw = [1405000, 1404000, 1399000, 1403000, 1428000, 1366000, 1318000]
+    L = [1.0, 0.9923, 0.9923, 0.9923, 0.9923, 1.0, 1.0]
+    db = [r * x for r, x in zip(raw, L)]
+    base = [None] * 5 + [1428000 * 0.9923, None]
+    flu = _flu(raw, base)
+    adj = pa.adjust_prices(_am_frame(db, raw, flu))["close"].tolist()
+    r = _rets(adj)
+    assert abs(r[0] - 1404000 / 1405000) < 1e-9, r
+    assert abs(r[4] - (1366000 / (1428000 * 0.9923))) < 1e-9, r
+
+
+def test_aftermarket_small_unpaired_step_is_left_alone():
+    # 애프터마켓 뒤 짝 없는 작은 계단(3%)은 심판 잡음보다 작아 가를 수 없다 — 이력 전체를 다시 곱하지 않는다.
+    raw = [10000, 10100, 10300, 10250, 10400]
+    db = [10000, 10100, 10300 * 0.97, 10250 * 0.97, 10400 * 0.97]
+    flu = [None, 100, 150, -50, 146]
+    out = pa.adjust_prices(_am_frame(db, raw, flu))["close"].tolist()
+    assert out == [float(x) for x in db]
+    assert pa.diagnose(_am_frame(db, raw, flu)).empty
+
+
+def test_read_inputs_prefers_supply_demand_then_raw_table():
+    # 확정치(supply_demand.close)가 먼저, 없는 날만 daily_bars_raw.close.
+    con = storage.connect(":memory:")
+    con.execute("CREATE TABLE daily_bars_raw (code TEXT, date TEXT, close INTEGER, PRIMARY KEY (code, date))")
+    for d, c, sd, raw in [("2026-10-28", 100, None, 100), ("2026-10-29", 101, 101, 101), ("2026-10-30", 102, 102, 110)]:
+        con.execute("INSERT INTO daily_bars(code,date,open,high,low,close,volume,trade_value) VALUES (?,?,?,?,?,?,?,?)",
+                    ("A", d, c, c, c, c, 1, 1))
+        if sd is not None:
+            con.execute("INSERT INTO supply_demand(code,date,close,flu_rt,source) VALUES (?,?,?,?,?)",
+                        ("A", d, sd, 0.0, "kiwoom"))
+        con.execute("INSERT INTO daily_bars_raw(code,date,close) VALUES (?,?,?)", ("A", d, raw))
+    con.commit()
+    got = pa.read_inputs(con).sort_values("date")["raw_close"].tolist()
+    assert got == [100, 101, 102]
     con.close()
