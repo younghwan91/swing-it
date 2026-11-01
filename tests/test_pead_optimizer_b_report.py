@@ -194,9 +194,19 @@ def test_render_b_has_registered_labels():
     md = BR.render_b(_fake_res())
     first = [x for x in md.splitlines() if x.strip()][1]
     assert BR.LABEL_FIRST in first  # 제목 다음 첫 줄(PO-3.6·PO-5.3)
-    for s in (BR.LABEL_T1, BR.LABEL_MARKET, BR.LABEL_QUAL, "표본 안에서 유리", "열등 아님 선별", "GUARDRAILS §2", "f_boot 1.200"):
+    for s in (BR.LABEL_T1, BR.LABEL_MARKET, BR.LABEL_QUAL, "표본 안에서 유리", "열등 아님 선별", "GUARDRAILS §2", "f_boot 1.200",
+              "solver·gap·down"):
         assert s in md
     assert "전제가 깨졌다" in md  # 팩터 몫 경보 문장
+
+
+def test_render_b_po8_labels():
+    res = _fake_res()
+    v = res["primary"]["verdict"]
+    v.update({"lam_up_share": 0.2, "risk_label": B.LABEL_RISK_UP, "realized_active_risk_ratio_2x": 0.8, "exante_risk_ratio": 0.75,
+              "ic_zero_label": f"{B.LABEL_IC0} 폴드 [2021]"})
+    md = BR.render_b(res)
+    assert B.LABEL_RISK_UP in md and "0.800" in md and B.LABEL_IC0 in md
 
 
 def test_render_b_stop():

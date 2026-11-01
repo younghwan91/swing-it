@@ -353,7 +353,11 @@ def render_b(res: dict) -> str:
           f"| B-NI-4: IR(O)(2배) > O 널 95% | {_f(p['O']['IR_2x'])} vs {_f(v['null_q95_O'])} | {v['bars']['B-NI-4']} |",
           f"| B-NI-5: EV(O)(2배) > 0 | {_f(p['O']['EV_2x'], 5)} | {v['bars']['B-NI-5']} |", "",
           f"- B-NI-1: {v['B-NI-1_note']}.", f"- B-NI-3: {v['B-NI-3_label']}.",
-          f"- VOID 조건: {v['void']}. IC_k 가 0 으로 잘린 폴드(α ≡ 0 → 그 폴드 λ 맞춤 전부 실패, PO-7.5): {v.get('ic_zero_folds')}.", f"- ΔIR 부트스트랩 5·50·95%: {', '.join(_f(x) for x in p['boot_dIR_q05_50_95'])}, ρ(a_O, a_R) {_f(p['rho'])}.", ""]
+          f"- VOID 조건(PO-8 — λ 실패는 solver·gap·down 원인만): {v['void']}.",
+          f"- λ 실패 원인 up 비율 {_f(v.get('lam_up_share'))}"
+          + (f" — **{v['risk_label']}**. 실현 능동위험 비 sd(a_O)/sd(a_R)(2배) {_f(v.get('realized_active_risk_ratio_2x'))}, "
+             f"사전 비 {_f(v.get('exante_risk_ratio'))}." if v.get("risk_label") else "."),
+          f"- IC_k = 0 폴드: {v.get('ic_zero_label') or '없음'}.", f"- ΔIR 부트스트랩 5·50·95%: {', '.join(_f(x) for x in p['boot_dIR_q05_50_95'])}, ρ(a_O, a_R) {_f(p['rho'])}.", ""]
     rep = p["report"]
     q = rep["qualification"]
     L += ["## PEAD 북 자격 (§2, PO-7.4)", "",
@@ -392,9 +396,10 @@ def render_b(res: dict) -> str:
         L += ["## 전진 순차 경계 최종 확인 (PO-1.3)", "",
               f"d_k(2배) {fb['T_in_sample']}스텝, 원형 블록 {fb['block']}, {fb['n']}회: f_boot {fb['f_boot']:.3f}(α {fb['alpha_at_f_boot']:.4f}), "
               f"1.19 에서 α {fb['alpha_at_1.19']:.4f}. 최종 배수 {fb['multiplier']:.3f} → 경계 {fb['boundaries']} (K = {fb['looks']}).", ""]
-    L += ["## 민감도 6칸 (원장 기록, 승자 선택 금지)", "", "| 칸 | IR(2배) | EV(2배) | optimal | λ 실패 |", "|---|---|---|---|---|"]
+    L += ["## 민감도 6칸 (원장 기록, 승자 선택 금지)", "", "| 칸 | IR(2배) | EV(2배) | optimal | λ 실패 | 그중 up |", "|---|---|---|---|---|---|"]
     for nm, d in res["cells"].items():
-        L.append(f"| {nm} | {_f(d['O']['IR_2x'])} | {_f(d['O']['EV_2x'], 5)} | {_f(d['O']['optimal_share'])} | {_f(d['O']['lam_fail_share'])} |")
+        L.append(f"| {nm} | {_f(d['O']['IR_2x'])} | {_f(d['O']['EV_2x'], 5)} | {_f(d['O']['optimal_share'])} | "
+                 f"{_f(d['O']['lam_fail_share'])} | {_f(d['O'].get('lam_up_share'))} |")
     L += ["", "## 실제 규칙과의 차이 (PO-1.4, R, 누적)", "", "| 규칙 | 스텝 | 차 합 | 차 평균 | 최대 | 사건 |", "|---|---|---|---|---|---|"]
     for t in p["toggles"]:
         L.append(f"| {t['rule']} | {t['steps']} | {_f(t['diff_sum'], 5)} | {_f(t['diff_mean'], 5)} | {_f(t['diff_max_abs'], 5)} | {t['events']} |")

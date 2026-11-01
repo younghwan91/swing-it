@@ -427,3 +427,41 @@ def stats_rank(v):
     from scipy import stats
 
     return stats.rankdata(v)
+
+
+# ── PO-8: λ 실패 원인별 VOID·IC 0 폴드 ─────────────────────────────────────────
+
+
+def test_verdict_po8_up_failures_reported_not_voided():
+    null = np.linspace(-1, 0.5, 300)
+    o = {**_summ(0.8, 0.9, 0.02, 0.002, lamf=0.30), "lam_up_share": 0.30, "lam_fail_nonup_share": 0.0,
+         "exante_20_mean": 0.03}
+    r = {**_summ(0.9, 1.0, 0.025, 0.002), "exante_20_mean": 0.04}
+    v = B.verdict(o, r, null, null, True)
+    assert v["verdict"] == "비열등 통과" and v["risk_label"] == B.LABEL_RISK_UP
+    assert v["realized_active_risk_ratio_2x"] == pytest.approx(0.8) and v["exante_risk_ratio"] == pytest.approx(0.75)
+    v = B.verdict({**o, "lam_fail_nonup_share": 0.11}, r, null, null, True)
+    assert v["verdict"] == "VOID" and v["void"]["lam_fail(solver·gap·down)>0.10"]
+    v = B.verdict({**o, "lam_up_share": 0.0, "lam_fail_share": 0.0}, r, null, null, True)
+    assert v["risk_label"] is None
+    # 옛 요약(원인 없음)은 보수적으로 전체 실패율로 VOID 를 본다
+    assert B.verdict(_summ(0.8, 0.9, 0.02, 0.002, lamf=0.2), r, null, null, True)["verdict"] == "VOID"
+
+
+def test_ic_zero_fold_label_and_mask():
+    null = np.linspace(-1, 0.5, 300)
+    v = B.verdict(_summ(0.8, 0.9, 0.02, 0.002), _summ(0.9, 1.0, 0.02, 0.002), null, null, True, [2021])
+    assert v["ic_zero_folds"] == [2021] and B.LABEL_IC0 in v["ic_zero_label"]
+    s = B.mask_ic_zero_folds({"folds_IR_2x": {"2020": 0.1, "2021": 0.5}, "folds_IR_1x": {"2021": 0.4}, "IR_2x": 0.3}, [2021])
+    assert s["folds_IR_2x"] == {"2020": 0.1, "2021": B.LABEL_IC0} and s["folds_IR_1x"]["2021"] == B.LABEL_IC0
+    assert s["IR_2x"] == 0.3  # 통합 항목은 그대로
+
+
+def test_book_summary_splits_lambda_causes():
+    recs = [B.StepRec(k=k, t=k, date="2021-01-05", gross=0.0, cost1=0.0, bench=0.0, turnover=0.0, exante_20=0.03,
+                      factor_share=0.05) for k in range(10)]
+    for r, (hit, cause) in zip(recs, [(False, "up")] * 3 + [(False, "gap")] + [(True, "")] * 6):
+        r.lam_hit, r.lam_cause = hit, cause
+    s = B.book_summary(recs)
+    assert s["lam_fail_share"] == pytest.approx(0.4) and s["lam_up_share"] == pytest.approx(0.3)
+    assert s["lam_fail_nonup_share"] == pytest.approx(0.1) and s["lam_causes"] == {"up": 3, "down": 0, "gap": 1, "solver": 0}

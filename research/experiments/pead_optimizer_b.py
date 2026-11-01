@@ -63,6 +63,8 @@ NULL_Q = 0.95
 NI_X_CAP, NI3_RATIO = 0.30, 1.25  # PO-1.6 x = min(IR(R)/3, 0.30), B-NI-3
 OPT_OK_MIN, OOS_MIN, LAM_FAIL_MAX = 0.95, 40, 0.10  # VOID
 FACTOR_ALARM = 0.20  # PO-3.4·PO-5.3
+LABEL_RISK_UP = "위험 맞춘 비교 아님 (O 사전위험 < R)"  # PO-8 — λ 실패 원인 up
+LABEL_IC0 = "판단 불가(학습 IC 0)"  # PO-8 — IC_k 가 0 으로 잘린 폴드
 PARITY_TOL = 1e-10
 ANN = math.sqrt(252.0 / STEP)
 N_BOOT, BOOT_MEAN_BLOCK = 10_000, 3
@@ -850,8 +852,12 @@ def stationary_boot_dir(aO, aR, n=N_BOOT, mean_block=BOOT_MEAN_BLOCK, seed_key="
     return out
 
 
-def verdict(o: dict, r: dict, null_o: np.ndarray, null_r: np.ndarray, parity_pass: bool) -> dict:
-    """§2·PO-1.6·PO-5 바의 기계적 적용. ``o``/``r`` 은 :func:`book_summary` 결과."""
+def verdict(o: dict, r: dict, null_o: np.ndarray, null_r: np.ndarray, parity_pass: bool, ic_zero_folds=()) -> dict:
+    """§2·PO-1.6·PO-5·PO-8 바의 기계적 적용. ``o``/``r`` 은 :func:`book_summary` 결과.
+
+    PO-8: λ 실패 VOID(> 10%)는 원인 solver·gap·down 에만 건다. 원인 up(가장 작은 λ 에서도 O 사전위험 < R — 비용 > α)은 세어
+    보고하고 :data:`LABEL_RISK_UP` 라벨·실현 능동위험 비를 붙인다. ``ic_zero_folds`` 는 IC_k = 0 폴드(α ≡ 0) — 통합 결과에는 남기고 라벨을 붙인다.
+    """
     ir_r2, ir_o2, ir_r1, ir_o1 = r["IR_2x"], o["IR_2x"], r["IR_1x"], o["IR_1x"]
     x = min(ir_r2 / 3.0, NI_X_CAP)
     q_r, q_o = float(np.quantile(null_r, NULL_Q)), float(np.quantile(null_o, NULL_Q))
@@ -864,7 +870,8 @@ def verdict(o: dict, r: dict, null_o: np.ndarray, null_r: np.ndarray, parity_pas
         "B-NI-5": bool(o["EV_2x"] > 0),
     }
     void = {"optimal_share<0.95": o["optimal_share"] < OPT_OK_MIN, "parity_fail": not parity_pass,
-            "oos_steps<40": min(o["oos_steps"], r["oos_steps"]) < OOS_MIN, "lam_fail>0.10": o["lam_fail_share"] > LAM_FAIL_MAX}
+            "oos_steps<40": min(o["oos_steps"], r["oos_steps"]) < OOS_MIN,
+            "lam_fail(solver·gap·down)>0.10": o.get("lam_fail_nonup_share", o["lam_fail_share"]) > LAM_FAIL_MAX}
     if any(void.values()):
         v = "VOID"
     elif not bars["SIG"]:
@@ -877,7 +884,22 @@ def verdict(o: dict, r: dict, null_o: np.ndarray, null_r: np.ndarray, parity_pas
             "bars": bars, "void": void, "verdict": v,
             "failed": [b for b, ok in bars.items() if not ok and b != "SIG"],
             "B-NI-3_label": "표본 안에서 유리(v4 는 이 구간에서 튜닝됐다, PO-5.1)",
-            "B-NI-1_note": "열등 아님 선별(검정 아님) — 참 ΔIR = −x 이면 이 선별을 통과할 확률은 0.5 다(PO-1.6)"}
+            "B-NI-1_note": "열등 아님 선별(검정 아님) — 참 ΔIR = −x 이면 이 선별을 통과할 확률은 0.5 다(PO-1.6)",
+            "lam_up_share": o.get("lam_up_share", 0.0),
+            "risk_label": LABEL_RISK_UP if o.get("lam_up_share", 0.0) > 0 else None,
+            "realized_active_risk_ratio_2x": (o["sd_a_2x"] / r["sd_a_2x"]) if r["sd_a_2x"] else float("nan"),
+            "exante_risk_ratio": (o.get("exante_20_mean", float("nan")) / r["exante_20_mean"])
+            if r.get("exante_20_mean") else float("nan"),
+            "ic_zero_folds": list(ic_zero_folds),
+            "ic_zero_label": (f"{LABEL_IC0} 폴드 {list(ic_zero_folds)} — 통합 결과에는 α ≡ 0 으로 남는다(PO-8)" if ic_zero_folds else None)}
+
+
+def mask_ic_zero_folds(summary: dict, years) -> dict:
+    """PO-8 — IC_k = 0 폴드는 폴드별 항목에서 빼고 :data:`LABEL_IC0` 로 바꾼다(통합 항목은 그대로)."""
+    years = {str(y) for y in years}
+    for key in [k for k in summary if k.startswith("folds_IR_")]:
+        summary[key] = {y: (LABEL_IC0 if y in years else v) for y, v in summary[key].items()}
+    return summary
 
 
 def book_summary(recs: list[StepRec]) -> dict:
@@ -901,6 +923,9 @@ def book_summary(recs: list[StepRec]) -> dict:
     out["oos_steps"] = len(o)
     out["optimal_share"] = float(np.mean([r.status == "optimal" for r in o])) if o else float("nan")
     out["lam_fail_share"] = float(np.mean([not r.lam_hit for r in o])) if o else float("nan")
+    out["lam_up_share"] = float(np.mean([(not r.lam_hit) and r.lam_cause == "up" for r in o])) if o else float("nan")
+    out["lam_fail_nonup_share"] = (float(np.mean([(not r.lam_hit) and r.lam_cause != "up" for r in o]))
+                                   if o else float("nan"))
     fs = np.array([r.factor_share for r in recs], dtype=float)
     out["factor_share_q10_50_90"] = [float(np.nanquantile(fs, q)) for q in (0.1, 0.5, 0.9)] if np.isfinite(fs).any() else None
     alarm = [r for r in recs if np.isfinite(r.factor_share) and r.factor_share > FACTOR_ALARM]
@@ -1206,23 +1231,23 @@ def run_b(args, log) -> int:  # pragma: no cover - B 는 PR #12 배포·강건�
         recs_o = simulate(ctx, "O", cell, ic_by_year=ic_by[cell.h_alpha], sigma_r=sigma_r)
         viol += check_invariants(recs_o, "O", cell)
         steps_checked += len(recs_o)
-        res["cells"][cell.name] = {"O": book_summary(recs_o)}
+        res["cells"][cell.name] = {"O": mask_ic_zero_folds(book_summary(recs_o), ic_info["zero_folds"][cell.h_alpha])}
         if cell == PRIMARY:
             recs_r = simulate(ctx, "R")
             viol += check_invariants(recs_r, "R")
             steps_checked += len(recs_r)
-            o_s, r_s = book_summary(recs_o), book_summary(recs_r)
+            zf = ic_info["zero_folds"][cell.h_alpha]
+            o_s, r_s = mask_ic_zero_folds(book_summary(recs_o), zf), mask_ic_zero_folds(book_summary(recs_r), zf)
             nulls = permutation_nulls(ctx, cell, ic_by[cell.h_alpha], sigma_r, args.workers)
             viol += nulls["violations"]
             aO = oos(step_returns(recs_o, 2.0))["a"].to_numpy()
             aR = oos(step_returns(recs_r, 2.0))["a"].to_numpy()
             boot = stationary_boot_dir(aO, aR)
-            res["primary"] = {"O": o_s, "R": r_s, "verdict": verdict(o_s, r_s, nulls["O"], nulls["R"], pc["pass"]),
+            res["primary"] = {"O": o_s, "R": r_s, "verdict": verdict(o_s, r_s, nulls["O"], nulls["R"], pc["pass"], zf),
                               "rho": float(np.corrcoef(aO, aR)[0, 1]), "boot_dIR_q05_50_95":
                               [float(np.quantile(boot, q)) for q in (0.05, 0.5, 0.95)],
                               "null_O_perm_nan_share_mean": float(np.nanmean(nulls["O_perm_nan_share"])),
                               "toggles": toggle_report(ctx)}
-            res["primary"]["verdict"]["ic_zero_folds"] = ic_info["zero_folds"][cell.h_alpha]
             res["primary"]["report"] = b_report(ctx, info, x, recs_o, recs_r, aO - aR, log)
     if viol:
         (cache / "B_invariant_violations.txt").write_text("\n".join(viol))
