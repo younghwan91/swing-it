@@ -870,7 +870,14 @@ def render_md(r: dict) -> str:
           "| 바 | 구창 |", "|---|---|"]
     for k, v in ob["bars"].items():
         L.append(f"| {k} | {'통과' if v else '**미달**'} |")
+    kmax = max(c52["kappa"], key=c52["kappa"].get)
     L += ["", f"**STOP = {r['STOP']}**", "",
+          "> **정정 PO-2 공개(M3) — 구창 전지 통과는 정보가 없다.** 확대 계수 κ 를 같은 52개월에서 부트스트랩했으므로 "
+          "가장 크게 틀린 대상이 가장 넓은 밴드를 받는다. 예: "
+          f"{kmax} 실현 {r['old_realized'][kmax]:.3f} 이 T=52 밴드 [{c52['bands'][kmax][0]:.2f}, {c52['bands'][kmax][1]:.2f}]"
+          f"(κ {c52['kappa'][kmax]:.2f}, T=31 κ {r['calibration']['31']['kappa'][kmax]:.2f}) 안이다. "
+          "위 'STOP = False' 는 STOP 규칙에 걸리지 않았다는 뜻일 뿐, 위험모델이 맞다는 증거가 아니다. "
+          "또 이 C0 는 `daily_bars_adjusted` 이음매(025620 2021-07-29 등)를 거르지 않은 값이다 — 이음매 가드 뒤 값은 `PO2.md`.", "",
           "## 구창 구조 모의 — T 별 (PO-1.1·1.2, 1,000회)", "",
           "max h(업종 제외)는 보고만 — VOID 바는 업종 포함 max h 로 본다. α 는 1,000회 모의의 순서통계량 계단"
           " (2k/999) 위에서 정해진다(T 마다 k=4 근처로 같다).", "",
@@ -886,6 +893,9 @@ def render_md(r: dict) -> str:
                  + f" | {c['detect_sector_mean']:.2f}·{c['detect_sector_min']:.2f} | {c['A6_void_prob_correct']:.2f} | "
                  + f"{'예' if c['void_ok'] else '아니오'} |")
     L += ["", f"**T_fwd = {r['T_fwd'] if r['T_fwd'] is not None else '없음 — 전진 A 판정 불가(설계 검정력 부족, PO-1.7)'}**", "",
+          "> 정정 PO-2(M4): T_fwd 가 없다는 것은 SE(b) ≈ √((2+κ_f)/(4T)) 로 미리 알 수 있었다. 사전등록의 "
+          "\"T_fwd ≥ 40 예상\"은 틀렸고 철회했다. 업종 ×1.69 탐지가 낮은 것은 IP/IE 묶음의 ⌊0.2G⌋개 밴드 밖 허용 때문이다. "
+          "α 는 1,000회 모의의 순서통계량 위에 있다(PO-2 는 10,000회).", "",
           "## T=31 반폭과 확대 계수 (보고만 — 신창 A0 는 신창 구조로 다시 낸다)", "",
           "| 대상 | 중심 | h− | h+ | SE 모의 | SE 부트 | κ |", "|---|---|---|---|---|---|---|"]
     c31 = r["calibration"]["31"]
