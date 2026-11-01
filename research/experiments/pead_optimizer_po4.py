@@ -838,13 +838,35 @@ def render_repro(r: dict) -> str:
     return "\n".join(L) + "\n"
 
 
+# PO-1.5 — A 판정문에 그대로 쓰는 문장(PREREG 503~504·837행).
+PO15_SENTENCE = "시장 대상 강등은 신창 정보 열람 후의 완화이고, A 통과는 시장 위험 예측에 대해 아무 말도 하지 않는다."
+
+# A1 독립 리뷰(quant-reviewer)가 따로 계산해 전한 값 — 이 러너가 다시 내지 않는다. 렌더러는 글로만 옮긴다.
+A1_REVIEW = {
+    "descriptive": "점추정은 특이위험 과소예측(변동성 약 6%), 맞는 모델 대비 단측 p ≈ 0.05~0.11, 방향은 구창 v3 와 같다.",
+    "tails": ("고정 밴드(구창 꼬리로 정함)는 신창 꼬리에서 조금 좁다 — 신창 꼬리로 모의한 맞는 모델의 실패 확률 0.104(명목 0.066). "
+              "통과를 어렵게 하는 쪽이라 판정에는 보수적이다. 같은 꼬리에서 D×1.5·D×0.67 탐지는 0.997·0.994 라 "
+              "\"변동성 오차 약 22% 이상은 기각됐다\" 는 그대로 선다."),
+    "sim": ("리뷰 모의(맞는 모델, 구창 꼬리/신창 꼬리): P(b21 ≥ 1.0496) 0.091/0.112, P(b5 ≥ 1.0609) 0.049/0.071. 실현값은 "
+            "D×1.13 세계의 중앙값 근처이고, 변동성 과소예측 약 10~14% 까지와 양립한다. 판정(밴드 안)은 바뀌지 않는다."),
+    "sub2026": ("2026-01~07(7회) 값은 약 1.2 SE 라 따로 판정할 수 없다. 월별 OB z² 평균은 2026-07 이 0.45 로 낮고, "
+                "높은 달은 2026-01 2.16·2026-04 2.42 다."),
+    "smoke": ("신창 실행 전 `--mode smoke`(END 2023-12-28, asof 2023-06-30~2023-10-31 5회, 2026-11-02 05:03~05:04)를 "
+              "PO-4 커밋(`b38817a`, 05:05) **전** 코드로 한 번 돌렸다. 코드 오류 확인용이고 출력은 레포 밖에 버렸다. "
+              "그 실행의 지문 구간 끝이 2023-12-28 이라 신창을 읽지 않았다."),
+    "renderer": ("이 렌더러는 결과를 본 뒤 두 번 고쳤다. (1) A1 결과 커밋 `63a05d7` 에서 시장 수준 대상 정의 한 줄. "
+                 "(2) 이 정정에서 PO-1.5 문장·서술 한 줄·이 절. 둘 다 `--render`(JSON → MD)만 했고 숫자는 다시 계산하지 않았다."),
+}
+
+
 def render_a1(r: dict) -> str:
     L = []
     if "STOP" in r:
         return f"# A1 — 멈춤\n\n**{r['STOP']}**\n"
     ro = r["report_only"]
     b = r["band"]
-    L += ["# 단계 A1 — v4 신창 D·최적화 바이어스 검정 (검증 전)", "",
+    review = r.get("window") == ["2024-01-31", "2026-07-31"] and r.get("end") == "2026-09-11"
+    L += [f"# 단계 A1 — v4 신창 D·최적화 바이어스 검정 ({'독립 리뷰 반영 — 판정 유지, 숫자 재계산 없음' if review else '검증 전'})", "",
           f"**{r['label']}**", "",
           f"사전등록 PO-3 `{r['prereg']['PO-3']}`·PO-4 `{r['prereg']['PO-4']}`, 재현 `{r['prereg']['PO-4_repro']}`, core `{r['core_ref']}`. "
           f"신창 asof {r['window'][0]}~{r['window'][1]} ({r['n_asof']}회), END {r['end']}(데이터 끝 {r['data_end']}). 신창은 이 한 번만 쓴다.", "",
@@ -855,6 +877,10 @@ def render_a1(r: dict) -> str:
           f"| 보조 A-OB5 | {r['OB5']:.4f} | [{b['OB5'][0]:.5f}, {b['OB5'][1]:.5f}] | {r['OB5_in_band']} |",
           f"| OB 성공 | {r['ob']['ok']}/{200 * r['n_asof']} = {r['ob_ok_share']:.3f} | ≥ 0.90 (아니면 VOID) | {r['ob_ok_share'] >= 0.9} |", "",
           f"**A 판정: {r['verdict']}.** {r['sentence']}", ""]
+    rz = ro["realized"]
+    L.append(f"- 시장 수준 대상(보고만): capw {_f(rz['capw'])}, KOSPI {_f(rz['KOSPI'])}, LO50 {_f(rz['LO50'])}. {PO15_SENTENCE}")
+    if review:
+        L.append(f"- (서술, 판정 아님) {A1_REVIEW['descriptive']}")
     if r["verdict"] == "통과":
         L.append("- 결과 가지(PO-3.6): B 를 §2·PO-1 대로 열 수 있다 — **이 실행에서는 열지 않는다.** B 첫 줄은 \"위험모델 v4 — D·최적화 바이어스만 신창 OB 로 검증, F·업종 미검증\".")
     elif r["verdict"] == "실패":
@@ -864,8 +890,21 @@ def render_a1(r: dict) -> str:
     L += ["- 경계(PO-4.4): v4 는 격자 경계(spec_shrink 0.1)에서 골랐다. s<0.1 이나 s=0 은 신창 결과와 상관없이 v5 로만 다루고 전진으로만 판정한다.",
           "- 취약 라벨(PO-4.2): PR #12 배포 뒤 C0 1회 + A1 보고만 1회. 통과·실패가 바뀌면 \"취약\" → 전진.",
           f"- OB 사전 팩터 분산 몫 10·50·90% {'·'.join(f'{v:.3f}' for v in r['factor_share_q10_50_90'])} — 경보(중앙 > 20%) "
-          f"{'**켜짐**: ' + r['factor_share_sentence'] if r['factor_share_alarm'] else '꺼짐'}.", "",
-          "## 데이터 고정 (PO-4.2)", "",
+          f"{'**켜짐**: ' + r['factor_share_sentence'] if r['factor_share_alarm'] else '꺼짐'}.", ""]
+    if review:
+        tp = ro["tails_post_hoc"]
+        ex = ro["years"]["2026-07 제외"]["v4"]
+        L += ["## 독립 리뷰 반영 (정정 — 판정 유지, 숫자 재계산 없음)", "",
+              "독립 리뷰(`quant-reviewer`): A 통과 유지, CRITICAL 없음. 아래의 확률·월별 값은 리뷰어가 따로 계산한 것이고, 이 러너가 다시 낸 것이 아니다. "
+              "실행 숫자는 모두 `A1.json` 그대로다.", "",
+              f"- **꼬리(m1).** 신창 꼬리(CV_s {_f(tp['CV_med'])}, ν_u 자르기 전 {_f(tp['nu_u_unclipped'], 2)})는 구창 v4(0.324, 4.42)보다 두껍다. "
+              f"{A1_REVIEW['tails']}",
+              f"- **점추정의 뜻(M2, 서술).** {A1_REVIEW['sim']}",
+              f"- **2026 부분창(m4).** {A1_REVIEW['sub2026']} 그래서 \"2026-07 제외\" 값(OB21 {_f(ex['OB21'], 4)}·OB5 {_f(ex['OB5'], 4)})이 "
+              f"전체(OB21 {r['OB21']:.4f}·OB5 {r['OB5']:.4f})보다 크다.",
+              f"- **스모크 실행 공개(m2).** {A1_REVIEW['smoke']}",
+              f"- **렌더러 수정 공개(m3).** {A1_REVIEW['renderer']}", ""]
+    L += ["## 데이터 고정 (PO-4.2)", "",
           f"- 구창 재확인: 가드 끈 R0 PO3.json 일치 {r['recheck_old']['R0_match']}, v4 모델 {r['recheck_old']['v4_models_checked']} 비트 동일 "
           f"{r['recheck_old']['v4_models_bit_same']}.",
           f"- `daily_bars_adjusted` 2019-01-01~{r['end']} 지문(행 수, 최대 날짜, Σround(close×100), Σvolume): 시작 {r['fingerprint_before']['daily_bars_adjusted']}, "
