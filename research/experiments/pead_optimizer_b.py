@@ -66,6 +66,10 @@ FACTOR_ALARM = 0.20  # PO-3.4·PO-5.3
 PARITY_TOL = 1e-10
 ANN = math.sqrt(252.0 / STEP)
 N_BOOT, BOOT_MEAN_BLOCK = 10_000, 3
+DUST_EPS = 1e-6  # PO-7 M2 — 해 직후 |w| < max(1e-6, 1주 가격/AUM) 은 0(솔버 먼지)
+INV_EPS = 1e-6  # PO-7 M3 — 불변식 허용오차
+COST_BP_PER_TURN = (1.5, 300.0)  # PO-7 M3 — 1배 비용/회전(bp): 수수료 하한 ~ 상한
+LIMIT_UP_RET = 0.29  # PO-7 MINOR 9 — 체결일 종가 수익 ≥ 29% 면 상한가 체결로 센다
 
 
 @dataclass(frozen=True)
@@ -150,13 +154,17 @@ def alpha_vec(ic: float, d_daily: np.ndarray, z: np.ndarray, h: int) -> np.ndarr
 
 
 def daily_rank_ic(close, adv, cap, sig, lo: int, hi: int, h: int):
-    """일별 순위 IC(``rank_ic`` 정의: t 신호 대 C[t+1+h]/C[t+1]−1, Spearman, 20종목 이상). 적격 = U_t 없는 M0 의 시총 21~100위(PO-6)."""
+    """일별 순위 IC(``rank_ic`` 정의: t 신호 대 C[t+1+h]/C[t+1]−1, Spearman, 20종목 이상). 적격 = U_t 없는 M0 의 시총 21~100위(PO-6).
+
+    PO-7 MINOR 2 — 창 안에서 가격이 끊긴 종목(폐지·정지)은 마지막 관측 종가로 잰다(빼면 생존자 필터). C[t+1] 이 없으면 뺀다.
+    """
     nN, nD = close.shape
+    cff = _ffill_axis1_nb(np.asarray(close, dtype=np.float64))
     allu = np.ones(nN, bool)
     days, ics = [], []
     for t in range(lo, min(hi, nD - h - 2) + 1):
         el = eligible_idx(t, sig, adv, cap, allu)
-        ret = close[el, t + 1 + h] / close[el, t + 1] - 1.0
+        ret = cff[el, t + 1 + h] / close[el, t + 1] - 1.0
         ok = np.isfinite(ret)
         if ok.sum() < 20:
             continue
@@ -200,6 +208,31 @@ def factor_share(sub: Sub, d: np.ndarray) -> float:
     return fv / (fv + sv) if fv + sv > 0 else float("nan")
 
 
+def top_exposures(sub: Sub, d: np.ndarray, k: int = 3) -> list:
+    """팩터 몫 경보 날의 큰 노출 셋(PO-5.3·PO-7 MINOR 7): 능동 노출 y = Xᵀd 를 팩터 변동성 √F_kk 로 잰 크기 순."""
+    y = sub.X.T @ d
+    sz = np.abs(y) * np.sqrt(np.clip(np.diag(sub.F), 0.0, None))
+    order = np.argsort(-sz)[:k]
+    return [(str(sub.names[j]), float(y[j])) for j in order]
+
+
+def clean_dust(w: np.ndarray, price: np.ndarray, aum: float, fixed: np.ndarray) -> tuple[np.ndarray, int]:
+    """PO-7 M2 — 솔버 먼지 제거. 고정(``no_trade``) 아닌 종목의 w < max(1e-6, 1주 가격/AUM) 은 0, 음수도 0.
+
+    지운 만큼은 남은(고정 아닌, 양수) 비중에 비례로 돌려 합을 지킨다. 반환 ``(w, 지운 수)``.
+    """
+    w = np.asarray(w, dtype=np.float64).copy()
+    thr = np.maximum(DUST_EPS, np.where(np.isfinite(price), price, 0.0) / aum)
+    kill = ~fixed & (w < thr) & (w != 0.0)
+    total = w.sum()
+    w[kill] = 0.0
+    keep = ~fixed & (w > 0)
+    s_keep = w[keep].sum()
+    if s_keep > 0:
+        w[keep] *= (total - w[fixed].sum()) / s_keep
+    return w, int(kill.sum())
+
+
 def linear_bp(side: np.ndarray, market: np.ndarray, day: date, hs_bp: np.ndarray) -> np.ndarray:
     """수수료 + 매도세(매도만) + 반스프레드(bp) — 충격 없는 부분(폐지 청산에 쓴다)."""
     side = np.asarray(side, dtype=str)
@@ -239,28 +272,42 @@ def trailing_vol(ret: np.ndarray, t: int) -> np.ndarray:
 def match_lambda(solve, risk_of, target: float):
     """로그 공간 이분법 [1e-2, 1e5], 최대 40회, ±2%. 위험은 λ 에 감소한다.
 
-    Returns: ``(res, lam, hit, n_solves)``. 못 맞추면 ``optimal`` 인 반복 중 |log(위험/목표)| 가 가장 작은 것(PO-6), 그것도 없으면 ``None``.
+    ``optimal`` 이 아닌 풀이에서 멈추지 않는다(PO-7 MINOR 4): 그 반복은 세고, 가장 가까운 성공 λ 쪽으로 구간을 좁혀 계속한다.
+
+    Returns: ``(res, lam, hit, n_solves, cause)``. 못 맞추면 ``optimal`` 인 반복 중 |log(위험/목표)| 가 가장 작은 것(PO-6), 그것도 없으면
+    ``None``. ``cause`` ∈ {"", "solver"(성공 풀이 없음), "up"(모든 성공 풀이의 위험 < 목표 — 하한 λ 에서도 못 올림),
+    "down"(모든 성공 풀이의 위험 > 목표), "gap"(목표를 사이에 두었지만 ±2% 창을 못 맞춤 — 위험이 λ 에 불연속)}.
     """
     lo, hi = math.log(LAM_LO), math.log(LAM_HI)
     best, best_gap, best_lam, n = None, math.inf, float("nan"), 0
+    below = above = False
     for _ in range(LAM_ITERS):
         mid = 0.5 * (lo + hi)
         lam = math.exp(mid)
         res = solve(lam)
         n += 1
         if not res.ok:
-            break
+            if best is None:
+                hi = mid  # 성공 풀이가 아직 없으면 작은 λ 쪽부터
+            elif best_lam > lam:
+                lo = mid
+            else:
+                hi = mid
+            continue
         risk = risk_of(res.weights)
         gap = abs(math.log(max(risk, 1e-300) / target))
         if gap < best_gap:
             best, best_gap, best_lam = res, gap, lam
         if abs(risk / target - 1.0) <= LAM_TOL:
-            return res, lam, True, n
+            return res, lam, True, n, ""
         if risk > target:
+            above = True
             lo = mid
         else:
+            below = True
             hi = mid
-    return best, best_lam, False, n
+    cause = "solver" if best is None else ("gap" if (above and below) else ("up" if below else "down"))
+    return best, best_lam, False, n, cause
 
 
 # ── 엔진 ───────────────────────────────────────────────────────────────────────
@@ -382,13 +429,35 @@ def parity_check(ctx: Ctx, core_adv_matches: bool | None = None) -> dict:
     return out
 
 
+def full_parity(ctx: Ctx) -> dict:
+    """PO-1.4 패리티 + ADV 바이트 + 격자 전부 적격 집합(``--mode parity`` 와 ``--mode run`` 이 같은 검사를 쓴다, PO-7 MINOR 6).
+
+    패리티는 **마스크·트랜치 선택·폐지 산술만** 검증한다(``parity_book`` 은 core 함수의 이식이다). 엔진(``simulate``·``o_target``·비용·널)은
+    :func:`check_invariants` 와 스웜 재계산으로 검증한다(PO-7 M3).
+    """
+    tv_m = ctx.tv_won / 1e6
+    adv_core = _trailing_adv(tv_m, tv_m.shape[1], 20, ctx.C)
+    adv_same = bool(np.array_equal(adv_core[:, 20:], ctx.adv[:, 20:], equal_nan=True))
+    pc = parity_check(ctx, adv_same)
+    sp = parity_signal(ctx.sig, ctx.adv, ctx.grid, ctx.in_u)
+    allu = np.ones(ctx.C.shape[0], bool)
+    elig_same = all(np.array_equal(np.sort(eligible(t, ctx.sig, ctx.adv, ctx.cap, ctx.in_u(t))),
+                                   np.sort(eligible_idx(t, sp, ctx.adv, ctx.cap, allu))) for t in ctx.grid)
+    pc["eligible_same_all_grid"] = bool(elig_same)
+    pc["pass"] = bool(pc["pass"] and elig_same)
+    return pc
+
+
 def delisted(ctx: Ctx, f: int) -> np.ndarray:
     """f 에 폐지로 본다 = ``delisted_stocks.last_trade_date`` 가 f 전 ∧ f 에 가격 없음(코드 재사용 방어, PO-6)."""
     return (ctx.delist_after < f) & ~np.isfinite(ctx.C[:, f])
 
 
-def r_target(ctx: Ctx, k: int, t: int, tranches: dict, flags: Flags, f: int) -> np.ndarray:
-    """R 목표 비중(체결일 f 기준, 합 1): 활성 트랜치(k, k−1, k−2)마다 1/n, 트랜치 안 동일가중. 강제 매도·폐지 종목은 뺀다."""
+def r_target(ctx: Ctx, k: int, t: int, tranches: dict, flags: Flags, f: int, with_parts: bool = False):
+    """R 목표 비중(체결일 f 기준, 합 1): 활성 트랜치(k, k−1, k−2)마다 1/n, 트랜치 안 동일가중. 강제 매도·폐지 종목은 뺀다.
+
+    ``with_parts`` 면 ``(w, 활성 트랜치 수)`` 를 돌려준다(PO-7 M3 불변식).
+    """
     nN = ctx.C.shape[0]
     in_u = ctx.in_u(t)
     gone = delisted(ctx, f)
@@ -408,7 +477,7 @@ def r_target(ctx: Ctx, k: int, t: int, tranches: dict, flags: Flags, f: int) -> 
             parts.append(b)
     for b in parts:
         w[b] += 1.0 / (len(parts) * b.size)
-    return w
+    return (w, len(parts)) if with_parts else w
 
 
 @dataclass
@@ -434,6 +503,22 @@ class StepRec:
     u_excl: float = float("nan")
     perm_nan_share: float = float("nan")
     contrib: list = field(default_factory=list)  # (종목, 체결 뒤 비중, 종목 수익, 1배 비용)
+    # PO-7 — 회계 창·불변식·보고
+    f: int = -1  # 체결일 열
+    f_next: int = -1  # 다음 체결일 열(스텝 끝)
+    lam_cause: str = ""
+    n_tranches: int = 0  # R: 활성 트랜치 수
+    cash: float = 0.0  # 체결 뒤 현금 비중
+    min_w: float = 0.0
+    max_w: float = 0.0
+    sector_dev: float = float("nan")  # O: max_g |Σw_g − b_g| (체결 뒤)
+    sector_tol: float = float("nan")
+    turn_bound: float = float("nan")  # O(구축 뒤): 2/3 + 강제 매도·폐지·표류·재비례 몫
+    n_dust: int = 0  # O: 해 직후 0 으로 지운 먼지 비중 수
+    dust_mass: float = 0.0  # O: 지운 먼지 비중 합
+    delist_mass: float = 0.0  # 폐지 현금화 비중(비용은 있고 회전에는 안 든다)
+    n_buy_limit_up: int = 0  # 체결일 종가가 상한가(+29% 이상)인 매수 수
+    alarm_top3: list = field(default_factory=list)  # 팩터 몫 > 20% 인 날의 큰 노출 셋 (이름, 노출)
 
 
 def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), rank_sig=None, ic_by_year=None,
@@ -467,7 +552,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         in_u = ctx.in_u(t)
         el = eligible(t, ctx.sig, ctx.adv, ctx.cap, in_u)
         rec = StepRec(k=k, t=t, date=str(ctx.dates[t].date()), gross=float("nan"), cost1=0.0, bench=float("nan"),
-                      turnover=0.0, exante_20=float("nan"), factor_share=float("nan"))
+                      turnover=0.0, exante_20=float("nan"), factor_share=float("nan"), f=f, f_next=f_next)
         rec.u_excl = u_exclusion(t, ctx.sig, ctx.adv, in_u)
         if kind == "R":
             tranches[k] = tranche_names(t, rank_sig, ctx.sig, ctx.adv, ctx.cap, in_u)
@@ -490,6 +575,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
                 if flags.costs:
                     cost_vec[g] += linear_bp(np.full(g.size, "SELL"), ctx.market[g], day, ctx.hs_bp[g]) / 1e4 * w_f[g]
                 cash_f += w_f[g].sum()
+                rec.delist_mass = float(w_f[g].sum())
                 w_f[g] = 0.0
                 rec.n_delist = int(g.size)
         held_f = w_f > 0
@@ -511,7 +597,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         # 목표 비중(체결일 f, 합 ≤ 1)
         trade = True
         if kind == "R":
-            want = r_target(ctx, k, t, tranches, flags, f)
+            want, rec.n_tranches = r_target(ctx, k, t, tranches, flags, f, with_parts=True)
             rec.n_untradeable = int(((want > 0) & ~tradeable).sum())
             # 사전 위험(결정 목표 비중, 결정일 모델, U_t 안, 합 1 로 맞춤)
             w_r = want * in_u
@@ -524,6 +610,8 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
                 d = (w_r - b)[rows]
                 rec.exante_20 = active_risk(sub, d)
                 rec.factor_share = factor_share(sub, d)
+                if rec.factor_share > FACTOR_ALARM:
+                    rec.alarm_top3 = top_exposures(sub, d)
             want = np.where(tradeable, want, 0.0)
         else:
             want, info = o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol,
@@ -531,6 +619,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             for key, v in info.items():
                 setattr(rec, key, v)
             trade = rec.status == "optimal"
+        renorm = 0.0
         if trade:
             free = tradeable & ~frozen
             room = 1.0 - w_f[frozen].sum()
@@ -538,6 +627,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             new = np.where(frozen, w_f, 0.0)
             if s > 0:
                 new[free] = want[free] * (room / s)
+                renorm = abs(room - s)
             new_cash = 1.0 - new.sum()
         else:  # 최적화 실패 → 거래 안 함(강제 매도만, 대금은 현금)
             new = w_f.copy()
@@ -552,6 +642,25 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         rec.turnover = float(np.abs(dw).sum())
         rec.cost1 = float(cost_vec.sum())
         rec.n_names = int((new > 0).sum())
+        # PO-7 M3 — 성과와 무관한 불변식 재료(체결 뒤)
+        rec.cash = float(new_cash)
+        rec.min_w = float(new.min()) if new.size else 0.0
+        rec.max_w = float(new.max()) if new.size else 0.0
+        if kind == "O" and rec.status == "optimal" and el.size:
+            bvec = np.zeros(nN)
+            bvec[el] = 1.0 / el.size
+            labs = ctx.lab[:, t]
+            groups = {g for g in labs[(new > 0) | (bvec > 0)] if g is not None}
+            rec.sector_dev = max((abs(float(new[labs == g].sum() - bvec[labs == g].sum())) for g in groups), default=0.0)
+            outside = float(w_f[frozen & ~np.isin(np.arange(nN), np.union1d(el, np.flatnonzero(held & in_u)))].sum())
+            rec.sector_tol = cell.band + INV_EPS + outside + renorm
+            if built:
+                drift = float(np.abs(w_f - w_t).sum())  # t→f 표류 + 폐지 현금화
+                rec.turn_bound = (MAX_TURNOVER + drift + float(w_f[forced & tradeable].sum()) + renorm
+                                  + 2.0 * rec.dust_mass + INV_EPS)
+        if flags.lag:
+            rf = ctx.ret[:, f]
+            rec.n_buy_limit_up = int(((dw > 0) & np.isfinite(rf) & (rf >= LIMIT_UP_RET)).sum())
         # 보유: 체결 뒤 NAV=1 → 다음 체결 전
         px = np.where(new > 0, Cff[:, f], np.nan)
         u = np.where(new > 0, new / px, 0.0)
@@ -611,17 +720,58 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
         return optimize(alpha + lam * Sb, sub, w_prev, aum=cell.aum, adv_value=adv_won, daily_vol=vol, cost_params=cp_,
                         constraints=con, risk_aversion=lam, solver_opts=solver_opts)
 
-    res, lam, hit, _ = match_lambda(solve, lambda w: active_risk(sub, w - b), target)
-    info.update({"lam": lam, "lam_hit": bool(hit)})
+    res, lam, hit, _, cause = match_lambda(solve, lambda w: active_risk(sub, w - b), target)
+    info.update({"lam": lam, "lam_hit": bool(hit), "lam_cause": cause})
     if res is None:
         info["status"] = "solver_fail"
         return want, info
-    want[P] = res.weights
+    w_sol = np.asarray(res.weights, dtype=np.float64)
+    w_clean, n_dust = clean_dust(w_sol, ctx.Cff[P, t], cell.aum, no_trade)  # PO-7 M2
+    want[P] = w_clean
+    info.update({"n_dust": n_dust, "dust_mass": float(np.abs(w_clean - w_sol).sum()) / 2.0})
     info["est_cost"] = float(res.est_cost)
-    d = res.weights - b
+    d = w_clean - b
     info["exante_20"] = active_risk(sub, d) * math.sqrt(STEP / cell.h_alpha)
     info["factor_share"] = factor_share(sub, d)
+    if info["factor_share"] > FACTOR_ALARM:
+        info["alarm_top3"] = top_exposures(sub, d)
     return want, info
+
+
+def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY) -> list[str]:
+    """PO-7 M3 — 성과와 무관한 불변식(스텝마다). 위반 문장 목록을 돌려준다(비면 통과). ``--mode run`` 은 하나라도 있으면 결과를 쓰지 않는다.
+
+    - Σw + 현금 = 1, w ≥ −ε. O: max w ≤ 0.10 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례),
+      구축 뒤 회전율 ≤ 2/3 + 표류·폐지 + 강제 매도 + 재비례 + 2·먼지.
+    - 비용: cost1 ≥ 0, 회전이 있으면 cost1/회전 ∈ [1.5bp, 300bp](1배).
+    - R: 2019 예열 뒤(k ≥ 2) 활성 트랜치 3.
+    """
+    out = []
+    lo_bp, hi_bp = COST_BP_PER_TURN
+    for r in recs:
+        tag = f"{kind}:{cell.name if kind == 'O' else 'R'} k={r.k} {r.date}"
+        tot = r.cash + (sum(w for _, w, _, _ in r.contrib if w > 0))
+        if abs(tot - 1.0) > INV_EPS:
+            out.append(f"{tag} Σw+현금 {tot:.9f} ≠ 1")
+        if r.min_w < -INV_EPS or r.cash < -INV_EPS:
+            out.append(f"{tag} 음수 비중 {r.min_w:.3e}·현금 {r.cash:.3e}")
+        if r.cost1 < 0:
+            out.append(f"{tag} 비용 음수 {r.cost1}")
+        traded = r.turnover + r.delist_mass
+        if traded > 1e-9:
+            bp = r.cost1 / traded * 1e4
+            if not (lo_bp - 1e-6 <= bp <= hi_bp):
+                out.append(f"{tag} 비용/회전 {bp:.2f}bp 가 [{lo_bp}, {hi_bp}] 밖")
+        if kind == "O" and r.status == "optimal" and r.n_names:
+            if r.max_w > MAX_W + INV_EPS:
+                out.append(f"{tag} max w {r.max_w:.6f} > {MAX_W}")
+            if np.isfinite(r.sector_dev) and r.sector_dev > r.sector_tol:
+                out.append(f"{tag} 업종 편차 {r.sector_dev:.6f} > 허용 {r.sector_tol:.6f}")
+            if np.isfinite(r.turn_bound) and r.turnover > r.turn_bound:
+                out.append(f"{tag} 회전율 {r.turnover:.6f} > 한도 {r.turn_bound:.6f}")
+        if kind == "R" and r.k >= 2 and r.n_tranches != R_HORIZON // STEP:
+            out.append(f"{tag} 활성 트랜치 {r.n_tranches} ≠ 3")
+    return out
 
 
 def r_sigma_series(ctx: Ctx) -> dict:
@@ -753,8 +903,12 @@ def book_summary(recs: list[StepRec]) -> dict:
     out["lam_fail_share"] = float(np.mean([not r.lam_hit for r in o])) if o else float("nan")
     fs = np.array([r.factor_share for r in recs], dtype=float)
     out["factor_share_q10_50_90"] = [float(np.nanquantile(fs, q)) for q in (0.1, 0.5, 0.9)] if np.isfinite(fs).any() else None
-    alarm = [r.date for r in recs if np.isfinite(r.factor_share) and r.factor_share > FACTOR_ALARM]
-    out["factor_alarm_n"], out["factor_alarm_dates"] = len(alarm), alarm
+    alarm = [r for r in recs if np.isfinite(r.factor_share) and r.factor_share > FACTOR_ALARM]
+    out["factor_alarm_n"], out["factor_alarm_dates"] = len(alarm), [r.date for r in alarm]
+    out["factor_alarm_top3"] = [[r.date, r.alarm_top3] for r in alarm]
+    out["lam_causes"] = {c: int(sum(r.lam_cause == c for r in o)) for c in ("up", "down", "gap", "solver")} if o else {}
+    out["n_buy_limit_up"] = int(sum(r.n_buy_limit_up for r in recs))
+    out["n_dust"] = int(sum(r.n_dust for r in recs))
     ex = np.array([r.exante_20 for r in o], dtype=float)
     out["exante_20_mean"] = float(np.nanmean(ex)) if o else float("nan")
     out["realized_over_exante"] = out["sd_a_1x"] / out["exante_20_mean"] if o else float("nan")
@@ -779,7 +933,8 @@ def _perm_task(a):
     pi = keyed_rng("perm", r).permutation(ctx.sig.shape[0])
     recs = simulate(ctx, kind, cell, rank_sig=ctx.sig[pi], ic_by_year=icy, sigma_r=sr)
     nan_share = float(np.nanmean([x.perm_nan_share for x in recs])) if kind == "O" else float("nan")
-    return r, kind, ir(oos(step_returns(recs, 2.0))["a"]), nan_share
+    viol = check_invariants(recs, kind, cell)
+    return r, kind, ir(oos(step_returns(recs, 2.0))["a"]), nan_share, viol
 
 
 def permutation_nulls(ctx, cell, ic_by_year, sigma_r, workers: int, n: int = N_PERM):
@@ -789,9 +944,10 @@ def permutation_nulls(ctx, cell, ic_by_year, sigma_r, workers: int, n: int = N_P
     with mp.get_context("fork").Pool(workers) as pool:
         res = list(pool.imap_unordered(_perm_task, tasks, chunksize=1))
     _G.clear()
-    out = {"R": np.full(n, np.nan), "O": np.full(n, np.nan), "O_perm_nan_share": np.full(n, np.nan)}
-    for r, kind, v, s in res:
+    out = {"R": np.full(n, np.nan), "O": np.full(n, np.nan), "O_perm_nan_share": np.full(n, np.nan), "violations": []}
+    for r, kind, v, s, viol in res:
         out[kind][r] = v
+        out["violations"] += [f"perm{r} {x}" for x in viol]
         if kind == "O":
             out["O_perm_nan_share"][r] = s
     return out
@@ -867,12 +1023,24 @@ def market_and_delisting(codes) -> tuple[np.ndarray, np.ndarray, dict]:
     return np.array(mk, dtype=object), last, {"market_unknown": unknown, "delisted_with_last_date": len(last)}
 
 
-def build_ctx(cache: Path, po3_cache: Path, workers: int, log, end: str = END_B):
-    """B 입력: v4 와 같은 로더·가드·노출, 격자 t_k(2019-08-01 이후 첫 거래일 + 20k)마다 v4 모델."""
+def model_cache_name(fp: list, core_ref: str, stem: str = "models_v4_grid") -> str:
+    """PO-7 M1 — 모델 캐시 이름에 표 지문 해시·core SHA 를 넣는다. 표가 바뀌면(PR #12) 옛 캐시를 읽지 않는다."""
+    import hashlib
+
+    h = hashlib.sha256(json.dumps(fp, default=str).encode()).hexdigest()[:12]
+    return f"{stem}_fp{h}_core{core_ref}.pkl"
+
+
+def build_ctx(cache: Path, po3_cache: Path, workers: int, log, end: str = END_B, core_ref: str = "13c56a7"):
+    """B 입력: v4 와 같은 로더·가드·노출, 격자 t_k(2019-08-01 이후 첫 거래일 + 20k)마다 v4 모델.
+
+    모델 캐시는 ``daily_bars_adjusted`` 지문(2019-01-01~END)·core SHA 에 묶인다(:func:`model_cache_name`).
+    """
     import pead_optimizer_po3 as P3
     import pead_optimizer_po4 as P4
 
     assert end == END_B, "B 는 2023-12-28 까지만 쓴다(§2)"
+    fp = P4.fingerprint("daily_bars_adjusted", end)
     x0 = P4.load_inputs(end)
     x, seam, seam_info = P4.guarded(x0, end)
     c = P4.prep(x, "2019-07-01", "2023-10-31", 52, end)
@@ -881,7 +1049,8 @@ def build_ctx(cache: Path, po3_cache: Path, workers: int, log, end: str = END_B)
     nD = c["R"].shape[1]
     t_0 = int(np.searchsorted(dates, np.datetime64(GRID_START)))
     grid = list(range(t_0, nD, STEP))
-    models = P3.build_models(c, grid, workers, cache / "models_v4_grid.pkl", log, vra=None, shrink=V4_SHRINK)
+    mpath = cache / model_cache_name(fp, core_ref)
+    models = P3.build_models(c, grid, workers, mpath, log, vra=None, shrink=V4_SHRINK)
     old = pickle.load(open(po3_cache / "models_vraoff_s0.1.pkl", "rb"))
     common = sorted(set(old) & set(models))
     bit_same = bool(common) and all(
@@ -905,6 +1074,7 @@ def build_ctx(cache: Path, po3_cache: Path, workers: int, log, end: str = END_B)
     info = {"seam": {k: seam_info[k] for k in ("seam_cells", "seam_cells_by_source")}, "signal": sig_info,
             "market": mk_info, "grid": [str(dates[grid[0]].date()), str(dates[grid[-1]].date()), len(grid)],
             "models_bit_same_PO3_common": bit_same, "models_common_n": len(common), "first": int(first),
+            "fingerprint_models": fp, "model_cache": mpath.name, "prep": c,
             "adv_full": adv_all, "trade_value_full": x.trade_value, "close_full": x.close}
     return ctx, info, x
 
@@ -922,20 +1092,9 @@ def run_parity(args, log) -> int:
     cache = Path(args.cache)
     cache.mkdir(parents=True, exist_ok=True)
     fp0 = P4.fingerprint("daily_bars_adjusted", END_B)
-    ctx, info, x = build_ctx(cache, Path(args.po3_cache), args.workers, log)
+    ctx, info, x = build_ctx(cache, Path(args.po3_cache), args.workers, log, core_ref=args.core_ref)
     log(f"격자 {info['grid']}, PO-3 캐시와 공통 모델 {info['models_common_n']}개 비트 동일 {info['models_bit_same_PO3_common']}")
-    # ADV: core 가 넘긴 거래대금(백만원)으로 직접 낸 값과 하네스 adv 가 바이트 같은지(§2)
-    tv_m = ctx.tv_won / 1e6
-    adv_core = _trailing_adv(tv_m, tv_m.shape[1], 20, ctx.C)
-    adv_same = bool(np.array_equal(adv_core[:, 20:], ctx.adv[:, 20:], equal_nan=True))
-    pc = parity_check(ctx, adv_same)
-    # 적격 집합: 하네스 eligible 대 core 의 eligible 규칙(유한 신호 ∧ ADV ∧ 시총 순위)을 패리티 신호에 적용
-    sp = parity_signal(ctx.sig, ctx.adv, ctx.grid, ctx.in_u)
-    allu = np.ones(ctx.C.shape[0], bool)
-    elig_same = all(np.array_equal(np.sort(eligible(t, ctx.sig, ctx.adv, ctx.cap, ctx.in_u(t))),
-                                   np.sort(eligible_idx(t, sp, ctx.adv, ctx.cap, allu))) for t in ctx.grid)
-    pc["eligible_same_all_grid"] = bool(elig_same)
-    pc["pass"] = bool(pc["pass"] and elig_same)
+    pc = full_parity(ctx)
     fp1 = P4.fingerprint("daily_bars_adjusted", END_B)
     res = {"mode": "parity", "core_ref": args.core_ref, "end": END_B, "table": "daily_bars_adjusted(지금 표 — PR #12 전)",
            "fingerprint_before": fp0, "fingerprint_after": fp1, "fingerprint_same": fp0 == fp1,
@@ -975,39 +1134,86 @@ def render_parity(r: dict) -> str:
     return "\n".join(L) + "\n"
 
 
-def run_b(args, log) -> int:  # pragma: no cover - B 는 PR #12 배포·강건성 재실행 뒤에만(PO-5.2)
-    """단계 B 전체. PO-5.2 순서를 코드로 막는다."""
-    import pead_optimizer_po4 as P4
-    from swing_it.diagnostics.trials import count_trials, record_trial
+def git_sha() -> str:
+    import subprocess
 
-    rep = OUT / "A1_repaired.json"
-    if not rep.exists():
+    r = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short", "HEAD"],
+                       capture_output=True, text=True, check=False)
+    dirty = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "status", "--porcelain", "--", "research/experiments"],
+                           capture_output=True, text=True, check=False).stdout.strip()
+    return r.stdout.strip() + ("-dirty" if dirty else "")
+
+
+def fingerprint_range(table: str, lo: str, hi: str) -> list:
+    """core ``_fingerprint`` 를 임의 구간으로(IC 패널 2016-11-01~ 용, PO-7 MINOR 2)."""
+    import pead_optimizer_po2 as P2
+    from krx_quant_core.data.daily import _fingerprint
+
+    con, _ = P2._db()
+    try:
+        return _fingerprint(con, table, pd.Timestamp(lo).date(), pd.Timestamp(hi).date())
+    finally:
+        con.close()
+
+
+def gate_b(a1r: dict | None, fp_now: list, report_impl: dict) -> None:
+    """PO-5.2·PO-7 실행 전 관문(순수 함수 — 시험 가능). 막히면 ``SystemExit``."""
+    import pead_optimizer_b_report as BR
+
+    missing = [k for k in BR.REQUIRED if not report_impl.get(k)]
+    if missing:
+        raise SystemExit(f"보고만 항목 미구현 {missing} — B 를 돌리지 않는다(PO-7 M4)")
+    if a1r is None:
         raise SystemExit("A1_repaired.json 이 없다 — PR #12 배포와 강건성 재실행(PO-5.2) 전에는 B 를 돌리지 않는다")
-    a1r = json.loads(rep.read_text())
-    if a1r.get("verdict") != "통과":
+    if "STOP" in a1r or a1r.get("verdict") != "통과":
         raise SystemExit(f"강건성 재실행 판정 {a1r.get('verdict')!r} — '취약', B 는 역사 구간에서 열지 않는다(PO-5.2-3)")
-    fp_now = P4.fingerprint("daily_bars_adjusted", "2026-09-11")
+    rp = a1r.get("repaired")
+    if not rp or rp.get("label") is not None or not rp.get("B_opens") or not rp.get("fingerprint_differs_from_pre"):
+        raise SystemExit("A1_repaired.json 의 강건성 분기가 B 를 열지 않는다(라벨·지문) — 멈춘다(PO-5.2-3)")
     if fp_now != a1r["fingerprint_before"]["daily_bars_adjusted"]:
         raise SystemExit("지금 표 지문이 강건성 재실행 때와 다르다 — 멈춘다(PO-5.2-4)")
+
+
+def run_b(args, log) -> int:  # pragma: no cover - B 는 PR #12 배포·강건성 재실행 뒤에만(PO-5.2)
+    """단계 B 전체. PO-5.2 순서·PO-7 불변식·보고만 구현 여부를 코드로 막는다."""
+    import pead_optimizer_b_report as BR
+    import pead_optimizer_po4 as P4
+    from swing_it.diagnostics.trials import record_trial
+
+    t_start = time.time()
+    rep = OUT / "A1_repaired.json"
+    a1r = json.loads(rep.read_text()) if rep.exists() else None
+    fp_now = P4.fingerprint("daily_bars_adjusted", "2026-09-11")
+    gate_b(a1r, fp_now, BR.IMPLEMENTED)
+    if (OUT / "B.json").exists():
+        raise SystemExit("B.json 이 이미 있다 — B 는 한 번만 돈다")
     cache = Path(args.cache)
     cache.mkdir(parents=True, exist_ok=True)
     fp0 = P4.fingerprint("daily_bars_adjusted", END_B)
-    ctx, info, _ = build_ctx(cache, Path(args.po3_cache), args.workers, log)
-    pc = parity_check(ctx)
+    fp_ic0 = fingerprint_range("daily_bars_adjusted", IC_LOAD_START, END_B)
+    ctx, info, x = build_ctx(cache, Path(args.po3_cache), args.workers, log, core_ref=args.core_ref)
+    pc = full_parity(ctx)
     if not pc["pass"]:
         raise SystemExit("패리티 실패 — VOID(§2)")
-    ic_by = ic_by_year_for(args, log)
+    ic_by, ic_info = ic_by_year_for(args, log)
     sigma_r = r_sigma_series(ctx)
-    res = {"mode": "run", "parity": pc, "cells": {}}
+    viol: list[str] = []
+    steps_checked = 0
+    res = {"mode": "run", "parity": pc, "cells": {}, "ic": ic_info}
     for cell in SENSITIVITY + (PRIMARY,):  # GUARDRAILS §4.5 ② — 격자를 1차보다 먼저
         record_trial("pead_optimizer", {"stage": "B", "cell": cell.name, "core": args.core_ref},
                      note="B 민감도" if cell != PRIMARY else "B 1차")
         recs_o = simulate(ctx, "O", cell, ic_by_year=ic_by[cell.h_alpha], sigma_r=sigma_r)
+        viol += check_invariants(recs_o, "O", cell)
+        steps_checked += len(recs_o)
         res["cells"][cell.name] = {"O": book_summary(recs_o)}
         if cell == PRIMARY:
             recs_r = simulate(ctx, "R")
+            viol += check_invariants(recs_r, "R")
+            steps_checked += len(recs_r)
             o_s, r_s = book_summary(recs_o), book_summary(recs_r)
             nulls = permutation_nulls(ctx, cell, ic_by[cell.h_alpha], sigma_r, args.workers)
+            viol += nulls["violations"]
             aO = oos(step_returns(recs_o, 2.0))["a"].to_numpy()
             aR = oos(step_returns(recs_r, 2.0))["a"].to_numpy()
             boot = stationary_boot_dir(aO, aR)
@@ -1015,31 +1221,94 @@ def run_b(args, log) -> int:  # pragma: no cover - B 는 PR #12 배포·강건�
                               "rho": float(np.corrcoef(aO, aR)[0, 1]), "boot_dIR_q05_50_95":
                               [float(np.quantile(boot, q)) for q in (0.05, 0.5, 0.95)],
                               "null_O_perm_nan_share_mean": float(np.nanmean(nulls["O_perm_nan_share"])),
-                              "toggles": toggle_report(ctx), "n_trials": count_trials("pead_optimizer")}
+                              "toggles": toggle_report(ctx)}
+            res["primary"]["verdict"]["ic_zero_folds"] = ic_info["zero_folds"][cell.h_alpha]
+            res["primary"]["report"] = b_report(ctx, info, x, recs_o, recs_r, aO - aR, log)
+    if viol:
+        (cache / "B_invariant_violations.txt").write_text("\n".join(viol))
+        raise SystemExit(f"불변식 위반 {len(viol)}건 — 결과를 쓰지 않는다(PO-7 M3). 목록: {cache / 'B_invariant_violations.txt'}")
     fp1 = P4.fingerprint("daily_bars_adjusted", END_B)
-    if fp0 != fp1:
+    fp_ic1 = fingerprint_range("daily_bars_adjusted", IC_LOAD_START, END_B)
+    if fp0 != fp1 or fp_ic0 != fp_ic1:
         raise SystemExit("실행 중 표 지문이 바뀌었다 — 결과를 쓰지 않는다(PO-4.2)")
+    res["invariants"] = {"violations": 0, "steps_checked": steps_checked}
+    res["code"] = {"swing_it_sha": git_sha(), "core_ref": args.core_ref, "model_cache": info["model_cache"]}
+    res["fingerprints"] = {"daily_bars_adjusted_b_range": fp0, "daily_bars_adjusted_ic_range": fp_ic0,
+                           "daily_bars_adjusted_full_now": fp_now, "A1_repaired": a1r["fingerprint_before"]["daily_bars_adjusted"],
+                           "same_as_A1_repaired": fp_now == a1r["fingerprint_before"]["daily_bars_adjusted"],
+                           "models": info["fingerprint_models"]}
+    res["elapsed_s"] = time.time() - t_start
     (OUT / "B.json").write_text(json.dumps(res, ensure_ascii=False, indent=1, default=float))
+    (OUT / "B.md").write_text(BR.render_b(json.loads((OUT / "B.json").read_text())))
     return 0
 
 
-def ic_by_year_for(args, log) -> dict:  # pragma: no cover - B 실행 때만
-    """폴드(연도)마다 IC_k — 2017-01-02 부터 폴드 시작 (H+2) 거래일 앞까지(PO-6). H ∈ {20, 60}."""
+def b_report(ctx, info, x, recs_o, recs_r, d2x, log) -> dict:  # pragma: no cover - B 실행 때만
+    """보고만 항목(PO-7.4) — ``pead_optimizer_b_report``."""
+    import pead_optimizer_b_report as BR
+    import pead_optimizer_po2 as P2
+    from krx_quant_core.risk.factor_model import factor_returns
+
+    first = info["first"]
+    kospi = np.asarray(x.market_ret[first:], dtype=np.float64)
+    con, cur = P2._db()
+    cur.execute("SELECT date, close FROM sector_index WHERE code = '101' AND date BETWEEN %s AND %s",
+                (str(ctx.dates[0].date()), END_B))
+    kq = pd.DataFrame(cur.fetchall(), columns=["date", "close"])
+    con.close()
+    lvl = pd.Series(kq["close"].to_numpy(float), index=pd.to_datetime(kq["date"])).reindex(ctx.dates)
+    kosdaq = lvl.pct_change(fill_method=None).to_numpy()
+    ro, rr = [r for r in recs_o if EVAL[0] <= r.date <= EVAL[1]], [r for r in recs_r if EVAL[0] <= r.date <= EVAL[1]]
+    fac = BR.factor_step_returns(ctx, ro, kospi, kosdaq, trailing_vol, ADV_FLOOR)
+    led = BR.ledger_n()
+    hur = BR.alpha_hurdle(led["N"])
+    out = {"ledger": led, "hurdle": hur, "factor_alpha": {}, "vs_kospi": {}, "deflation": {}, "attribution": {}}
+    for b, recs in (("O", ro), ("R", rr)):
+        out["factor_alpha"][b] = {}
+        for m in (1.0, 2.0):
+            net = step_returns(recs, m)[["t", "date", "net"]]
+            out["factor_alpha"][b][f"{int(m)}x"] = BR.factor_alpha_report(net, fac)
+        net2 = step_returns(recs, 2.0)[["t", "date", "net"]]
+        out["vs_kospi"][b] = BR.vs_kospi(net2, fac)
+        out["deflation"][b] = BR.deflation(net2["net"], led["N"])
+    out["qualification"] = BR.pead_qualification(out["factor_alpha"]["O"]["2x"]["t_alpha"],
+                                                 out["factor_alpha"]["R"]["2x"]["t_alpha"], hur["hurdle"])
+    prep = info["prep"]
+    fr = factor_returns(prep["R"], prep["Xs"], prep["lab"], prep["cap"], prep["msk"])
+    for b, recs in (("O", ro), ("R", rr)):
+        out["attribution"][b] = BR.attribution_report(
+            ctx, recs, fr, prep, lambda t: eligible(t, ctx.sig, ctx.adv, ctx.cap, ctx.in_u(t)))
+    out["f_boot"] = BR.f_boot(d2x)
+    out["factor_index_missing_days"] = int(fac["index_missing_days"].sum())
+    log(f"보고만 끝: 원장 N {led['N']}, f_boot {out['f_boot']['f_boot']}")
+    return out
+
+
+def ic_by_year_for(args, log) -> tuple[dict, dict]:  # pragma: no cover - B 실행 때만
+    """폴드(연도)마다 IC_k — 2017-01-02 부터 폴드 시작 (H+2) 거래일 앞까지(PO-6). H ∈ {20, 60}.
+
+    PO-7 MINOR 2: IC 패널에도 위험모델과 같은 이음매 가드(PO-3.3)를 건다. 폐지는 마지막 종가(:func:`daily_rank_ic`).
+    IC_k 가 0 으로 잘린 폴드는 α ≡ 0 이라 λ 맞춤이 그 폴드 전부에서 실패한다(PO-7.5) — 그 폴드를 적어 둔다.
+    """
     import pead_optimizer_po4 as P4
     from krx_quant_core.data.risk_inputs import load_risk_inputs
 
-    xi = load_risk_inputs(IC_LOAD_START, END_B)
+    xi0 = load_risk_inputs(IC_LOAD_START, END_B)
+    xi, _, seam_info = P4.guarded(xi0, END_B)
     sig, _ = P4.yoy_signal_strict(xi.codes, xi.dates, END_B)
     adv = _trailing_adv(xi.trade_value / 1e6, len(xi.dates), 20, xi.close)
     d = pd.DatetimeIndex(xi.dates)
     lo = int(d.searchsorted(pd.Timestamp(IC_START)))
-    out = {}
+    out, info = {}, {"seam_cells": seam_info["seam_cells"], "n_days": {}, "zero_folds": {}}
     for h in (20, 60):
         days, ics = daily_rank_ic(xi.close, adv, xi.cap, sig, lo, len(d) - 1, h)
         out[h] = {y: fold_ic(days, ics, int(d.searchsorted(pd.Timestamp(f"{y}-01-01"))), h)
                   for y in (2019,) + FOLD_YEARS}
+        info["n_days"][h] = int(len(ics))
+        info["zero_folds"][h] = [y for y, v in out[h].items() if v <= 0.0]
         log(f"IC 학습 H={h}: 일 {len(ics)}")
-    return out
+    info["ic_by_year"] = {h: {str(y): v for y, v in out[h].items()} for h in out}
+    return out, info
 
 
 def main() -> int:

@@ -173,10 +173,10 @@ def test_lambda_monotone_and_match():
     risks = [B.active_risk(sub, solve(lam).weights - b) for lam in (0.1, 1.0, 10.0, 100.0, 1000.0)]
     assert all(r1 >= r2 - 1e-9 for r1, r2 in zip(risks, risks[1:]))
     target = 0.5 * (risks[1] + risks[3])
-    res, lam, hit, n = B.match_lambda(solve, lambda w: B.active_risk(sub, w - b), target)
-    assert hit and abs(B.active_risk(sub, res.weights - b) / target - 1) <= B.LAM_TOL
-    res, lam, hit, n = B.match_lambda(solve, lambda w: B.active_risk(sub, w - b), 10 * risks[0])  # 못 닿는 목표
-    assert not hit and res is not None and n == B.LAM_ITERS
+    res, lam, hit, n, cause = B.match_lambda(solve, lambda w: B.active_risk(sub, w - b), target)
+    assert hit and cause == "" and abs(B.active_risk(sub, res.weights - b) / target - 1) <= B.LAM_TOL
+    res, lam, hit, n, cause = B.match_lambda(solve, lambda w: B.active_risk(sub, w - b), 10 * risks[0])  # 못 닿는 목표
+    assert not hit and res is not None and n == B.LAM_ITERS and cause == "up"
 
 
 # ── 비용 회계 ──────────────────────────────────────────────────────────────────
@@ -295,3 +295,135 @@ def test_ir_and_intervals():
     recs[3].contrib = [(1, 0.1, 0.02, 0.001)]  # 새 구간
     iv = B.holding_intervals(recs, 1.0)
     assert sorted(iv) == pytest.approx(sorted([0.1 * 0.10 - 0.001 + 0.1 * -0.05 - 0.002, 0.1 * 0.02 - 0.001]))
+
+
+# ── PO-7: λ 실패 원인·먼지·불변식·관문·캐시 이름 ────────────────────────────────
+
+
+class _Res:
+    def __init__(self, ok, w):
+        self.ok, self.weights, self.est_cost = ok, np.array([w]), 0.0
+
+
+def _fake(risk_of_lam, fail=lambda lam: False):
+    calls = []
+
+    def solve(lam):
+        calls.append(lam)
+        return _Res(not fail(lam), risk_of_lam(lam))
+
+    return solve, calls
+
+
+def test_match_lambda_causes():
+    risk = lambda w: float(w[0])  # noqa: E731
+    solve, _ = _fake(lambda lam: 1.0 / lam)
+    assert B.match_lambda(solve, risk, 1.0 / B.LAM_LO * 2)[4] == "up"  # 가장 작은 λ 에서도 위험이 모자란다
+    assert B.match_lambda(solve, risk, 1.0 / B.LAM_HI / 2)[4] == "down"
+    solve, calls = _fake(lambda lam: 1.0 / lam, fail=lambda lam: True)
+    out = B.match_lambda(solve, risk, 1.0)
+    assert out[0] is None and out[4] == "solver" and len(calls) == B.LAM_ITERS  # 실패에서 멈추지 않는다
+    solve, _ = _fake(lambda lam: 2.0 if lam < 1.0 else 0.5)  # 계단 — 목표 1.0 을 사이에 두지만 창은 없다
+    out = B.match_lambda(solve, risk, 1.0)
+    assert not out[2] and out[4] == "gap"
+    # 중간중간 실패해도 계속해서 맞춘다
+    n_fail = [0]
+
+    def flaky(lam):
+        n_fail[0] += 1
+        return n_fail[0] % 3 == 0
+
+    solve, _ = _fake(lambda lam: 1.0 / lam, fail=flaky)
+    out = B.match_lambda(solve, risk, 0.37)
+    assert out[2] and abs(out[0].weights[0] / 0.37 - 1) <= B.LAM_TOL
+
+
+def test_clean_dust_zeroes_tiny_keeps_sum_and_fixed():
+    w = np.array([0.30, 0.2999995, 1e-9, -3.5e-10, 0.4, 0.0005])
+    price = np.array([1e4, 1e4, 1e4, 1e4, 1e4, 5e5])  # 마지막: 1주 = 5e5/3e8 = 0.00167 > 0.0005 → 먼지
+    fixed = np.array([False, False, False, False, True, False])
+    out, n = B.clean_dust(w, price, 3e8, fixed)
+    assert n == 3 and out[2] == 0 and out[3] == 0 and out[5] == 0
+    assert out[4] == 0.4 and out.sum() == pytest.approx(w.sum())
+    assert (out >= 0).all()
+
+
+def test_model_cache_name_binds_fingerprint_and_core():
+    a = B.model_cache_name([1, "2023-12-28", 2, 3], "13c56a7")
+    assert a != B.model_cache_name([1, "2023-12-28", 2, 4], "13c56a7")
+    assert a != B.model_cache_name([1, "2023-12-28", 2, 3], "deadbee")
+    assert a.startswith("models_v4_grid_fp") and a.endswith("_core13c56a7.pkl")
+
+
+def test_invariants_clean_on_synthetic_books_and_catch_injection():
+    ctx = _ctx(9, nN=140, nD=290, delist=False, u_share=1.0)
+    recs_r = B.simulate(ctx, "R")
+    assert B.check_invariants(recs_r, "R") == []
+    sigma_r = B.r_sigma_series(ctx)
+    recs_o = B.simulate(ctx, "O", ic_by_year={y: 0.10 for y in range(2018, 2025)}, sigma_r=sigma_r)
+    assert B.check_invariants(recs_o, "O") == []
+    # 먼지 제거 뒤 O 보유 종목 수는 회전율·제약이 허용하는 만큼 — 1e-9 비중이 '보유'로 세지지 않는다
+    for r in recs_o:
+        assert all(w == 0 or w >= B.DUST_EPS for _, w, _, _ in r.contrib)
+    assert sum(r.n_dust for r in recs_o) > 0  # 합성에서도 솔버 먼지가 실제로 나온다
+    # 주입: 비중 상한·현금·트랜치·비용
+    import copy
+
+    bad = copy.deepcopy(recs_o)
+    bad[2].max_w = 0.2
+    bad[3].cash += 0.01
+    bad[4].cost1 = bad[4].turnover * 0.5e-4  # 0.5bp/회전 < 수수료
+    v = B.check_invariants(bad, "O")
+    assert any("max w" in x for x in v) and any("Σw+현금" in x for x in v) and any("비용/회전" in x for x in v)
+    bad_r = copy.deepcopy(recs_r)
+    bad_r[5].n_tranches = 2
+    assert any("트랜치" in x for x in B.check_invariants(bad_r, "R"))
+    bad[5].turnover = bad[5].turn_bound + 0.01
+    assert any("회전율" in x for x in B.check_invariants(bad, "O"))
+
+
+def test_gate_b_refuses():
+    import pead_optimizer_b_report as BR
+
+    fp = [1, "2026-09-11", 2, 3]
+    ok = {"verdict": "통과", "fingerprint_before": {"daily_bars_adjusted": fp},
+          "repaired": {"label": None, "B_opens": True, "fingerprint_differs_from_pre": True}}
+    B.gate_b(ok, fp, BR.IMPLEMENTED)
+    with pytest.raises(SystemExit, match="미구현"):
+        B.gate_b(ok, fp, {**BR.IMPLEMENTED, "f_boot": False})
+    with pytest.raises(SystemExit, match="A1_repaired"):
+        B.gate_b(None, fp, BR.IMPLEMENTED)
+    with pytest.raises(SystemExit, match="취약"):
+        B.gate_b({**ok, "verdict": "실패"}, fp, BR.IMPLEMENTED)
+    with pytest.raises(SystemExit, match="지문"):
+        B.gate_b(ok, [1, "2026-09-11", 2, 4], BR.IMPLEMENTED)
+    with pytest.raises(SystemExit, match="강건성 분기"):
+        B.gate_b({**ok, "repaired": {"label": "취약", "B_opens": False, "fingerprint_differs_from_pre": True}}, fp, BR.IMPLEMENTED)
+    with pytest.raises(SystemExit, match="강건성 분기"):
+        B.gate_b({k: v for k, v in ok.items() if k != "repaired"}, fp, BR.IMPLEMENTED)
+
+
+def test_daily_rank_ic_keeps_names_delisted_inside_window():
+    rng = np.random.default_rng(3)
+    nN, nD, h = 150, 140, 20
+    close = 1000 * np.exp(np.cumsum(rng.normal(0, 0.02, (nN, nD)), axis=1))
+    adv = np.full((nN, nD), 1e5)
+    cap = np.exp(rng.normal(27, 1, (nN, nD)))
+    sig = rng.normal(0, 1, (nN, nD))
+    days, ics = B.daily_rank_ic(close, adv, cap, sig, 0, 5, h)
+    t = int(days[0])
+    el = B.eligible_idx(t, sig, adv, cap, np.ones(nN, bool))
+    gone = el[:5]
+    close2 = close.copy()
+    close2[gone, t + 10:] = np.nan  # 창 안에서 폐지
+    _, ics2 = B.daily_rank_ic(close2, adv, cap, sig, t, t, h)
+    cff = B._ffill_axis1_nb(close2)
+    ret = cff[el, t + 1 + h] / close2[el, t + 1] - 1
+    ref = np.corrcoef(stats_rank(sig[el, t]), stats_rank(ret))[0, 1]
+    assert ics2[0] == pytest.approx(ref)  # 폐지 종목도 마지막 종가로 들어간다(80종목 전부)
+
+
+def stats_rank(v):
+    from scipy import stats
+
+    return stats.rankdata(v)

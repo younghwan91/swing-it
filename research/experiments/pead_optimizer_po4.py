@@ -859,13 +859,15 @@ A1_REVIEW = {
 }
 
 
-def render_a1(r: dict) -> str:
+def render_a1(r: dict, review: bool | None = None) -> str:
+    """``review`` 를 주지 않으면 원래 A1(신창 창·END)일 때 독립 리뷰 절을 넣는다. A1_repaired 는 ``review=False`` 로 부른다."""
     L = []
     if "STOP" in r:
         return f"# A1 — 멈춤\n\n**{r['STOP']}**\n"
     ro = r["report_only"]
     b = r["band"]
-    review = r.get("window") == ["2024-01-31", "2026-07-31"] and r.get("end") == "2026-09-11"
+    if review is None:
+        review = r.get("window") == ["2024-01-31", "2026-07-31"] and r.get("end") == "2026-09-11"
     L += [f"# 단계 A1 — v4 신창 D·최적화 바이어스 검정 ({'독립 리뷰 반영 — 판정 유지, 숫자 재계산 없음' if review else '검증 전'})", "",
           f"**{r['label']}**", "",
           f"사전등록 PO-3 `{r['prereg']['PO-3']}`·PO-4 `{r['prereg']['PO-4']}`, 재현 `{r['prereg']['PO-4_repro']}`, core `{r['core_ref']}`. "
