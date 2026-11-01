@@ -887,6 +887,7 @@ def render_a1(r: dict) -> str:
     L += ["", "2026-07 을 뺀 값은 실패를 구제하는 데 쓸 수 없다(§1). 판정은 31회 전체로만 한다.", "",
           "## 보고만 — 그 밖의 대상 (신창 실현 바이어스)", "",
           ", ".join(f"{k} {_f(v)}" for k, v in ro["realized"].items() if k not in ("OB21", "OB5")), "",
+          "capw·LO5·LO50·KOSPI 는 시장 수준 대상(§0 — 국면에 지배, 보고만)이다. KOSPI 는 지수 21일 수익(일수익 합) / 시총가중 포트의 v4 사전 21일 위험(근사).", "",
           f"- 업종 방향 재현(구창 G55>1·G25<1·G10<1): {ro['sector_direction']}.",
           f"- 종목별 특이 z 바이어스 중앙값 {_f(ro['spec_bias_median'])}(종목 {ro['spec_bias_n']}).",
           f"- 앞 21일 NaN→0 셀 — B 유니버스: 이음매 {ro['nan_to_zero_B']['seam']}·그 밖 {ro['nan_to_zero_B']['other']}"
