@@ -22,6 +22,10 @@ REPO = Path(__file__).resolve().parents[1]
 DIRS = ("research", "scripts", "examples")
 # 러너들은 서로를 top-level 이름으로 import 한다(from prop_swing_common import ...).
 EXTRA_PATH = [str(REPO / "research" / "experiments"), str(REPO / "research" / "signals")]
+# krx-quant-core portfolio-layer(PR #19, 미머지)를 git 참조로 설치한 환경에서만 import 되는 러너.
+# dev 환경에는 그 모듈이 없다 — 그 모듈의 부재만 건너뛰고, 다른 import 오류는 그대로 실패시킨다.
+NEEDS_PORTFOLIO_LAYER = {"pead_optimizer_c0.py", "pead_optimizer_po2.py"}
+PORTFOLIO_LAYER_MODULES = ("krx_quant_core.data.risk_inputs", "krx_quant_core.risk", "krx_quant_core.portfolio")
 
 
 def _modules() -> list[Path]:
@@ -42,6 +46,10 @@ def test_module_imports(path: Path):
             spec.loader.exec_module(module)
         except SystemExit:
             pass  # argparse 를 모듈 레벨에서 도는 스크립트
+    except ModuleNotFoundError as e:
+        if path.name in NEEDS_PORTFOLIO_LAYER and (e.name or "").startswith(PORTFOLIO_LAYER_MODULES):
+            pytest.skip(f"portfolio-layer 필요: {e.name}")
+        pytest.fail(f"{path.relative_to(REPO)} import 실패: {type(e).__name__}: {e}")
     except (ImportError, AttributeError, NameError) as e:
         pytest.fail(f"{path.relative_to(REPO)} import 실패: {type(e).__name__}: {e}")
     finally:

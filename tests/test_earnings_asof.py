@@ -91,3 +91,17 @@ def test_init_db_upgrades_a_pre_migration_sqlite_file(tmp_path):
         cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
         assert col in cols, f"{table}.{col} 가 채워져야 한다"
     con.close()
+
+
+def test_all_versions_until_drops_rows_after_ceiling_in_sql(con):
+    """``until`` 은 avail·knowledge 둘 다 상한 이하인 행만 읽는다(정정본 08-13 은 빠진다)."""
+    df = read_earnings(con, all_versions=True, until="2026-05-15",
+                       cols=("code", "period", "knowledge_date"))
+    assert list(zip(df["code"], df["knowledge_date"])) == [("000020", "2026-05-15")]
+    full = read_earnings(con, all_versions=True)
+    assert len(full) == 3
+
+
+def test_until_requires_all_versions(con):
+    with pytest.raises(ValueError):
+        read_earnings(con, until="2026-05-15")

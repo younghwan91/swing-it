@@ -349,7 +349,7 @@ _EARNINGS_READ_COLS = (
 
 
 def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] | None" = None,
-                  all_versions: bool = False):
+                  all_versions: bool = False, until: str | None = None):
     """Earnings as a long frame with **one row per (code, period)** — as-of ``asof``.
 
     ``earnings`` is versioned: a DART restatement lands as a new row keyed by
@@ -370,6 +370,8 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
             선택은 날짜별로 달라져야 하므로 읽는 단계가 아니라
             :func:`swing_it.features.fundamentals.earnings_yoy_panel` 의
             ``knowledge_col`` 로 넘겨 as-of 조인에 함께 태운다.
+        until: ``all_versions`` 전용 — ``avail_date``·``knowledge_date`` 가 둘 다 이 날 이하인 행만
+            **DB 에서** 읽는다. 봉인 창 뒤 행을 메모리에 올리지 않으려는 것이다(PEAD 최적화 정정 PO-2).
 
             ``asof`` 없이 접어서 쓰면(기본값) 최신 정정본이 과거 날짜 셀에 들어가
             조용한 룩어헤드가 된다 — 터지지 않고 성과만 좋아지는 종류다.
@@ -379,11 +381,18 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
     import pandas as pd
 
     sel = ", ".join(cols or _EARNINGS_READ_COLS)
+    if until is not None and not all_versions:
+        raise ValueError("until 은 all_versions=True 전용이다 — 접는 모드의 상한은 asof 다")
     if all_versions:
         if asof is not None:
             raise ValueError("all_versions 와 asof 는 함께 쓸 수 없다 — "
                              "버전 선택을 날짜별로 하려고 전부 넘기는 것이다")
-        return pd.read_sql_query(f"SELECT {sel} FROM earnings", con)  # noqa: S608 — 모듈 상수
+        if until is None:
+            return pd.read_sql_query(f"SELECT {sel} FROM earnings", con)  # noqa: S608 — 모듈 상수
+        ph = "%s" if _is_pg(con) else "?"
+        return pd.read_sql_query(  # noqa: S608 — 모듈 상수
+            f"SELECT {sel} FROM earnings WHERE avail_date <= {ph} AND knowledge_date <= {ph}",
+            con, params=(until, until))
     if _is_pg(con):
         where = "WHERE knowledge_date <= %s " if asof else ""
         sql = (  # noqa: S608 — column names come from a module constant, not user input
