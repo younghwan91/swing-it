@@ -24,7 +24,8 @@ DIRS = ("research", "scripts", "examples")
 EXTRA_PATH = [str(REPO / "research" / "experiments"), str(REPO / "research" / "signals")]
 # krx-quant-core portfolio-layer(PR #19, 미머지)를 git 참조로 설치한 환경에서만 import 되는 러너.
 # dev 환경에는 그 모듈이 없다 — 그 모듈의 부재만 건너뛰고, 다른 import 오류는 그대로 실패시킨다.
-NEEDS_PORTFOLIO_LAYER = {"pead_optimizer_c0.py", "pead_optimizer_po2.py", "pead_optimizer_po3.py"}
+NEEDS_PORTFOLIO_LAYER = {"pead_optimizer_c0.py", "pead_optimizer_po2.py", "pead_optimizer_po3.py",
+                         "pead_optimizer_po4.py"}
 PORTFOLIO_LAYER_MODULES = ("krx_quant_core.data.risk_inputs", "krx_quant_core.risk", "krx_quant_core.portfolio")
 
 
