@@ -126,6 +126,18 @@ def delisted_ever(codes) -> np.ndarray:
     return np.array([str(c) in s for c in codes])
 
 
+def code_hash() -> str:
+    """패널을 만드는 코드의 해시 — 캐시 이름에 넣어 코드를 고치면 옛 패널을 못 읽게 한다(정정 ML-2)."""
+    import swing_it.features.fundamentals as fund
+
+    here = Path(__file__).resolve().parent
+    h = hashlib.sha256()
+    for f in (Path(__file__).resolve(), here / "pead_optimizer_c0.py", here / "pead_optimizer_po4.py",
+              here / "pead_optimizer_seam.py", Path(fund.__file__).resolve()):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
 def build_panels(end: str, cache: Path | None = None, log=print) -> dict:
     """END 까지의 패널. 캐시 이름에 END·표 지문이 들어간다(표가 바뀌면 다시 만든다)."""
     import pead_optimizer_po4 as P4
@@ -139,7 +151,7 @@ def build_panels(end: str, cache: Path | None = None, log=print) -> dict:
     t0 = time.time()
     fp = P4.fingerprint("daily_bars_adjusted", end)
     key = hashlib.sha256(json.dumps([end, fp], default=str).encode()).hexdigest()[:12]
-    path = None if cache is None else Path(cache) / f"panels_{end}_fp{key}.pkl"
+    path = None if cache is None else Path(cache) / f"panels_{end}_fp{key}_code{code_hash()}.pkl"
     if path is not None and path.exists():
         P = pickle.load(open(path, "rb"))
         log(f"패널 캐시 {path.name}")

@@ -111,6 +111,40 @@ def truncation_check(P, raw, U, Z, d: int, cache: Path, log) -> dict:
     return res
 
 
+def _f1_cut(a) -> tuple:
+    """(a2) 한 결정일 — 실적 입력을 그날로 잘라 F1 패널을 다시 내고, 전체 패널의 그 열과 비트 대조한다."""
+    from pead_optimizer_c0 import yoy_wide
+
+    t = a
+    c = _F1
+    day = c["dates"][t]
+    ea, per = c["ea"], c["per"]
+    ea_cut = ea[(pd.to_datetime(ea["avail_date"]) <= day) & (pd.to_datetime(ea["knowledge_date"]) <= day)].copy()
+    per_cut = per[pd.to_datetime(per["per"]) <= day].copy()
+    wide, _ = yoy_wide(ea_cut, per_cut, c["codes"], c["dates"][: t + 1], str(day.date()), fallback=False)
+    ok = _same(wide[:, -1], c["full"][:, t])
+    n_diff = 0 if ok else int((~((wide[:, -1] == c["full"][:, t]) | (np.isnan(wide[:, -1]) & np.isnan(c["full"][:, t])))).sum())
+    return t, ok, n_diff
+
+
+_F1: dict = {}
+
+
+def f1_all_grid(P, grid, workers) -> dict:
+    """정정 ML-2 — F1 절단 동일성을 IC 격자일 전부에서. 동률은 드문 날에만 나타나 무작위 5일이 놓칠 수 있다."""
+    import multiprocessing as mp
+
+    from pead_optimizer_c0 import yoy_inputs
+
+    ea, per = yoy_inputs(END, False)
+    _F1.clear()
+    _F1.update(ea=ea, per=per, codes=P["codes"], dates=P["dates"], full=P["yoy"])
+    with mp.get_context("fork").Pool(workers) as pool:
+        rows = pool.map(_f1_cut, grid, chunksize=4)
+    bad = [{"date": str(P["dates"][t].date()), "n_diff": n} for t, ok, n in rows if not ok]
+    return {"days": len(rows), "pass": not bad, "bad": bad}
+
+
 def run(args, log) -> int:
     import ml_forecast_data as D
     import ml_forecast_features as FT
@@ -158,9 +192,12 @@ def run(args, log) -> int:
         r = truncation_check(P, raw, U, Z, d, cache, log)
         trunc.append(r)
         log(f"  절단 {r['date']}: {'같다' if r['pass'] else '다르다 — ' + str(r['first_diff'])}")
+    a2 = f1_all_grid(P, grid, args.workers)
+    log(f"(a2) F1 전 격자일 절단: {a2['days']}일, 어긋난 날 {len(a2['bad'])}")
     fp1 = D.fingerprint_range("2017-01-01", END)
 
     gates = {"a_truncation": all(r["pass"] for r in trunc),
+             "a2_f1_all_grid": a2["pass"],
              "b_coverage": all(v["pass"] for v in cov_gate.values()),
              "c_delisted_missing": all(v["pass"] for v in del_gate.values()),
              "v4_universe_matches_core": all(r["same"] for r in v4),
@@ -174,7 +211,7 @@ def run(args, log) -> int:
                      "U_star": int(len(np.unique(np.concatenate([U[t] for t in grid if dates[t].year >= 2020])))),
                      "by_year_median": {str(y): float(np.median([len(U[t]) for t in grid if dates[t].year == y]))
                                         for y in sorted({dates[t].year for t in grid})}},
-        "v4_check": v4, "coverage": cov_gate, "delisted_missing": del_gate, "truncation": trunc,
+        "v4_check": v4, "coverage": cov_gate, "delisted_missing": del_gate, "truncation": trunc, "f1_all_grid": a2,
         "gates": gates, "pass": bool(all(gates.values())),
         "data": P["info"], "fingerprint_2017_end": {"before": fp0, "after": fp1},
         "delisted_codes_in_panel": int(is_del.sum()), "codes": int(len(P["codes"])),
@@ -192,10 +229,11 @@ def render(r: dict) -> str:
     g = r["gates"]
     ok = lambda b: "통과" if b else "**실패**"  # noqa: E731
     L = ["# ML 수익률 예측 0단계 관문 (라벨 전)", "",
-         f"사전등록 `{r['prereg']}`(2판) + 정정 ML-1. END {r['end']}, core `{r['core_ref']}`. 숫자 원본 `stage0.json`.",
+         f"사전등록 `{r['prereg']}`(2판) + 정정 ML-1·ML-2. 1회차 실패 기록은 `stage0_run1_failed.md`. END {r['end']}, core `{r['core_ref']}`. 숫자 원본 `stage0.json`.",
          "**라벨(u·y)·수익·모델 출력은 계산하지 않았다.**", "",
          "| 관문 | 결과 |", "|---|---|",
          f"| (a) 절단 재계산 동일성(결정일 {len(r['truncation'])}개) | {ok(g['a_truncation'])} |",
+         f"| (a2) F1 절단 동일성, IC 격자일 전부 {r['f1_all_grid']['days']}일(정정 ML-2) | {ok(g['a2_f1_all_grid'])} |",
          f"| (b) 피처별 U(t) 커버리지 | {ok(g['b_coverage'])} |",
          f"| (c) 폐지 대 상장 결측률 차 ≤ 20%p | {ok(g['c_delisted_missing'])} |",
          f"| v4 유니버스 재구성 = core `build_risk_model` 종목(3일) | {ok(g['v4_universe_matches_core'])} |",
@@ -238,6 +276,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", required=True)
     ap.add_argument("--core-ref", default="13c56a7")
+    ap.add_argument("--workers", type=int, default=16)
     args = ap.parse_args()
     t0 = time.time()
 

@@ -200,3 +200,52 @@ def test_yoy_wide_known_next_day_no_fallback_and_restatement():
     assert _bits_equal(wide[0, :80], wide2[0, :80])
     wide_f, _ = yoy_wide(ea.copy(), per.copy(), ["A", "B"], dates, d[-1], fallback=True)
     assert wide_f[1, 11] == pytest.approx(-0.5)  # fallback 기본 동작은 그대로
+
+
+def _tied_earnings(n_other=400):
+    """종목 A 의 두 분기가 같은 날 알려진다 + 동률 정렬을 흔드는 다른 행들."""
+    dates = pd.bdate_range("2022-01-03", periods=120)
+    d = dates.strftime("%Y-%m-%d")
+    rows = [("A", "2021Q4", d[20], d[20], 20.0, 10.0), ("A", "2022Q1", d[20], d[20], 40.0, 10.0)]
+    rng = np.random.default_rng(0)
+    for i in range(n_other):
+        rows.append((f"B{i:03d}", "2021Q4", d[int(rng.integers(0, 40))], d[0], 15.0, 10.0))
+    ea = pd.DataFrame(rows, columns=["code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"])
+    per = ea[["code", "period"]].assign(per=pd.to_datetime(ea["avail_date"]))
+    return dates, ea, per
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_yoy_wide_same_day_quarters_take_later_quarter_whatever_the_row_order(seed):
+    """정정 ML-2 — 같은 날 알려진 두 분기는 입력 순서·길이와 무관하게 늦은 분기다."""
+    dates, ea, per = _tied_earnings()
+    shuffled = ea.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    wide, _ = yoy_wide(shuffled, per.copy(), ["A"], dates, str(dates[-1].date()), fallback=False)
+    assert np.isnan(wide[0, 20])
+    assert wide[0, 21] == pytest.approx(3.0)  # 2022Q1 (40−10)/10
+
+
+def test_yoy_panel_default_path_keeps_no_tie_rule():
+    """tie_col 기본값은 그대로다 — PEAD 패리티 경로의 호출이 인자 없이 도는지(동률 규칙이 켜지지 않는지) 본다."""
+    import inspect
+
+    from swing_it.features.fundamentals import earnings_yoy_panel
+
+    assert inspect.signature(earnings_yoy_panel).parameters["tie_col"].default is None
+
+
+def test_f1_cut_catches_broken_tie_rule():
+    """위반 주입 — 전체 패널에 옛 분기가 들어 있으면 (a2) 비교가 실패한다."""
+    import ml_forecast_stage0 as S0
+
+    dates, ea, per = _tied_earnings(n_other=5)
+    codes = ["A"]
+    full, _ = yoy_wide(ea.copy(), per.copy(), codes, dates, str(dates[-1].date()), fallback=False)
+    S0._F1.clear()
+    S0._F1.update(ea=ea, per=per, codes=codes, dates=dates, full=full)
+    assert S0._f1_cut(30)[1] is True
+    broken = full.copy()
+    broken[0, 30] = 1.0  # 옛 분기(2021Q4) 값
+    S0._F1["full"] = broken
+    t, ok, n = S0._f1_cut(30)
+    assert (t, ok, n) == (30, False, 1)

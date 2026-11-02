@@ -200,7 +200,7 @@ def run(args, log) -> int:
     del raw
 
     # 원장 — 진단 → E → M. 숫자를 내기 전에 적는다(§9).
-    base = {"stage": "S1-IC", "prereg": PREREG_SHA, "corrections": ["ML-1"], "end": END, "universe": "cap400_adv5e9",
+    base = {"stage": "S1-IC", "prereg": PREREG_SHA, "corrections": ["ML-1", "ML-2"], "end": END, "universe": "cap400_adv5e9",
             "target": "v4_resid_t+2..t+21", "grid": C.IC_STEP}
     for m in MODELS:
         record_trial(LABEL, {**base, "model": m}, note=f"S1 {'진단' if m not in CANDIDATES else '후보'} {m}")
@@ -380,7 +380,7 @@ def run(args, log) -> int:
     interact = bool(d_ml["mean"] > 0 and d_ml["t_nw6"] >= T_BAR)
 
     res = {
-        "status": "검증 전", "prereg": PREREG_SHA, "corrections": ["ML-1"], "end": END, "core_ref": args.core_ref,
+        "status": "검증 전", "prereg": PREREG_SHA, "corrections": ["ML-1", "ML-2"], "end": END, "core_ref": args.core_ref,
         "lightgbm": _lgb_version(), "grid": {"oos_days": len(oos), "first": str(dates[oos[0]].date()), "last": str(dates[oos[-1]].date()),
                                              "train_phase_days": len(rows)},
         "universe": {"median_oos": u_median, "U_star": int(u_star.size)},

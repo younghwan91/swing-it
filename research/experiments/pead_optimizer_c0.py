@@ -103,6 +103,11 @@ def month_ends(dates, lo, last_index):  # validate_risk_model.py 그대로
 
 
 def yoy_signal(codes, dates, end: str = END, fallback: bool = True) -> tuple[np.ndarray, dict]:
+    ea, per = yoy_inputs(end, fallback)
+    return yoy_wide(ea, per, codes, dates, end, fallback)
+
+
+def yoy_inputs(end: str = END, fallback: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     """분기 순이익 YoY 패널(code × date). 알게 된 날 = max(avail, 정기보고서 첫 rcept_dt) 다음 거래일
     (fcs ``storage._attach_known_dates`` 와 같은 식). 정정 버전은 ``knowledge_col`` 로 날짜별 선택.
 
@@ -129,7 +134,7 @@ def yoy_signal(codes, dates, end: str = END, fallback: bool = True) -> tuple[np.
             "WHERE kind = 'periodic' AND rcept_dt <= %s GROUP BY code, period", (str(pd.Timestamp(end).date()),))
     per = pd.DataFrame(cur.fetchall(), columns=["code", "period", "per"])
     con.close()
-    return yoy_wide(ea, per, codes, dates, end, fallback)
+    return ea, per
 
 
 def yoy_wide(ea: pd.DataFrame, per: pd.DataFrame, codes, dates, end, fallback: bool = True) -> tuple[np.ndarray, dict]:
@@ -156,8 +161,10 @@ def yoy_wide(ea: pd.DataFrame, per: pd.DataFrame, codes, dates, end, fallback: b
     ea["known_date"] = days[i[ok]].strftime("%Y-%m-%d")
     ea["knowledge_date"] = ea["knowledge_date"].dt.strftime("%Y-%m-%d")
     ea["yoy"] = _yoy_vec(ea["netinc"], ea["netinc_prior"])
+    # fallback=False(ML 예측)만 동률을 늦은 분기로 정한다(정정 ML-2). 기본 경로는 PEAD 패리티에 묶여 그대로다.
     panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), list(days.strftime("%Y-%m-%d")),
-                               avail_col="known_date", knowledge_col="knowledge_date")
+                               avail_col="known_date", knowledge_col="knowledge_date",
+                               tie_col=None if fallback else "period")
     wide = panel.pivot(index="code", columns="date", values="yoy")
     wide = wide.reindex(index=[str(c) for c in codes], columns=list(days.strftime("%Y-%m-%d")))
     info = {"earnings_rows_read": int(n_all), "earnings_rows_known_le_end": int(len(ea)),
