@@ -1,0 +1,12 @@
+{"config": {"arm": "random20", "band": "U", "prereg": "TB-1", "step": 60}, "fingerprint": "d78f77387c87345a", "note": "판정"}
+{"config": {"arm": "random20", "band": "U2", "prereg": "TB-1", "step": 60}, "fingerprint": "64d86033dd2b2321", "note": "K3"}
+{"config": {"arm": "label", "label": "entry_old", "prereg": "TB-1"}, "fingerprint": "cbd1d86687d7a293", "note": "라벨"}
+{"config": {"arm": "label", "label": "close_proxy", "prereg": "TB-1"}, "fingerprint": "13b84f2ec82d64a2", "note": "라벨"}
+{"config": {"arm": "label", "label": "buffer_1.5_40", "prereg": "TB-1"}, "fingerprint": "8775b96c2277dbcf", "note": "라벨"}
+{"config": {"arm": "label", "label": "aum_1eok", "prereg": "TB-1"}, "fingerprint": "9f8a2833673493bb", "note": "라벨"}
+{"config": {"arm": "label", "label": "no_doom", "prereg": "TB-1"}, "fingerprint": "574ce8a8dd7f412b", "note": "라벨"}
+{"config": {"arm": "label", "label": "offset_10", "prereg": "TB-1"}, "fingerprint": "cfe7aaae0a78483a", "note": "라벨"}
+{"config": {"arm": "label", "label": "offset_20", "prereg": "TB-1"}, "fingerprint": "e97354a168ddd0b3", "note": "라벨"}
+{"config": {"arm": "label", "label": "offset_30", "prereg": "TB-1"}, "fingerprint": "4d499c8c5fe21e4b", "note": "라벨"}
+{"config": {"arm": "label", "label": "offset_40", "prereg": "TB-1"}, "fingerprint": "b8f6c1e77d24b42c", "note": "라벨"}
+{"config": {"arm": "label", "label": "offset_50", "prereg": "TB-1"}, "fingerprint": "e827f82f274e3977", "note": "라벨"}
