@@ -35,7 +35,7 @@
 | scalp-it `docs/research/manju/97-universe-diagnosis.md` | 전일 거래대금 순위별 일평균 | 2016-09~2026-09, 901위 이하 | 합계 +6.3bp/일(상위 300 −2.6bp), 비용 전, 단조 | **유리, 가장 가깝다** |
 | fcs `REVIEW_GA2.md:255` | SMB_ADV 대용(ADV 하위 − 상위 30%) | 2016-09~2026-10, 값은 2020~ | 연 +8.0% | **유리** |
 | `ml_forecast/S2_verified.md` | U(t) EW, "소형·저유동 랠리" 표현 | 2020~23, ADV ≥ 50억·시총 400위 안 | 누적 +30.4%, 낙폭 −35.0% | 유리(2020~21), 다른 대역 |
-| daytrade-it `2026-09-16-edge-hunt-matched-null.md` §7·§8 | 거래대금 순위·전 종목 시가→종가, +40일 | 2016-09~2026-09 | 순위 낮을수록 낙폭 작음. 전 종목 +40일 2018 −39·2020 +776·2022 −161bp | 혼합 |
+| daytrade-it `2026-09-16-edge-hunt-matched-null.md` §7·§8 | 거래대금 순위·전 종목 시가→종가, +40일 | 2016-09~2026-09 | 순위가 낮을수록 시가→종가 표류가 덜 음수(−28.6 → −8.1bp/일). 전 종목 +40일 2018 −39·2020 +776·2022 −161bp | 혼합 |
 | scalp-it `pead-migrated-to-kr-quant/31-factor-batch-preregistration.md` | 사이즈 롱숏, `docs/lowvol-strategy.md` 인용 | 11년, ADV ≥ 50억·500억 | 소형 롱 t −3.17 역방향 | **불리**, 하한이 대역 위 |
 | fcs `REVIEW_META_GEN1.md` | 등가중 ADV ≥ 50억 | 2020-01~2026-04 | CAGR +0.1~+3.8%, MDD −60~−65% | 다른 대역 |
 | fcs `CONVERGENCE_RESULTS.md`·`AUDIT.md:325` | ADV 50~200억 안의 신호 칸 | 2017~ | 신호 칸 값, 대역 EW 아님 | 간접 |
