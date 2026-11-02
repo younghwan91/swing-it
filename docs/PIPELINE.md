@@ -1,39 +1,45 @@
 # 파이프라인 11단계
 
-연구는 아래 순서로만 흐른다. 단계마다 모듈과 입출력 계약이 있고, 순서는 게이트와 CI 가 막는다. 지금 상태는 `python -m swing_it.pipeline status` 로 본다.
+연구는 아래 순서로만 흐른다. 단계마다 부를 함수가 `src/` 에 있고, 순서는 게이트와 CI 가 막는다. 지금 상태는 `python -m swing_it.pipeline status` 로 본다.
 
-## 단계와 계약
+## 단계와 실제 함수
 
-코드는 `src/swing_it/pipeline/` 에 있다. 모듈은 기존 구현을 감싸기만 한다. 진입점은 모두 `run(study, ...)` 이고 첫 문장이 게이트다.
+러너가 이 함수들을 부른다. 게이트는 러너가 부른다. 표는 `swing_it.pipeline.stages.STAGE_FUNCTIONS` 와 같고, 시험이 경로와 심볼의 실재를 본다.
 
-| # | 단계 | 모듈 | 받는 것 | 내는 것 | 위임 대상 |
-|---|---|---|---|---|---|
-| 1 | 유니버스 | `s01_universe` | 시총·ADV 패널 | `UniverseMask` | `features.universe.smallmid_universe` |
-| 2 | 데이터 | `s02_data` | `UniverseMask`, DB 연결 | `DataPanels` | `storage.read_prices`·`read_earnings` |
-| 3 | 알파 발굴 | `s03_alpha` | `DataPanels` | `Signal` | 구현 없음(`NotImplementedError`) |
-| 4 | 알파 검증(IC/ICIR) | `s04_alpha_validation` | `Signal`, `DataPanels` | `ICReport` | core `rank_ic` |
-| 5 | ML 수익률 예측 | `s05_forecast` | `Signal`, `DataPanels` | `Forecast` | 구현 없음(`NotImplementedError`) |
-| 6 | 팩터 위험모델 | `s06_risk_model` | 수익·노출 패널 | `RiskModelOutput` | core `build_risk_model` * |
-| 7 | 포트폴리오 최적화 | `s07_portfolio` | 기대수익, `RiskModelOutput` | `TargetWeights` | core `optimize` * |
-| 8 | 거래비용 모델 | `s08_costs` | `TargetWeights`, 직전 비중 | `CostEstimate` | core `trade_cost_bp` * |
-| 9 | 백테스트 | `s09_backtest` | `Signal`, `DataPanels`, config | `BacktestResult` | `strategies.pead.staggered_backtest` + 다중검정 원장 |
-| 10 | 주문 실행 | `s10_execution` | `TargetWeights` | `OrderPlan` | 구현 없음(`docs/execution/DESIGN.md`) |
-| 11 | 성과 기여·모니터링 | `s11_attribution` | 비중·노출·팩터·특이 수익 | `Attribution` | core `factor_attribution` * |
+| # | 단계 | 함수 | 위치 |
+|---|---|---|---|
+| 1 | 유니버스 | `rank_band_eligible`·`smallmid_universe` | `swing_it.features.universe` |
+| 2 | 데이터 | `read_prices`·`read_earnings`·`read_periodic_filings` | `swing_it.storage` |
+| 3 | 알파 발굴 | `yoy_strict_wide`·`load_yoy_strict` | `swing_it.features.earnings_asof` |
+| 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`fold_ic`, `permutation_nulls` | `swing_it.validation.ic`, `swing_it.book.nulls` |
+| 5 | ML 수익률 예측 | `research/experiments/ml_forecast_models.py` | 연구 코드에 남았다. 예측은 `check_forecast` 로 검사한다 |
+| 6 | 팩터 위험모델 | `sub_model`·`active_risk`, 모델은 `build_models` | `swing_it.book.risk`, `research/experiments/pead_optimizer_po3.py`(core `build_risk_model` 호출) |
+| 7 | 포트폴리오 | 순위 북 `tranche_names`·`r_target`, 최적화 북 `o_target`·`match_lambda` | `swing_it.book.rank`, `swing_it.book.optimized` |
+| 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` | `swing_it.book.costs` |
+| 9 | 백테스트 | `simulate`·`check_invariants`·`book_summary`, `full_parity`, `ols_hac` | `swing_it.book.accounting`·`metrics`·`parity`, `swing_it.diagnostics.hac` |
+| 10 | 주문 실행 | 없음 — `docs/execution/DESIGN.md` | 먼저 dry-run. 실주문 경로의 첫 문장은 `require_execution_approval` 이다 |
+| 11 | 성과 기여·모니터링 | `attribution_report`, core `factor_attribution` | `research/experiments/pead_optimizer_b_report.py` |
 
-\* swing-it 기본 핀 `krx-quant-core==0.7.0` 에 없다. 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다.
+북의 규칙은 `swing_it.book.spec.BookSpec` 으로 넘긴다. 기본값은 PEAD 단계 B 사전등록 값이다. 판정 바(`verdict`)는 연구마다 사전등록하므로 러너에 남는다.
 
-**계약이 막는 것** (`contracts.py`, 어기면 `ContractError`)
+`research/experiments/pead_optimizer_b.py` 는 위 함수를 부르는 러너가 됐다. 옮긴 뒤에도 `B.json` 의 숫자를 1e-10 안에서 재현한다(`research/logs/pead_optimizer/B_modules_parity.json`, 재현 방법은 `tests/real_db/test_b_json_reproduction.py`).
 
-- `DataPanels`: `end` 뒤 날짜의 가격, `end` 뒤에 안 실적 행(`knowledge_date`·`avail_date`), `end` ≥ 2026-09-14(애프터마켓 오염 구간 — main 의 `read_prices` 는 정규장 값을 만들지 못한다).
-- `Forecast`: 학습 구간 안 예측, `train_end` 뒤 평일 `horizon` 일 안의 예측(라벨 겹침).
-- `TargetWeights`: 음수 비중과 합 1 초과.
-- `BacktestResult`: 비용 기준(`gross`·`net_1x`·`net_2x`)과 원장의 시행 수가 있어야 한다.
-- `OrderPlan`: `dry_run=True` 만 받는다.
-- 어느 계약에도 합격 필드는 없다. 사람이 읽고 원장에 적는다(GUARDRAILS §8).
+**core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
-**계약이 보증하지 않는 것.** `DataPanels` 는 알게 된 날 규칙을 모른다. 실적을 쓸 수 있는 첫날은 max(`avail_date`, 정기보고서 첫 접수일) 다음 거래일이고, 그 구현은 `research/experiments/pead_optimizer_po4.py::yoy_signal_strict` 다. `Signal.known_at` 은 만든 쪽이 적는 설명이지 검사가 아니다.
+## 경계 검사
 
-연구 하네스(`research/experiments/pead_optimizer_b.py` 등)는 옮기지 않았다. 옮기면 바이트 동일 재현이 깨지고, `src` 는 `research` 를 import 하지 않는다. 각 모듈의 `REFERENCES` 가 경로로 가리킨다.
+`swing_it.pipeline.checks` 의 독립 함수다. 어느 하네스든 부를 수 있고, 어기면 `CheckError` 다. 합격 여부는 묻지 않는다.
+
+| 함수 | 거부하는 것 |
+|---|---|
+| `check_universe(frame)` | 중복 (code, date), bool 아닌 적격 열, 적격 0개 |
+| `check_panels(prices, earnings, end)` | `end` 뒤 가격, `end` 뒤에 안 실적 행, `end` ≥ 2026-09-14(애프터마켓 오염 — main 의 `read_prices` 는 정규장 값을 만들지 못한다) |
+| `check_signal(sig)` | inf, 전부 NaN |
+| `check_forecast(df, horizon)` | 학습 구간 안 예측, `train_end` 뒤 평일 `horizon` 일 안의 예측(라벨 겹침, 휴장일이 끼면 놓칠 수 있다) |
+| `check_weights(w, codes)` | 음수, 합 초과, NaN, 코드 중복 |
+| `check_attribution(frame, names)` | 기여 합과 total 의 차이 |
+
+**보증하지 않는 것.** `check_panels` 는 알게 된 날 규칙을 모른다. 실적을 쓸 수 있는 첫날은 max(`avail_date`, 정기보고서 첫 접수일) 다음 거래일이고, 신호를 `yoy_strict_wide` 로 만들어야 지켜진다.
 
 ## 게이트 규칙
 
@@ -66,20 +72,29 @@ pass·skip 은 앞 단계가 열려 있어야 적힌다. fail 은 언제든 적�
 
 ## 새 연구를 더하는 법
 
-러너 머리에 선언하고, 데이터를 읽기 전에 게이트를 부른다. 앞에는 인자 파싱만 온다. 조건문 안 호출은 호출로 치지 않는다.
+`examples/pipeline_rank_book.py` 가 합성 데이터로 끝까지 도는 예다. 선언하고, 데이터를 읽기 전에 게이트를 부르고, 단계마다 위 표의 함수를 부른다. 게이트 앞에는 인자 파싱만 온다. 조건문 안 호출은 호출로 치지 않는다.
 
 ```python
+from swing_it.book.accounting import check_invariants, simulate
+from swing_it.book.metrics import book_summary
+from swing_it.book.spec import BookSpec
 from swing_it.pipeline import Stage, require_stage
 
 PIPELINE = ("my_study", Stage.BACKTEST)
+SPEC = BookSpec(top_n=5)
 
 def main() -> int:
     args = parse_args()          # argparse 만
     require_stage(*PIPELINE)     # 앞 단계 증거가 없으면 여기서 멈춘다
+    ctx = load_my_panels(args)
+    recs = simulate(ctx, "R", spec=SPEC)
     ...
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 ```
 
-러너가 아닌 파일은 `PIPELINE_LIBRARY = "<무엇인지>"` 를 적는다. 그런 파일에는 진입점이 없어야 한다. 백테스트 함수를 부르는 러너는 9단계 앞으로 선언할 수 없다.
+위험모델을 안 쓰는 순위 북은 `models_from_mask` 로 종목 집합만 넘긴다. 러너가 아닌 파일은 `PIPELINE_LIBRARY = "<무엇인지>"` 를 적는다. 그런 파일에는 진입점이 없어야 한다. 백테스트 함수를 부르는 러너는 9단계 앞으로 선언할 수 없다.
 
 단계를 끝내면 적는다. `record` 는 어느 원장에 적었는지 출력하고, 지금 폴더가 다른 레포면 거부한다.
 

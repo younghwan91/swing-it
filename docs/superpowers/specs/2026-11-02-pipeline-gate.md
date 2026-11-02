@@ -8,7 +8,7 @@
 
 ## 주 세션이 정한 것
 
-- 패키지 `src/swing_it/pipeline/`: `stages.py`·`contracts.py`·`gate.py`·`s01_universe.py`~`s11_attribution.py`. 단계 모듈은 기존 코드를 감싸기만 한다(계약 + 위임 + 검증).
+- 패키지 `src/swing_it/pipeline/`: `stages.py`·`gate.py`. 처음에는 `contracts.py`·`s01_universe.py`~`s11_attribution.py` 도 뒀지만 지웠다 — 맨 아래 "모듈화" 절.
 - 연구별 덧붙이기 전용 원장 `research/logs/<study>/PIPELINE.jsonl`. `require_stage`·`record_stage`, CLI `python -m swing_it.pipeline status|record|verify`.
 - 규칙: fail 은 그 단계의 새 pass 전까지 뒤를 막는다. skip 은 사유가 필수다. 앞 단계를 다시 기록하면 뒤 단계 pass 는 stale 이다. 4·5·9 의 pass 는 검증 문서 참조가 필수다. 10 은 사용자 승인 기록과 전진 페이퍼 증거가 필수이고 추론하지 않는다. 증거 해시가 어긋나거나 파일이 없으면 stale 이다.
 - 러너는 파일 위에 `PIPELINE = ("<study>", <stage>)` 를 적고 데이터를 읽기 전에 `require_stage` 를 부른다. `check_guardrails.py` 가 강제하고, 오늘 있는 파일은 늘어나지 않는 면제 목록에 둔다.
@@ -17,8 +17,8 @@
 
 | # | 결정 | 이유 |
 |---|---|---|
-| 1 | **단계 모듈의 진입점은 모두 `run(study, ...)` 이고 첫 문장이 `require_stage(study, STAGE)` 다.** | 러너 선언만으로는 다른 코드가 단계 모듈을 건너뛰어 부를 수 있다. 테스트가 11개 모듈 전부를 AST 로 검사한다. |
-| 2 | **`gate.py`·`stages.py` 는 표준 라이브러리만 쓰고, `pipeline/__init__.py` 는 단계 모듈을 import 하지 않는다.** | `check_guardrails.py` 는 무의존이어야 한다. numpy·pandas 는 `contracts.py` 부터다. |
+| 1 | ~~단계 모듈의 진입점은 모두 `run(study, ...)` 이고 첫 문장이 `require_stage(study, STAGE)` 다.~~ 지웠다 — 맨 아래 "모듈화" 절. 게이트는 러너가 부른다. | 쓰는 러너가 0개인 얇은 감싸개였다. |
+| 2 | **`gate.py`·`stages.py` 는 표준 라이브러리만 쓴다.** | `check_guardrails.py` 는 무의존이어야 한다. numpy·pandas 는 `checks.py` 부터다. |
 | 3 | **원장은 해시 체인(`sha`·`prev`)이고, 손상되면 조용히 건너뛰지 않고 막는다.** | `TRIALS.jsonl` 은 손상 줄을 무시하지만 여기서 그렇게 하면 fail 한 줄이 사라져 게이트가 열린다. |
 | 4 | **읽을 때 행 규칙을 다시 검사한다**(사유·검증 문서·승인·순서). | 체인을 맞춰 손으로 덧붙인 줄은 체인 검사만으로 못 잡는다. |
 | 5 | **`record_stage` 도 순서를 본다.** pass·skip 은 앞 단계가 열려 있어야 적힌다. fail 은 언제든 적힌다. | fail 은 더 막는 쪽이라 위험이 없다. 늦게 드러난 실패(4단계 SIG)를 적을 길이 있어야 한다. |
@@ -51,8 +51,8 @@
 
 - `src/swing_it/price_adjust.py` 는 Airflow 가 라이브 마운트로 돌린다. numpy·pandas·표준 라이브러리 밖을 import 하면 거기서 죽는다. 새 패키지에 의존하지 않고, 테스트가 이를 고정한다.
 - 기존 러너 동작과 바이트 동일 재현. 러너를 옮기거나 고치지 않는다.
-- `src` 는 `research` 를 import 하지 않는다(린트 (a)). 단계 모듈의 연구 하네스 참조는 경로 문자열(`REFERENCES`)이고, 테스트가 그 경로와 심볼의 실재를 확인한다.
-- 키움 호출·주문. 10단계 모듈은 게이트 뒤에서 `NotImplementedError` 로 `docs/execution/DESIGN.md` 를 가리킨다.
+- `src` 는 `research` 를 import 하지 않는다(린트 (a)). 단계 표의 연구 코드 참조는 경로 문자열이고, 테스트가 그 경로와 심볼의 실재를 확인한다.
+- 키움 호출·주문. 10단계에는 구현이 없고 `docs/execution/DESIGN.md` 를 가리킨다.
 
 ## 자가 점검 (2026-11-02, quant-reviewer 관점 — 구현자 본인의 점검이고 독립 리뷰가 아니다)
 
@@ -74,3 +74,22 @@
 소급 기록의 정직성은 숫자마다 원문과 대조했다(`B_verified.md`·`B_parity.md`·`A1_repaired.md`·`B_feasibility.md`·`PEAD_FORWARD_PREREG.md`). `pead_forward` 4단계 skip 은 판단이 들어간 곳이라 사유에 "표본 안 검증 미통과"를 그대로 적었다.
 
 실제 Postgres 읽기 전용 스모크: `s02_data` → `s03_alpha` → `s04_alpha_validation` 이 계약 위반 없이 돈다. `s02_data` 의 지문을 2019-01-01~2023-12-28 로 자르면 단계 B 표 지문 `[2877771, "2023-12-28", 6700381946099, 2316557639282]` 와 정확히 같다. 이 실행의 IC 값은 스모크라 연구 결과로 쓰지 않는다.
+
+## 모듈화 (Part 2)
+
+리뷰가 짚었다: 게이트와 원장은 튼튼한데 단계 모듈은 장식이었다. 쓰는 러너가 0개였고, 실제 연구 코드는 `research/experiments` 에 그대로였다. 사용자가 요청한 것은 모듈화다.
+
+| # | 결정 | 이유 |
+|---|---|---|
+| 22 | **`s01`~`s11`·`contracts.py` 를 지우고, 단계 → 실제 함수 표(`STAGE_FUNCTIONS`)와 독립 검사(`pipeline/checks.py`)로 바꾼다.** | 쓰이지 않는 감싸개와 계약 객체는 보증처럼 보이기만 한다. 검사는 어느 하네스든 부를 수 있어야 한다. |
+| 23 | **단계 B 구현을 `src/swing_it/book/`·`features/`·`validation/`·`diagnostics/` 로 옮기고, 러너는 부르기만 한다.** 옮기는 도구로 함수 본문을 그대로 뽑았고, 옮긴 함수의 차이는 상수 → `spec` 뿐이다. | 새 연구가 복사하지 않고 부를 수 있어야 한다. 손으로 다시 쓰면 재현이 깨진다. |
+| 24 | **규칙은 `BookSpec` 으로 받고, 기본값은 PEAD 단계 B 사전등록 값이다.** 시험이 러너 상수와 같은지 고정한다. | 러너 호출은 그대로 두면서 새 연구는 값을 바꿀 수 있다. |
+| 25 | **평가 구간·폴드는 `src` 기본값으로 두지 않고 인자로 받는다.** 판정(`verdict`)·`gate_b`·실데이터 입력은 러너에 남는다. | 연구마다 다르고, 사전등록 대상이다. 바를 `src` 에 넣으면 리포터 원칙을 어긴다. |
+| 26 | **`yoy_strict_wide` 의 기본 `tie_col` 은 늦은 분기다. 단계 B 재현만 `tie_col=None` 을 넘긴다.** | 새 연구의 기본값이 맞는 규칙이어야 한다(정정 F1-2). 옛 동작은 재현에만 쓴다. |
+| 27 | **`ffill_axis1` 을 `engine.panels` 에 직접 뒀다.** core 0.7.0 에 `_ffill_axis1_nb` 가 없다. 값을 복사하는 연산이라 비트까지 같고, 시험이 core 와 대조한다. | 기본 핀에서 순위 북이 돌아야 한다. |
+| 28 | **`scipy` 를 직접 의존성에 넣었다.** | 러너가 이미 쓰던 것을 `src` 로 옮겼다. |
+| 29 | **위험모델 없는 순위 북을 허용한다(`models_from_mask`).** 사전 위험 칸은 NaN 이다. | 6단계를 건너뛴 연구도 같은 회계를 탄다. 단계 B 경로에는 영향이 없다. |
+
+**재현 증거.** 합성 데이터 골든(`tests/golden/`)은 옮기기 전 코드가 만들었고 CI 에서 대조한다(산술 1e-9, 솔버 1e-5). 실데이터 `B.json` 전체(709개 숫자)와 ML S2-0 은 `research/logs/pead_optimizer/B_modules_parity.json` 에 남겼다.
+
+**연구 코드에 남긴 것.** 위험모델 입력(`pead_optimizer_po3`·`po4` 의 `load_inputs`·`guarded`·`prep`·`build_models`), 기여 보고(`pead_optimizer_b_report`), ML 예측 전체(`ml_forecast_*`). 다음 연구가 필요로 할 때 옮긴다. 끝난 ML 러너는 고치지 않았다.

@@ -196,57 +196,6 @@ find = "    if r.returncode == 0 and top and Path(top).resolve() != root:"
 replace = "    if False:"
 
 [[mutation]]
-id = "stage-module-skips-gate"
-why = "단계 모듈을 러너 밖에서 부르면 순서를 건너뛴다"
-guards = ["tests/test_pipeline_stages.py::test_run_opens_with_the_gate",
-          "tests/test_pipeline_stages.py::test_run_is_blocked_before_it_touches_anything"]
-file = "src/swing_it/pipeline/s06_risk_model.py"
-find = "    require_stage(study, STAGE)\n"
-replace = ""
-
-[[mutation]]
-id = "execution-module-skips-gate"
-why = "10단계 모듈이 게이트 없이 불리면 안 된다 — 구현이 붙는 순간 주문 경로가 된다"
-guards = ["tests/test_pipeline_stages.py::test_run_opens_with_the_gate",
-          "tests/test_pipeline_stages.py::test_run_is_blocked_before_it_touches_anything"]
-file = "src/swing_it/pipeline/s10_execution.py"
-find = "    require_stage(study, STAGE)\n"
-replace = ""
-
-[[mutation]]
-id = "contract-allows-unknown-at-the-time"
-why = "end 뒤에 안 값이 패널에 들어와도 통과한다"
-guards = ["tests/test_pipeline_stages.py::test_contract_violation_is_refused"]
-file = "src/swing_it/pipeline/contracts.py"
-find = "            if _day(self.earnings[col], f\"earnings.{col}\").max() > end:"
-replace = "            if False:"
-
-[[mutation]]
-id = "contract-accepts-aftermarket-window"
-why = "main 의 read_prices 는 정규장 값을 못 만든다. 오염 구간이 조용히 들어온다"
-guards = ["tests/test_pipeline_stages.py::test_aftermarket_window_has_no_way_around",
-          "tests/test_pipeline_stages.py::test_data_stage_refuses_the_aftermarket_window"]
-file = "src/swing_it/pipeline/contracts.py"
-find = "        if end >= pd.Timestamp(AFTERMARKET_FROM):"
-replace = "        if False:"
-
-[[mutation]]
-id = "forecast-ignores-label-overlap"
-why = "학습 라벨이 예측일을 넘어 겹치면 미래가 샌다"
-guards = ["tests/test_pipeline_stages.py::test_contract_violation_is_refused"]
-file = "src/swing_it/pipeline/contracts.py"
-find = "        if (np.busday_count(train_end, date) < self.horizon).any():"
-replace = "        if False:"
-
-[[mutation]]
-id = "contract-allows-live-order-plan"
-why = "실주문 경로는 없다. dry_run 이 아닌 계획이 만들어지면 안 된다"
-guards = ["tests/test_pipeline_stages.py::test_contract_violation_is_refused"]
-file = "src/swing_it/pipeline/contracts.py"
-find = "        if self.dry_run is not True:"
-replace = "        if False:"
-
-[[mutation]]
 id = "lint-declared-not-in-main"
 why = "규칙 함수가 살아 있어도 main() 이 안 부르면 CI 는 초록이다"
 guards = ["tests/test_check_guardrails.py::test_main_is_wired_to_the_pipeline_rules"]
@@ -425,3 +374,168 @@ guards = ["tests/test_pipeline_ledgers.py::test_backfilled_lines_are_pinned"]
 file = "tests/test_pipeline_ledgers.py"
 find = "    \"pead_optimizer\": (9, "
 replace = "    \"pead_optimizer\": (10, "
+[[mutation]]
+id = "check-allows-unknown-at-the-time"
+why = "end 뒤에 안 값이 패널에 들어와도 통과한다"
+guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
+file = "src/swing_it/pipeline/checks.py"
+find = "        if _day(earnings[col], f\"earnings.{col}\").max() > end_ts:"
+replace = "        if False:"
+
+[[mutation]]
+id = "check-accepts-aftermarket-window"
+why = "main 의 read_prices 는 정규장 값을 못 만든다. 오염 구간이 조용히 들어온다"
+guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if end_ts >= pd.Timestamp(AFTERMARKET_FROM):"
+replace = "    if False:"
+
+[[mutation]]
+id = "check-forecast-ignores-label-overlap"
+why = "학습 라벨이 예측일을 넘어 겹치면 미래가 샌다"
+guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if (np.busday_count(train_end, date) < horizon).any():"
+replace = "    if False:"
+
+[[mutation]]
+id = "check-weights-allows-short"
+why = "실매매 북은 롱온리다"
+guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if (arr < -tol).any():"
+replace = "    if False:"
+
+[[mutation]]
+id = "known-date-same-day"
+why = "공시 당일 값을 쓰면 미래 정보다 — 다음 거래일부터여야 한다"
+guards = ["tests/test_book_units.py::test_value_is_usable_the_trading_day_after_the_later_of_avail_and_filing"]
+file = "src/swing_it/features/earnings_asof.py"
+find = "    i = days.searchsorted(known, side=\"right\")"
+replace = "    i = days.searchsorted(known, side=\"left\")"
+
+[[mutation]]
+id = "known-date-ignores-filing"
+why = "avail_date 만 보면 정기보고서가 늦은 18% 가 미래 정보가 된다(리뷰 M4 의 그 버그)"
+guards = ["tests/test_book_units.py::test_value_is_usable_the_trading_day_after_the_later_of_avail_and_filing"]
+file = "src/swing_it/features/earnings_asof.py"
+find = "    known = ea[[\"avail_date\", \"per\"]].max(axis=1).to_numpy(dtype=\"datetime64[ns]\")"
+replace = "    known = ea[\"avail_date\"].to_numpy(dtype=\"datetime64[ns]\")"
+
+[[mutation]]
+id = "known-date-keeps-unfiled-quarters"
+why = "정기보고서가 없는 분기를 avail_date 로 돌리면 미래 정보다"
+guards = ["tests/test_book_units.py::test_quarter_without_a_filing_is_dropped_from_2019q1_on_but_falls_back_before"]
+file = "src/swing_it/features/earnings_asof.py"
+find = "    ea = ea[~late].copy()"
+replace = "    ea = ea.copy()"
+
+[[mutation]]
+id = "universe-rank-order-flipped"
+why = "시총 큰 순이 아니면 다른 유니버스다"
+guards = ["tests/test_book_units.py::test_rank_band_is_cap_order_inside_the_liquid_signal_universe",
+          "tests/test_pead_optimizer_book_golden.py::test_rank_book_without_costs_matches_golden"]
+file = "src/swing_it/features/universe.py"
+find = "    order = liq[np.argsort(-cap[liq, t], kind=\"stable\")]"
+replace = "    order = liq[np.argsort(cap[liq, t], kind=\"stable\")]"
+
+[[mutation]]
+id = "book-fills-on-decision-day"
+why = "t 종가 정보로 t 종가에 체결하면 룩어헤드다. 회계가 옮기며 바뀌면 재현이 깨진다"
+guards = ["tests/test_book_units.py::test_rank_book_accounting_identities_hold",
+          "tests/test_pead_optimizer_book_golden.py::test_rank_book_without_costs_matches_golden"]
+file = "src/swing_it/book/accounting.py"
+find = "        f = t + lag\n"
+replace = "        f = t\n"
+
+[[mutation]]
+id = "book-ignores-spec"
+why = "규칙이 인자로 안 닿으면 새 연구가 못 쓴다"
+guards = ["tests/test_book_units.py::test_spec_changes_reach_the_book"]
+file = "src/swing_it/book/accounting.py"
+find = "in_u, spec.top_n, spec.min_names,"
+replace = "in_u, 10, 20,"
+
+[[mutation]]
+id = "book-delisted-keeps-value"
+why = "폐지 종목을 현금화하지 않으면 생존편향이 회계로 들어온다"
+guards = ["tests/test_book_units.py::test_delisted_holding_goes_to_cash_at_its_last_close"]
+file = "src/swing_it/book/context.py"
+find = "    return (ctx.delist_after < f) & ~np.isfinite(ctx.C[:, f])"
+replace = "    return np.zeros(ctx.C.shape[0], dtype=bool)"
+
+[[mutation]]
+id = "tranche-picks-the-bottom"
+why = "순위가 뒤집히면 신호 반대로 산다"
+guards = ["tests/test_book_units.py::test_tranche_is_top_n_by_rank_signal_with_eligibility_from_the_true_signal",
+          "tests/test_pead_optimizer_book_golden.py::test_parity_books_match_golden"]
+file = "src/swing_it/book/rank.py"
+find = "    return idx[np.argsort(-vals)[:top_n]]"
+replace = "    return idx[np.argsort(vals)[:top_n]]"
+
+[[mutation]]
+id = "cost-sell-tax-on-buys"
+why = "매도세를 양쪽에 물리면 비용 모델이 달라진다"
+guards = ["tests/test_book_units.py::test_linear_cost_taxes_only_the_sell_side"]
+file = "src/swing_it/book/costs.py"
+find = "    return COMMISSION_BP + np.where(side == \"SELL\", tax, 0.0) + np.asarray(hs_bp, dtype=np.float64)"
+replace = "    return COMMISSION_BP + tax + np.asarray(hs_bp, dtype=np.float64)"
+
+[[mutation]]
+id = "cost-layer-missing-means-zero"
+why = "충격 레이어가 없다고 비용 0 으로 돌면 비용 없는 판정이 조용히 나온다"
+guards = ["tests/test_book_units.py::test_costs_cannot_be_silently_absent",
+          "tests/test_pipeline_checks.py::test_trade_costs_on_a_missing_layer_is_a_clear_error_not_a_zero"]
+file = "src/swing_it/book/costs.py"
+find = "        trade_cost_bp = core_layer(\"krx_quant_core.costs.impact\").trade_cost_bp\n"
+replace = "        return out\n        trade_cost_bp = core_layer(\"krx_quant_core.costs.impact\").trade_cost_bp\n"
+
+[[mutation]]
+id = "ic-window-not-purged"
+why = "폴드 IC 에 라벨 겹침을 안 빼면 미래가 샌다"
+guards = ["tests/test_book_units.py::test_fold_ic_purges_the_label_window_and_clips"]
+file = "src/swing_it/validation/ic.py"
+find = "    sel = ics[days <= fold_start - (h + 2)]"
+replace = "    sel = ics[days <= fold_start]"
+
+[[mutation]]
+id = "rng-seed-changed"
+why = "시드가 바뀌면 널이 다른 표본이 되어 재현이 깨진다"
+guards = ["tests/test_book_units.py::test_keyed_rng_is_the_prereg_seed",
+          "tests/test_pead_optimizer_book_golden.py::test_small_helpers_match_golden"]
+file = "src/swing_it/validation/keys.py"
+find = "SEED = 20261101"
+replace = "SEED = 20261102"
+
+[[mutation]]
+id = "hac-lag-dropped"
+why = "겹치는 수익에 HAC 를 빼면 t 가 부푼다"
+guards = ["tests/test_pead_optimizer_book_golden.py::test_small_helpers_match_golden"]
+file = "src/swing_it/diagnostics/hac.py"
+find = "    for k in range(1, lag + 1):\n        G = u[k:].T @ u[:-k]"
+replace = "    for k in range(1, 1):\n        G = u[k:].T @ u[:-k]"
+
+[[mutation]]
+id = "example-skips-the-gate"
+why = "새 연구의 본보기가 게이트를 안 부르면 본보기가 아니다"
+guards = ["tests/test_pipeline_example_study.py::test_example_stops_at_the_gate_before_touching_data",
+          "tests/test_pipeline_example_study.py::test_example_satisfies_the_lint"]
+file = "examples/pipeline_rank_book.py"
+find = "    require_stage(*PIPELINE)\n"
+replace = ""
+
+[[mutation]]
+id = "stage-table-rots"
+why = "표가 없는 함수를 가리키면 새 연구가 길을 잃는다"
+guards = ["tests/test_pipeline_checks.py::test_stage_table_points_at_real_functions"]
+file = "src/swing_it/pipeline/stages.py"
+find = "src/swing_it/book/rank.py::tranche_names"
+replace = "src/swing_it/book/rank.py::tranche_namez"
+
+[[mutation]]
+id = "doc-table-drifts"
+why = "문서가 코드 표와 어긋나면 문서를 믿을 수 없다"
+guards = ["tests/test_pipeline_checks.py::test_the_doc_table_matches_the_code_table"]
+file = "docs/PIPELINE.md"
+find = "| 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` |"
+replace = "| 8 | 거래비용 | `linear_bp`·`trailing_vol` |"

@@ -64,5 +64,5 @@ jobs:
           pip install "krx-quant-core[portfolio] @ git+https://github.com/younghwan91/krx-quant-core@8286e3e"
       - name: Research tests (no skips)
         run: |
-          python -m pytest -q -rs --junitxml=research-tests.xml tests/test_ml_forecast_*.py tests/test_pead_optimizer_*.py
+          python -m pytest -q -rs --junitxml=research-tests.xml tests/test_ml_forecast_*.py tests/test_pead_optimizer_*.py tests/test_book_units.py tests/test_pipeline_example_study.py
           python -c "import xml.etree.ElementTree as E; n = int(E.parse('research-tests.xml').getroot()[0].get('skipped')); raise SystemExit(f'건너뛴 테스트 {n}개 — 이 작업은 건너뛰면 실패다' if n else 0)"

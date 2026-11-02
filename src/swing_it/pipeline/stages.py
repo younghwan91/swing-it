@@ -54,3 +54,26 @@ class Stage(IntEnum):
             return cls(int(value))
         except (TypeError, ValueError):
             raise ValueError(f"모르는 단계: {value!r}") from None
+
+
+#: 단계 → 실제 함수. ``docs/PIPELINE.md`` 표와 같고, 시험이 경로·심볼의 실재를 본다. 부르는 쪽은 러너다 — 게이트는 러너가 부른다.
+STAGE_FUNCTIONS: dict[Stage, tuple[str, ...]] = {
+    Stage.UNIVERSE: ("src/swing_it/features/universe.py::rank_band_eligible", "src/swing_it/features/universe.py::smallmid_universe"),
+    Stage.DATA: ("src/swing_it/storage.py::read_prices", "src/swing_it/storage.py::read_earnings",
+                 "src/swing_it/storage.py::read_periodic_filings"),
+    Stage.ALPHA: ("src/swing_it/features/earnings_asof.py::yoy_strict_wide", "src/swing_it/features/earnings_asof.py::load_yoy_strict"),
+    Stage.ALPHA_VALIDATION: ("src/swing_it/validation/ic.py::daily_rank_ic", "src/swing_it/validation/ic.py::fold_ic",
+                             "src/swing_it/book/nulls.py::permutation_nulls"),
+    Stage.FORECAST: ("research/experiments/ml_forecast_models.py", ),
+    Stage.RISK_MODEL: ("src/swing_it/book/risk.py::sub_model", "src/swing_it/book/risk.py::active_risk",
+                       "research/experiments/pead_optimizer_po3.py::build_models"),
+    Stage.PORTFOLIO: ("src/swing_it/book/rank.py::tranche_names", "src/swing_it/book/rank.py::r_target",
+                      "src/swing_it/book/optimized.py::o_target", "src/swing_it/book/optimized.py::match_lambda"),
+    Stage.COSTS: ("src/swing_it/book/costs.py::trade_costs", "src/swing_it/book/costs.py::linear_bp",
+                  "src/swing_it/book/costs.py::trailing_vol"),
+    Stage.BACKTEST: ("src/swing_it/book/accounting.py::simulate", "src/swing_it/book/accounting.py::check_invariants",
+                     "src/swing_it/book/metrics.py::book_summary", "src/swing_it/book/parity.py::full_parity",
+                     "src/swing_it/diagnostics/hac.py::ols_hac"),
+    Stage.EXECUTION: ("docs/execution/DESIGN.md", ),
+    Stage.ATTRIBUTION: ("research/experiments/pead_optimizer_b_report.py::attribution_report", ),
+}
