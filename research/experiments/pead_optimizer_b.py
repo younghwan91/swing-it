@@ -1121,7 +1121,7 @@ def run_parity(args, log) -> int:
     log(f"격자 {info['grid']}, PO-3 캐시와 공통 모델 {info['models_common_n']}개 비트 동일 {info['models_bit_same_PO3_common']}")
     pc = full_parity(ctx)
     fp1 = P4.fingerprint("daily_bars_adjusted", END_B)
-    res = {"mode": "parity", "core_ref": args.core_ref, "end": END_B, "table": "daily_bars_adjusted(지금 표 — PR #12 전)",
+    res = {"mode": "parity", "core_ref": args.core_ref, "end": END_B, "table": "daily_bars_adjusted(실행 시점 표 — 수리 전후는 아래 지문으로 가린다)",
            "fingerprint_before": fp0, "fingerprint_after": fp1, "fingerprint_same": fp0 == fp1,
            "grid": info["grid"], "models_bit_same_PO3_common": info["models_bit_same_PO3_common"],
            "models_common_n": info["models_common_n"], "seam": info["seam"], "market": info["market"],
@@ -1154,7 +1154,7 @@ def render_parity(r: dict) -> str:
          f"- 표 지문 시작=끝: {r['fingerprint_same']} {r['fingerprint_before']}.",
          f"- 격자 모델이 PO-3 캐시(v4)와 공통 {r['models_common_n']}개 비트 동일: {r['models_bit_same_PO3_common']}.",
          f"- 이음매 가드: {r['seam']}. 시장 구분: {r['market']}.",
-         "- 수리된 표(PR #12)가 배포되면 같은 검사를 다시 통과해야 B 를 돌린다(PO-5.2-4).", "",
+         "- B(`--mode run`)는 PR #12 수리된 표에서 이 검사를 다시 통과해야 돈다(PO-5.2-4) — 수리 전 지문 `fingerprint_before` 는 `A1.json`.", "",
          f"_{r['elapsed_s']:.1f}초_"]
     return "\n".join(L) + "\n"
 

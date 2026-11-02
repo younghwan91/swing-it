@@ -2,17 +2,17 @@
  "mode": "parity",
  "core_ref": "13c56a7",
  "end": "2023-12-28",
- "table": "daily_bars_adjusted(지금 표 — PR #12 전)",
+ "table": "daily_bars_adjusted(실행 시점 표 — 수리 전후는 아래 지문으로 가린다)",
  "fingerprint_before": [
   2877771,
   "2023-12-28",
-  6675565091165,
+  6700381946099,
   2316557639282
  ],
  "fingerprint_after": [
   2877771,
   "2023-12-28",
-  6675565091165,
+  6700381946099,
   2316557639282
  ],
  "fingerprint_same": true,
@@ -21,12 +21,12 @@
   "2023-12-15",
   55
  ],
- "models_bit_same_PO3_common": true,
+ "models_bit_same_PO3_common": false,
  "models_common_n": 53,
  "seam": {
-  "seam_cells": 185,
+  "seam_cells": 103,
   "seam_cells_by_source": [
-   183,
+   101,
    2
   ]
  },
@@ -48,6 +48,6 @@
   "adv_bytes_same": true,
   "eligible_same_all_grid": true
  },
- "elapsed_s": 40.846670389175415,
+ "elapsed_s": 32.71356415748596,
  "note": "성과 숫자(book·bench·IR)는 계산 중에만 쓰고 출력·저장하지 않았다. 차이·개수만 적는다."
 }
