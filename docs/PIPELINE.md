@@ -8,7 +8,7 @@
 
 | # | 단계 | 함수 | 위치 |
 |---|---|---|---|
-| 1 | 유니버스 | `rank_band_eligible`·`smallmid_universe` | `swing_it.features.universe` |
+| 1 | 유니버스 | `rank_band_eligible`·`u_exclusion_causes` | `swing_it.features.universe` |
 | 2 | 데이터 | `read_prices`·`read_earnings`·`read_periodic_filings` | `swing_it.storage` |
 | 3 | 알파 발굴 | `yoy_strict_wide`·`load_yoy_strict` | `swing_it.features.earnings_asof` |
 | 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`fold_ic`, `permutation_nulls` | `swing_it.validation.ic`, `swing_it.book.nulls` |
@@ -24,6 +24,8 @@
 
 `research/experiments/pead_optimizer_b.py` 는 위 함수를 부르는 러너가 됐다. 옮긴 뒤에도 `B.json` 의 숫자를 1e-10 안에서 재현한다(`research/logs/pead_optimizer/B_modules_parity.json`, 재현 방법은 `tests/real_db/test_b_json_reproduction.py`).
 
+**1단계 띠의 뜻.** 시총 21~100위는 "as-of 주식수가 있는 종목 안의" 순위다. 전 시장 순위가 아니다. 2021~22 측정에서 주식수 공백으로 평균 26.8종목이 순위에서 빠졌고 띠의 약 13% 가 전 시장 순위 띠와 달랐다. B 숫자는 이 정의로 재현한다. 메우려면 quant-airflow 의 `shares_outstanding_history` 백필이 필요하다(요청 사항). 스텝별 원인 분리는 `StepRec.u_excl_cap_missing`·`u_excl_model`·`cap_missing_in_u` 에 있다.
+
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
 ## 경계 검사
@@ -32,7 +34,7 @@
 
 | 함수 | 거부하는 것 |
 |---|---|
-| `check_universe(frame)` | 중복 (code, date), bool 아닌 적격 열, 적격 0개 |
+| `check_universe(frame, min_per_day=1)` | 중복 (code, date), 날짜 아닌 값·결측, 코드 결측·빈 값, bool 아닌 적격 열, 전체 적격 0개, 적격이 `min_per_day` 미만인 날 |
 | `check_panels(prices, earnings, end)` | `end` 뒤 가격, `end` 뒤에 안 실적 행, `end` ≥ 2026-09-14(애프터마켓 오염 — main 의 `read_prices` 는 정규장 값을 만들지 못한다) |
 | `check_signal(sig)` | inf, 전부 NaN |
 | `check_forecast(df, horizon)` | 학습 구간 안 예측, `train_end` 뒤 평일 `horizon` 일 안의 예측(라벨 겹침, 휴장일이 끼면 놓칠 수 있다) |

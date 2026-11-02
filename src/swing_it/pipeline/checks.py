@@ -39,13 +39,25 @@ def _day(values: pd.Series, name: str) -> pd.Series:
     return days
 
 
-def check_universe(frame: pd.DataFrame) -> None:
-    """1단계. 긴 형식 code·date·eligible(bool), (code, date) 하나씩, 적격이 하나는 있다."""
+def check_universe(frame: pd.DataFrame, *, min_per_day: int = 1) -> None:
+    """1단계. 긴 형식 code·date·eligible(bool), (code, date) 하나씩, 날짜·코드가 유효하고, 날마다 적격이 ``min_per_day`` 개 이상이다.
+
+    예열 구간처럼 의도한 빈 날이 있으면 ``min_per_day=0`` 으로 말한다. 그래도 전체에 적격이 하나도 없으면 거부한다.
+    """
     _long_frame(frame, ("code", "date", "eligible"), "universe")
     if frame["eligible"].dtype != bool:
         raise CheckError(f"eligible 은 bool 이어야 한다: {frame['eligible'].dtype}")
+    codes = frame["code"]
+    if codes.isna().any() or (codes.astype(str).str.strip() == "").any():
+        raise CheckError("universe 의 코드에 결측·빈 값이 있다")
+    days = _day(frame["date"], "universe.date")
     if not frame["eligible"].any():
         raise CheckError("적격 종목이 하나도 없다")
+    per_day = frame["eligible"].groupby(days).sum()
+    short = per_day[per_day < min_per_day]
+    if len(short):
+        raise CheckError(f"적격이 {min_per_day}개 미만인 날이 {len(short)}일 있다(첫날 {short.index[0].date()}) — "
+                         "의도한 빈 날이면 min_per_day 로 말한다")
 
 
 def check_panels(prices: pd.DataFrame, earnings: pd.DataFrame, end: str, *, knowledge_col: str = "knowledge_date") -> None:

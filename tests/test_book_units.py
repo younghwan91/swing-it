@@ -21,7 +21,7 @@ from swing_it.book.rank import tranche_names  # noqa: E402
 from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Flags  # noqa: E402
 from swing_it.engine.panels import ffill_axis1  # noqa: E402
 from swing_it.features.earnings_asof import load_yoy_strict, yoy_strict_wide  # noqa: E402
-from swing_it.features.universe import m0_mask, rank_band_eligible, u_exclusion  # noqa: E402
+from swing_it.features.universe import m0_mask, rank_band_eligible, u_exclusion, u_exclusion_causes  # noqa: E402
 from swing_it.storage import connect, read_periodic_filings  # noqa: E402
 from swing_it.validation.ic import fold_ic  # noqa: E402
 from swing_it.validation.keys import SEED, keyed_rng  # noqa: E402
@@ -41,6 +41,28 @@ def test_rank_band_is_cap_order_inside_the_liquid_signal_universe():
     assert list(rank_band_eligible(0, sig, adv, cap, np.array([1, 0, 1, 1, 1], bool), cap_rank=(0, 1))) == [4]
     assert list(m0_mask(0, sig, adv, in_u)) == [True, True, False, False, True]
     assert u_exclusion(0, sig, adv, np.array([1, 0, 1, 1, 1], bool)) == pytest.approx(1 / 3)
+
+
+def test_u_exclusion_causes_split_missing_cap_from_a_risk_model_drop():
+    """같은 U_t 탈락이라도 주식수 공백(원천 문제)과 위험모델 탈락은 고칠 곳이 다르다. 합은 u_exclusion 과 같다."""
+    sig = np.ones((5, 1))
+    adv = np.full((5, 1), 30000.0)
+    cap = np.array([[9.0], [np.nan], [7.0], [np.nan], [5.0]])
+    in_u = np.array([1, 0, 0, 1, 1], bool)
+    got = u_exclusion_causes(0, sig, adv, cap, in_u)
+    assert got == {"cap_missing": pytest.approx(1 / 5), "risk_model": pytest.approx(1 / 5), "cap_missing_in_u": pytest.approx(1 / 5)}
+    assert got["cap_missing"] + got["risk_model"] == pytest.approx(u_exclusion(0, sig, adv, in_u))
+    empty = u_exclusion_causes(0, np.full((2, 1), np.nan), np.full((2, 1), 30000.0), np.ones((2, 1)), np.ones(2, bool))
+    assert all(np.isnan(v) for v in empty.values())
+
+
+def test_simulate_records_the_u_exclusion_causes_without_touching_u_excl():
+    ctx = synthetic_ctx(0)
+    ctx.cap[3, :] = np.nan
+    recs = simulate(ctx, "R", flags=NO_COSTS)
+    assert any(r.u_excl_cap_missing > 0 or r.u_excl_model > 0 for r in recs)
+    for r in recs:
+        assert r.u_excl_cap_missing + r.u_excl_model == pytest.approx(r.u_excl)
 
 
 # --- 3 알파: 알게 된 날 ---

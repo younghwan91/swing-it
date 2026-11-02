@@ -55,6 +55,11 @@ def test_valid_inputs_pass():
     (lambda: check_universe(_universe().iloc[:0]), "비었다"),
     (lambda: check_universe(_universe(eligible=[False, False])), "적격"),
     (lambda: check_universe(_universe(code=["A", "A"])), "중복"),
+    (lambda: check_universe(_universe(date=["2020-13-45", "2020-01-02"])), "날짜"),
+    (lambda: check_universe(_universe(date=[None, "2020-01-02"])), "날짜"),
+    (lambda: check_universe(_universe(code=[None, "B"])), "코드"),
+    (lambda: check_universe(_universe(code=["", "B"])), "코드"),
+    (lambda: check_universe(pd.DataFrame({"code": ["A", "B"], "date": ["2020-01-02", "2020-01-03"], "eligible": [True, False]})), "2020-01-03"),
     (lambda: check_panels(_prices("2020-02-01"), _earnings(), "2020-01-03"), "미래"),
     (lambda: check_panels(_prices(), _earnings(knowledge_date=["2020-06-01"]), "2020-01-03"), "몰랐던"),
     (lambda: check_panels(_prices(), _earnings(avail_date=["2020-06-01"]), "2020-01-03"), "몰랐던"),
@@ -83,6 +88,12 @@ def test_violation_is_refused(call, match):
 def test_aftermarket_window_has_no_way_around():
     """"처리했다"고 말하는 인자는 없다 — main 의 read_prices 는 정규장 값을 만들지 못한다."""
     assert "handled" not in check_panels.__code__.co_varnames
+
+
+def test_a_day_without_eligible_names_can_be_declared():
+    """날짜별 0개는 기본 거부다. 예열 구간처럼 의도한 빈 날은 호출자가 말한다."""
+    frame = pd.DataFrame({"code": ["A", "B"], "date": ["2020-01-02", "2020-01-03"], "eligible": [True, False]})
+    check_universe(frame, min_per_day=0)
 
 
 # --- 단계 표 --------------------------------------------------------------------------

@@ -79,6 +79,9 @@ class StepRec:
     n_frozen: int = 0
     n_untradeable: int = 0
     u_excl: float = float("nan")
+    u_excl_cap_missing: float = float("nan")  # u_excl 중 시총 없음(주식수 공백일 수 있다, u_exclusion_causes)
+    u_excl_model: float = float("nan")  # u_excl 중 시총은 있는데 위험모델 밖
+    cap_missing_in_u: float = float("nan")  # U_t 안인데 시총이 없어 띠에서 빠진 비율
     perm_nan_share: float = float("nan")
     contrib: list = field(default_factory=list)  # (종목, 체결 뒤 비중, 종목 수익, 1배 비용)
     # PO-7 — 회계 창·불변식·보고

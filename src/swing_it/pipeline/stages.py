@@ -58,7 +58,7 @@ class Stage(IntEnum):
 
 #: 단계 → 실제 함수. ``docs/PIPELINE.md`` 표와 같고, 시험이 경로·심볼의 실재를 본다. 부르는 쪽은 러너다 — 게이트는 러너가 부른다.
 STAGE_FUNCTIONS: dict[Stage, tuple[str, ...]] = {
-    Stage.UNIVERSE: ("src/swing_it/features/universe.py::rank_band_eligible", "src/swing_it/features/universe.py::smallmid_universe"),
+    Stage.UNIVERSE: ("src/swing_it/features/universe.py::rank_band_eligible", "src/swing_it/features/universe.py::u_exclusion_causes"),
     Stage.DATA: ("src/swing_it/storage.py::read_prices", "src/swing_it/storage.py::read_earnings",
                  "src/swing_it/storage.py::read_periodic_filings"),
     Stage.ALPHA: ("src/swing_it/features/earnings_asof.py::yoy_strict_wide", "src/swing_it/features/earnings_asof.py::load_yoy_strict"),

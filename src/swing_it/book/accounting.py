@@ -10,7 +10,7 @@ from swing_it.book.optimized import FACTOR_ALARM, capped_rescale, o_target
 from swing_it.book.rank import r_target, tranche_names
 from swing_it.book.risk import active_risk, factor_share, sub_model, top_exposures
 from swing_it.book.spec import DEFAULT_SPEC, PRIMARY, BookSpec, Cell, Flags
-from swing_it.features.universe import rank_band_eligible, u_exclusion
+from swing_it.features.universe import rank_band_eligible, u_exclusion, u_exclusion_causes
 
 INV_EPS = 1e-6      # 불변식 허용오차
 COST_BP_PER_TURN = (1.5, 300.0)  # 1배 비용/회전(bp): 수수료 하한 ~ 상한
@@ -57,6 +57,8 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
                       turnover=0.0, exante_20=float("nan"), factor_share=float("nan"), f=f, f_next=f_next)
         if universe is None:
             rec.u_excl = u_exclusion(t, ctx.sig, ctx.adv, in_u, adv_floor=spec.adv_floor)
+            why = u_exclusion_causes(t, ctx.sig, ctx.adv, ctx.cap, in_u, adv_floor=spec.adv_floor)
+            rec.u_excl_cap_missing, rec.u_excl_model, rec.cap_missing_in_u = why["cap_missing"], why["risk_model"], why["cap_missing_in_u"]
         if kind == "R":
             tranches[k] = tranche_names(t, rank_sig, ctx.sig, ctx.adv, ctx.cap, in_u, spec.top_n, spec.min_names,
                                         adv_floor=spec.adv_floor, cap_rank=spec.cap_rank)
