@@ -433,6 +433,7 @@ def render(r: dict) -> str:
          f"> **{r['status']}.** 리뷰(`quant-reviewer`)·재계산(`haiku-verifier`) 전 숫자다. {r['label_public']}", "",
          f"사전등록 `{r['prereg']}` + 정정 {', '.join(r['corrections'])}. END {r['end']}, core `{r['core_ref']}`, LightGBM {r['lightgbm']}, 코드 `{r['code_sha']}`. 원본 `S1.json`.", "",
          f"**1단계 판정: {r['verdict']}**" + (f" — VOID 사유: {r['void']}" if r["void"] else ""), "",
+         "> 정정 ML-4: I-5 통과, 그러나 같은 입력의 선형 대조와 구별되지 않음. 리뷰 반영은 `S1_verified.md`.", "",
          f"OOS IC 격자 {r['grid']['oos_days']}일({r['grid']['first']}~{r['grid']['last']}, 5거래일). U(t) 중앙 {r['universe']['median_oos']:.0f}, U* {r['universe']['U_star']}.", "",
          "## 표 1 — IC 와 널", "",
          "| 모델 | 평균 IC | sd | ICIR | N2 q95 평균 | N2 q95 ICIR | 2020 | 2021 | 2022 | 2023 | 양(+) 연수 | 격자일 |",

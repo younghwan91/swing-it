@@ -42,6 +42,42 @@ def n2_assign(pred_t: np.ndarray, idx: np.ndarray, pi: np.ndarray, r: int, t: in
     return out, int(n_fill)
 
 
+def n2s_walk(pred: dict[int, np.ndarray], U: dict[int, np.ndarray], days: list[int], r: int, N: int,
+             rng_name: str = "ML-N2s") -> dict[int, np.ndarray]:
+    """N2s(정정 ML-4) — 짝을 이어 가는 널. N2 의 날짜별 채움이 지속성을 지워 널이 좁아지는 것을 고친다.
+
+    날짜를 시간 순으로 걸으며 (자리 i, 원천 j) 짝을 들고 간다. i ∈ U(t) 이고 p_{j,t} 가 유한하면 짝을 유지한다. 남은 자리와 남은 유한
+    원천을 ``keyed_rng(rng_name, r, t)`` 로 섞어 짝짓고 **저장한다**. 남는 자리는 NaN. 그래서 날짜마다 유한 개수·값 다중집합이 실제와 같다.
+    ``days`` 는 걷는 격자다 — 북 격자는 북 날짜만으로 따로 걷는다(IC 격자의 부분열을 쓰지 않는다).
+    """
+    src = np.full(N, -1, dtype=np.int64)  # 자리 → 원천
+    out = {}
+    for t in days:
+        idx = U[t]
+        full = np.full(N, np.nan)
+        full[idx] = pred[t]
+        in_u = np.zeros(N, dtype=bool)
+        in_u[idx] = True
+        has = src >= 0
+        keep = np.zeros(N, dtype=bool)
+        keep[has] = in_u[has] & np.isfinite(full[src[has]])
+        src[~keep] = -1
+        used = np.zeros(N, dtype=bool)
+        used[src[keep]] = True
+        slots = idx[~keep[idx]]
+        sources = idx[np.isfinite(pred[t]) & ~used[idx]]
+        rng = keyed_rng(rng_name, r, t)
+        slots = rng.permutation(slots)
+        sources = rng.permutation(sources)
+        m = sources.size  # 유한 원천 수 ≤ 자리 수(유지된 짝이 양쪽에서 같은 수를 뺀다)
+        src[slots[:m]] = sources
+        has_now = src[idx] >= 0
+        v = np.full(idx.size, np.nan)
+        v[has_now] = full[src[idx][has_now]]
+        out[t] = v
+    return out
+
+
 def n3_draw(r: int, k: int = len(FEATURES)) -> tuple[np.ndarray, np.ndarray]:
     """부호 ±1 과 Dirichlet(1,…,1) 가중."""
     rng = keyed_rng("ML-N3", r)

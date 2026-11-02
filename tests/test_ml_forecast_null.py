@@ -103,3 +103,85 @@ def test_n3_scores_shape_and_missing():
 def test_q95_definition():
     assert NL.q95(np.arange(101.0)) == pytest.approx(95.0)
     assert NL.q95(np.array([np.nan, 0.0, 1.0])) == pytest.approx(0.95)
+
+
+@pytest.mark.parametrize("nan_share", [0.0, 0.3])
+def test_n2s_keeps_finite_count_and_value_multiset_every_day(nan_share):
+    U, pred, _ = _world(nan_share=nan_share)
+    days = sorted(U)
+    out = NL.n2s_walk(pred, U, days, 4, N)
+    for t in days:
+        assert np.isfinite(out[t]).sum() == np.isfinite(pred[t]).sum()
+        assert np.array_equal(np.sort(out[t][np.isfinite(out[t])]), np.sort(pred[t][np.isfinite(pred[t])]))
+
+
+def test_n2s_keeps_pairs_while_slot_and_source_stay():
+    """U(t) 가 안 바뀌면 첫날 짝이 끝까지 이어진다 — 값이 바뀌어도 원천을 그대로 따라간다(N2 와 다른 점)."""
+    idx = np.arange(0, 60)
+    rng = np.random.default_rng(1)
+    days = list(range(10))
+    U = {t: idx for t in days}
+    pred = {t: rng.normal(0, 1, idx.size) for t in days}
+    out = NL.n2s_walk(pred, U, days, 2, N)
+    # 첫날 값으로 짝을 복원한다
+    order = {v: j for j, v in enumerate(pred[0])}
+    src0 = np.array([order[v] for v in out[0]])
+    assert not np.array_equal(src0, np.arange(idx.size))
+    for t in days[1:]:
+        assert np.array_equal(out[t], pred[t][src0])
+
+
+def test_n2s_drops_pair_when_source_or_slot_leaves_and_repairs_stored():
+    idx = np.arange(0, 40)
+    rng = np.random.default_rng(2)
+    days = [0, 1, 2]
+    pred = {t: rng.normal(0, 1, idx.size) for t in days}
+    pred[1][5] = np.nan  # 원천 5 가 하루 결측
+    U = {0: idx, 1: idx, 2: idx}
+    out = NL.n2s_walk(pred, U, days, 3, N)
+    assert np.isfinite(out[1]).sum() == idx.size - 1
+    # 그날 끊긴 자리 말고는 이튿날도 첫날 짝 그대로다
+    src0 = np.array([{v: j for j, v in enumerate(pred[0])}[v] for v in out[0]])
+    kept = src0 != 5
+    assert np.array_equal(out[1][kept], pred[1][src0[kept]])
+    assert np.array_equal(out[2][kept], pred[2][src0[kept]])
+
+
+def test_n2s_same_key_same_result_and_grid_separate():
+    U, pred, _ = _world()
+    days = sorted(U)
+    a = NL.n2s_walk(pred, U, days, 9, N)
+    b = NL.n2s_walk(pred, U, days, 9, N)
+    assert all(a[t].tobytes() == b[t].tobytes() for t in days)
+    assert any(a[t].tobytes() != NL.n2s_walk(pred, U, days, 10, N)[t].tobytes() for t in days)
+    # 북 격자는 따로 걷는다 — 부분열의 첫날은 처음부터 다시 짝짓는다
+    sub = days[3:]
+    assert NL.n2s_walk(pred, U, sub, 9, N)[sub[0]].tobytes() != a[sub[0]].tobytes()
+
+
+def test_n2s_is_more_persistent_than_n2():
+    """지속성 주입 — 예측이 지속되면 N2s 는 그 지속성을 N2 보다 많이 남긴다(이 널을 더한 이유)."""
+    rng = np.random.default_rng(5)
+    days = list(range(30))
+    pop = np.arange(150)
+    base = rng.normal(0, 1, pop.size)
+    U, pred = {}, {}
+    for t in days:
+        idx = np.sort(rng.choice(pop, 70, replace=False))
+        U[t] = idx
+        pred[t] = base[idx] + rng.normal(0, 0.1, idx.size)
+    u_star = np.unique(np.concatenate(list(U.values())))
+
+    def rank_ac(series):
+        vals = []
+        for t0, t1 in zip(days[:-1], days[1:]):
+            c, i0, i1 = np.intersect1d(U[t0], U[t1], return_indices=True)
+            a, b = series[t0][i0], series[t1][i1]
+            ok = np.isfinite(a) & np.isfinite(b)
+            vals.append(C.spearman(a[ok], b[ok]))
+        return float(np.mean(vals))
+
+    s = NL.n2s_walk(pred, U, days, 1, N)
+    pi = NL.n2_perm(u_star, 1, N)
+    n2 = {t: NL.n2_assign(pred[t], U[t], pi, 1, t, N)[0] for t in days}
+    assert rank_ac(s) > rank_ac(n2) + 0.1
