@@ -1,4 +1,11 @@
-"""7단계(최적화 북) — α 지도, 먼지 처리, 위험 맞춤, 목표 비중. core ``portfolio.optimize`` 는 부를 때 import 한다."""
+"""7단계(최적화 북) — α 지도, 먼지 처리, 위험 맞춤, 목표 비중. core ``portfolio.optimize`` 는 부를 때 import 한다.
+
+**알려진 결함 — 재사용 전에 고칠 것.** 얼린 칸(거래 불가 보유)이 표류로 종목 상한·업종 밴드를 넘으면 문제가 infeasible 이 되어 그 스텝 전체가 거래를
+멈춘다(B 2022-04-06 k=33 ``solver_fail``). 얼린 칸의 상한·밴드를 분리해 풀어야 하지만 O 숫자가 바뀌므로 B 재현 때문에 고치지 않았다. 새 연구는 이 수정과
+사전등록 정정을 먼저 한다(``docs/PIPELINE.md`` 7단계).
+
+**재현 조건.** O 는 솔버 판에 달린다. ``uv.lock`` 에 cvxpy·clarabel 이 없어 새 환경에서 O 값이 5e-6 안팎 움직였다. R 은 솔버를 안 탄다.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +22,7 @@ from swing_it.core_layers import core_layer
 DUST_EPS = 1e-6     # 해 직후 |w| < max(1e-6, 1주 가격/AUM) 은 0(솔버 먼지)
 FACTOR_ALARM = 0.20  # 사전 능동분산 중 팩터 몫 경보
 LAM_LO, LAM_HI, LAM_ITERS, LAM_TOL = 1e-2, 1e5, 40, 0.02
+BUY_EPS = 1e-6      # 매수 금지 불변식의 솔버 허용오차
 
 
 def rank_z(vals: np.ndarray) -> np.ndarray:
@@ -42,7 +50,11 @@ def capped_rescale(x: np.ndarray, total: float, cap: float | None) -> np.ndarray
     """
     x = np.asarray(x, dtype=np.float64).copy()
     s = x.sum()
-    if s <= 0 or total <= 0:
+    if np.isnan(s) or np.isnan(total):
+        raise ValueError("capped_rescale 에 NaN 이 들어왔다 — 합이 조용히 NaN 이 된다")
+    if total <= 0:
+        return np.zeros_like(x)     # 방이 없다. 입력을 돌려주면 얼린 칸과 합쳐 1 을 넘는다
+    if s <= 0:
         return x
     if cap is None:
         return x * (total / s)
@@ -85,7 +97,7 @@ def clean_dust(w: np.ndarray, price: np.ndarray, aum: float, fixed: np.ndarray,
 
 
 def match_lambda(solve, risk_of, target: float, *, lo: float = LAM_LO, hi: float = LAM_HI, iters: int = LAM_ITERS,
-                 tol: float = LAM_TOL):
+                 tol: float = LAM_TOL, strict: bool = False, statuses: "dict | None" = None):
     """로그 공간 이분법 [1e-2, 1e5], 최대 40회, ±2%. 위험은 λ 에 감소한다.
 
     ``optimal`` 이 아닌 풀이에서 멈추지 않는다(PO-7 MINOR 4): 그 반복은 세고, 가장 가까운 성공 λ 쪽으로 구간을 좁혀 계속한다.
@@ -93,7 +105,15 @@ def match_lambda(solve, risk_of, target: float, *, lo: float = LAM_LO, hi: float
     Returns: ``(res, lam, hit, n_solves, cause)``. 못 맞추면 ``optimal`` 인 반복 중 |log(위험/목표)| 가 가장 작은 것(PO-6), 그것도 없으면
     ``None``. ``cause`` ∈ {"", "solver"(성공 풀이 없음), "up"(모든 성공 풀이의 위험 < 목표 — 하한 λ 에서도 못 올림),
     "down"(모든 성공 풀이의 위험 > 목표), "gap"(목표를 사이에 두었지만 ±2% 창을 못 맞춤 — 위험이 λ 에 불연속)}.
+
+    ``statuses`` 에 사전을 주면 실패 풀이의 ``status`` 별 횟수를 채운다. 목표가 양의 유한수가 아니면 ``ValueError``.
+
+    ``strict`` 는 새 연구용이다. 기본값은 B 재현이다 — ``lam_causes`` 가 B.json 에 있어 라벨을 바꿀 수 없다. ``strict`` 이면 성공 풀이가 없을 때 전부 infeasible 이면
+    "infeasible"(문제 자체), 아니면 "solver" 이고, 실패 풀이가 섞이면 "up"·"down" 대신 "partial" 이다. 실패한 λ 에서 위험이 어땠는지 모르니 "하한에서도 못 올림"을 증명하지 못한다.
     """
+    if not (math.isfinite(target) and target > 0):
+        raise ValueError(f"위험 목표는 양의 유한수여야 한다: {target}")
+    statuses = {} if statuses is None else statuses
     lo, hi = math.log(lo), math.log(hi)
     best, best_gap, best_lam, n = None, math.inf, float("nan"), 0
     below = above = False
@@ -103,6 +123,8 @@ def match_lambda(solve, risk_of, target: float, *, lo: float = LAM_LO, hi: float
         res = solve(lam)
         n += 1
         if not res.ok:
+            status = getattr(res, "status", "failed")
+            statuses[status] = statuses.get(status, 0) + 1
             if best is None:
                 hi = mid  # 성공 풀이가 아직 없으면 작은 λ 쪽부터
             elif best_lam > lam:
@@ -123,6 +145,11 @@ def match_lambda(solve, risk_of, target: float, *, lo: float = LAM_LO, hi: float
             below = True
             hi = mid
     cause = "solver" if best is None else ("gap" if (above and below) else ("up" if below else "down"))
+    if strict and statuses:
+        if best is None:
+            cause = "infeasible" if set(statuses) == {"infeasible"} else "solver"
+        elif cause in ("up", "down"):
+            cause = "partial"
     return best, best_lam, False, n, cause
 
 
@@ -169,12 +196,16 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
         return optimize(alpha + lam * Sb, sub, w_prev, aum=cell.aum, adv_value=adv_won, daily_vol=vol, cost_params=cp_,
                         constraints=con, risk_aversion=lam, solver_opts=solver_opts)
 
-    res, lam, hit, _, cause = match_lambda(solve, lambda w: active_risk(sub, w - b), target)
-    info.update({"lam": lam, "lam_hit": bool(hit), "lam_cause": cause})
+    statuses: dict = {}
+    res, lam, hit, _, cause = match_lambda(solve, lambda w: active_risk(sub, w - b), target, strict=spec.strict_lam_cause, statuses=statuses)
+    info.update({"lam": lam, "lam_hit": bool(hit), "lam_cause": cause, "lam_statuses": statuses})
     if res is None:
         info["status"] = "solver_fail"
         return want, info
     w_sol = np.asarray(res.weights, dtype=np.float64)
+    dw_sol = np.where(no_trade, 0.0, w_sol - w_prev)
+    info["n_buy_outside"] = int(((dw_sol > BUY_EPS) & ~is_el).sum())    # 불변식 재료: 해가 no_buy·참여율을 지켰나
+    info["max_part"] = float((np.abs(dw_sol) * cell.aum / adv_won).max())
     w_clean, n_dust = clean_dust(w_sol, ctx.Cff[P, t], cell.aum, no_trade, cap=max_weight)  # PO-7 M2
     want[P] = w_clean
     info.update({"n_dust": n_dust, "dust_mass": float(np.abs(w_clean - w_sol).sum()) / 2.0})

@@ -34,6 +34,8 @@
 
 **5단계의 한계.** N1(라벨 섞기)은 학습 경로 스모크다. 누출 검사가 아니다. 주입한 누출 6종을 하나도 못 잡았다. 누출은 절단 동일성과 `check_forecast` 로 본다. ML 연구는 닫혔고 `check_forecast` 를 안 부른 채 끝났다. 새 예측 러너는 거래일 달력을 넘겨 부른다.
 
+**7단계 알려진 결함 — 재사용 전에 고칠 것.** 얼린 칸(거래 불가 보유)이 표류로 종목 상한·업종 밴드를 넘으면 문제가 infeasible 이 되어 O 북이 그 스텝을 멈춘다(B 2022-04-06 k=33 `solver_fail`). 얼린 칸을 분리하면 O 숫자가 바뀌어 코드는 고치지 않았다. **사전등록 정정이 필요하다.** 새 연구는 이 수정, `BookSpec(min_names_after_nan=True, strict_lam_cause=True)` 를 함께 켠다. 둘 다 기본 끔은 B 재현 때문이다. `max_turnover` 는 Σ|Δw|(매수 + 매도 합)이고 편도가 아니다. O 재현은 cvxpy·clarabel 판에 달린다. `uv.lock` 에 없어 새 환경에서 5e-6 안팎 움직였다.
+
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
 ## 경계 검사
@@ -46,7 +48,7 @@
 | `check_panels(prices, earnings, end)` | `end` 뒤 가격, 종가 NaN·inf·0·음수, `end` 뒤에 안 실적 행, `end` ≥ 2026-09-14(애프터마켓 오염 — main 의 `read_prices` 는 정규장 값을 만들지 못한다) |
 | `check_signal(sig)` | inf, 전부 NaN |
 | `check_forecast(df, horizon, calendar)` | 학습 구간 안 예측, `train_end` 뒤 거래일 `horizon` 일(마지막 라벨일까지의 거래일 수) 안의 예측, 거래일이 아닌 날짜 |
-| `check_weights(w, codes)` | 음수, 합 초과, NaN, 코드 중복 |
+| `check_weights(w, codes)` | 빈 배열, 숫자가 아닌 값, 음수, 합 초과, NaN, 코드 중복 |
 | `check_attribution(frame, names)` | 기여 합과 total 의 차이 |
 
 **보증하지 않는 것.** `check_panels` 는 알게 된 날 규칙을 모른다. 실적을 쓸 수 있는 첫날은 max(`avail_date`, 정기보고서 첫 접수일) 다음 거래일이고, 신호를 `yoy_strict_wide` 로 만들어야 지켜진다.

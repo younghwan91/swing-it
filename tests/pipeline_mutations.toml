@@ -635,3 +635,27 @@ guards = ["tests/test_book_units.py::test_model_key_changes_with_every_input"]
 file = "src/swing_it/book/riskmodel.py"
 find = "    h.update(json.dumps({\"need\": sorted(int(t) for t in need), \"vra\": vra, \"shrink\": shrink}).encode())\n"
 replace = ""
+
+[[mutation]]
+id = "lambda-target-unchecked"
+why = "NaN 목표는 40번을 다 풀고 solver 실패로 둔갑한다 — 입력 오류가 가려진다"
+guards = ["tests/test_book_units.py::test_match_lambda_refuses_a_target_it_cannot_aim_at"]
+file = "src/swing_it/book/optimized.py"
+find = "    if not (math.isfinite(target) and target > 0):"
+replace = "    if False:"
+
+[[mutation]]
+id = "invariant-ignores-no-buy"
+why = "해가 no_buy 종목을 사도 모르면 '적격 안에서만 매수'가 말뿐이다"
+guards = ["tests/test_book_units.py::test_invariants_catch_a_buy_outside_the_universe_and_a_participation_breach"]
+file = "src/swing_it/book/accounting.py"
+find = "            if r.n_buy_outside:"
+replace = "            if False:"
+
+[[mutation]]
+id = "rescale-to-no-room-returns-input"
+why = "방이 없는데 입력을 돌려주면 얼린 칸과 합쳐 비중 합이 1 을 넘는다"
+guards = ["tests/test_book_units.py::test_capped_rescale_to_nothing_is_nothing"]
+file = "src/swing_it/book/optimized.py"
+find = "        return np.zeros_like(x)     # 방이 없다. 입력을 돌려주면 얼린 칸과 합쳐 1 을 넘는다"
+replace = "        return x"

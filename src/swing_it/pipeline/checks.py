@@ -123,9 +123,14 @@ def check_forecast(df: pd.DataFrame, horizon: int, calendar: Any) -> None:
 
 def check_weights(w: Any, codes: Any = None, *, budget: float = 1.0, tol: float = 1e-6) -> None:
     """7단계. 롱온리, 합 ≤ ``budget``(나머지는 현금), NaN·inf 없음. ``codes`` 를 주면 길이·중복을 본다."""
-    arr = np.asarray(w, dtype=np.float64)
+    try:
+        arr = np.asarray(w, dtype=np.float64)
+    except (TypeError, ValueError) as e:
+        raise CheckError(f"비중은 숫자여야 한다: {e}") from None
     if arr.ndim != 1:
         raise CheckError(f"비중은 1차원이어야 한다: {arr.shape}")
+    if arr.size == 0:
+        raise CheckError("비중이 비었다 — 전부 현금이면 0 인 칸을 넘긴다")
     if not np.isfinite(arr).all():
         raise CheckError("비중에 NaN·inf 가 있다")
     if (arr < -tol).any():

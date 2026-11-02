@@ -106,8 +106,7 @@ def run(inputs: dict, *, costs: bool, n_null: int = 5) -> dict:
     net = oos(step_returns(recs, 2.0), WINDOW)
     factor = np.column_stack([net["bench"].to_numpy()])
     nulls = permutation_nulls(ctx, PRIMARY, None, None, workers=1, n=n_null, window=WINDOW, spec=SPEC, kinds=("R",), flags=flags)
-    # 널의 불변식은 비용을 끈 경로에서 비용 칸을 본다 — 거기서는 비용/회전 위반만 따로 뺀다
-    null_viol = [v for v in nulls["violations"] if costs or "비용/회전" not in v]
+    null_viol = nulls["violations"]
     return {"recs": recs, "summary": book_summary(recs, WINDOW, (2020, 2021), ann=ANN), "violations": violations + null_viol,
             "alpha": ols_hac(net["net"].to_numpy(), factor), "null_ir": nulls["R"], "ic_days": ic_days, "fold_ic": fold,
             "signal_info": sig_info, "eligible_first": eligible_at(grid[0])}

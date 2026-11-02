@@ -13,16 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from book_fixtures import synthetic_ctx  # noqa: E402
 
 from swing_it.book.accounting import check_invariants, simulate  # noqa: E402
-from swing_it.book.context import models_from_mask  # noqa: E402
+from swing_it.book.context import StepRec, models_from_mask  # noqa: E402
 from swing_it.book.costs import COMMISSION_BP, linear_bp, trailing_vol  # noqa: E402
 from swing_it.book.metrics import holding_intervals, ir, oos, payoff_ratio, step_returns  # noqa: E402
-from swing_it.book.optimized import capped_rescale, clean_dust, rank_z  # noqa: E402
+from swing_it.book.optimized import capped_rescale, clean_dust, match_lambda, rank_z  # noqa: E402
 from swing_it.book.rank import tranche_names  # noqa: E402
 from swing_it.book.risk import Sub, active_risk, sub_model  # noqa: E402
-from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Flags  # noqa: E402
+from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Cell, Flags  # noqa: E402
 from swing_it.engine.panels import ffill_axis1  # noqa: E402
 from swing_it.features.earnings_asof import REPRODUCE_B, load_yoy_strict, yoy_strict_wide  # noqa: E402
 from swing_it.features.universe import m0_mask, rank_band_eligible, u_exclusion, u_exclusion_causes  # noqa: E402
+from swing_it.pipeline.checks import CheckError, check_weights  # noqa: E402
 from swing_it.storage import connect, read_periodic_filings  # noqa: E402
 from swing_it.validation.ic import fold_ic  # noqa: E402
 from swing_it.validation.keys import SEED, keyed_rng  # noqa: E402
@@ -473,3 +474,106 @@ def test_model_key_changes_with_every_input():
         v[0, 0] = {"R": 9.0, "cap": 9.0, "msk": False, "lab": "b"}[key]
         assert base != model_key({**c, key: v}, [6], shrink=0.1), key
     assert base != model_key({**c, "Xs": {"size": c["Xs"]["size"] + 1}}, [6], shrink=0.1)
+
+
+# --- 7 포트폴리오 ---
+
+class _Res:
+    def __init__(self, status, w=1.0):
+        self.status, self.ok, self.weights = status, status == "optimal", np.array([w])
+
+
+def _risk(w):
+    return float(w[0])
+
+
+def test_match_lambda_refuses_a_target_it_cannot_aim_at():
+    """NaN 목표는 모든 비교가 거짓이라 40번을 다 풀고 "solver" 로 끝났다. 원인이 가려진다."""
+    for target in (float("nan"), float("inf"), 0.0, -1.0):
+        with pytest.raises(ValueError, match="목표"):
+            match_lambda(lambda lam: _Res("optimal"), _risk, target)
+
+
+def test_match_lambda_keeps_the_status_of_each_failed_solve():
+    seen: dict = {}
+    n = [0]
+
+    def solve(lam):
+        n[0] += 1
+        return _Res("infeasible") if n[0] % 2 else _Res("solver_error")
+
+    out = match_lambda(solve, _risk, 1.0, statuses=seen)
+    assert out[0] is None and out[4] == "solver"
+    assert seen == {"infeasible": 20, "solver_error": 20}
+
+
+def test_strict_causes_separate_infeasible_and_do_not_call_a_failed_search_up():
+    """기본값은 B 재현이다(원인 라벨이 B.json 에 있다). 새 연구는 ``strict=True``."""
+    infeasible = lambda lam: _Res("infeasible")  # noqa: E731
+    assert match_lambda(infeasible, _risk, 1.0)[4] == "solver"
+    assert match_lambda(infeasible, _risk, 1.0, strict=True)[4] == "infeasible"
+    assert match_lambda(lambda lam: _Res("solver_error"), _risk, 1.0, strict=True)[4] == "solver"
+
+    n = [0]
+
+    def half_failed(lam):
+        n[0] += 1
+        return _Res("optimal", 0.1) if n[0] % 2 else _Res("infeasible")
+
+    assert match_lambda(half_failed, _risk, 1.0)[4] == "up"
+    n[0] = 0
+    assert match_lambda(half_failed, _risk, 1.0, strict=True)[4] == "partial", "실패 풀이가 있으면 '하한에서도 못 올림'을 증명하지 못한다"
+    assert match_lambda(lambda lam: _Res("optimal", 0.1), _risk, 1.0, strict=True)[4] == "up"
+
+
+@pytest.mark.parametrize("total", [0.0, -0.1])
+def test_capped_rescale_to_nothing_is_nothing(total):
+    """방이 0 이하인데 입력을 그대로 돌려주면 얼린 칸과 합쳐 비중 합이 1 을 넘는다."""
+    np.testing.assert_array_equal(capped_rescale(np.array([0.2, 0.1]), total, 0.1), [0.0, 0.0])
+    np.testing.assert_array_equal(capped_rescale(np.array([0.2, 0.1]), total, None), [0.0, 0.0])
+
+
+def test_capped_rescale_refuses_nan():
+    with pytest.raises(ValueError, match="NaN"):
+        capped_rescale(np.array([0.2, np.nan]), 1.0, 0.5)
+
+
+def test_tranche_min_names_after_nan_is_opt_in_with_the_reproduction_default():
+    """널의 순열 NaN 을 뺀 뒤 ``min_names`` 를 다시 보는 것이 옳지만 B 의 R 널 숫자가 바뀐다. 그래서 기본은 재현, 새 연구는 켠다."""
+    n = 30
+    sig = np.ones((n, 1))
+    adv, cap, in_u = np.full((n, 1), 30000.0), np.arange(n, 0, -1.0)[:, None], np.ones(n, bool)
+    rank = np.full((n, 1), np.nan)
+    rank[:5, 0] = np.arange(5.0)
+    assert list(tranche_names(0, rank, sig, adv, cap, in_u, 3, 20, cap_rank=(0, n))) == [4, 3, 2]
+    assert tranche_names(0, rank, sig, adv, cap, in_u, 3, 20, cap_rank=(0, n), min_after_nan=True) is None
+    assert list(tranche_names(0, sig, sig, adv, cap, in_u, 3, 20, cap_rank=(0, n), min_after_nan=True)) == [0, 1, 2]
+
+
+def test_simulate_passes_the_min_names_option_to_the_rank_book():
+    ctx = synthetic_ctx(0)
+    rank = np.full_like(ctx.sig, np.nan)
+    rank[-3:] = 1.0
+    off = simulate(ctx, "R", flags=NO_COSTS, rank_sig=rank)
+    on = simulate(ctx, "R", flags=NO_COSTS, rank_sig=rank, spec=BookSpec(min_names_after_nan=True))
+    assert any(r.n_names for r in off) and not any(r.n_names for r in on)
+
+
+@pytest.mark.parametrize("w,match", [([], "비었다"), (["a", "b"], "숫자"), ([0.5, None], "숫자|NaN"), ([[0.5]], "1차원")])
+def test_check_weights_refuses_shapes_it_used_to_crash_on_or_pass(w, match):
+    with pytest.raises(CheckError, match=match):
+        check_weights(w)
+
+
+def _inv_rec(**kw):
+    base = dict(k=5, t=0, date="2020-01-02", gross=0.0, cost1=0.0, bench=0.0, turnover=0.0, exante_20=0.0, factor_share=0.0, cash=0.0,
+                contrib=[(0, 1.0, 0.0, 0.0)], n_names=1, status="optimal")
+    return StepRec(**{**base, **kw})
+
+
+def test_invariants_catch_a_buy_outside_the_universe_and_a_participation_breach():
+    cell = Cell()
+    assert check_invariants([_inv_rec()], "O", cell) == []
+    assert any("매수 금지" in v for v in check_invariants([_inv_rec(n_buy_outside=2)], "O", cell))
+    assert any("참여율" in v for v in check_invariants([_inv_rec(max_part=0.06)], "O", cell))
+    assert check_invariants([_inv_rec(max_part=0.05)], "O", cell) == []

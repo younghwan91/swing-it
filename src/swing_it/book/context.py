@@ -88,6 +88,9 @@ class StepRec:
     f: int = -1  # 체결일 열
     f_next: int = -1  # 다음 체결일 열(스텝 끝)
     lam_cause: str = ""
+    lam_statuses: dict = field(default_factory=dict)  # 실패 풀이의 status 별 횟수(보고만)
+    n_buy_outside: int = 0  # O: 해가 no_buy 종목을 산 수(불변식)
+    max_part: float = float("nan")  # O: 해의 max |Δw|·AUM/ADV(불변식)
     n_tranches: int = 0  # R: 활성 트랜치 수
     cash: float = 0.0  # 체결 뒤 현금 비중
     min_w: float = 0.0

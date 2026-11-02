@@ -10,10 +10,12 @@ from swing_it.features.universe import rank_band_eligible
 
 
 def tranche_names(t, rank_sig, sig, adv, cap, in_u, top_n=DEFAULT_SPEC.top_n, min_names=DEFAULT_SPEC.min_names, *,
-                  adv_floor=DEFAULT_SPEC.adv_floor, cap_rank=DEFAULT_SPEC.cap_rank):
+                  adv_floor=DEFAULT_SPEC.adv_floor, cap_rank=DEFAULT_SPEC.cap_rank, min_after_nan: bool = False):
     """트랜치 = eligible(t) 의 신호 상위 ``top_n`` (core ``staggered_tranche_backtest.book`` 과 같은 정렬).
 
     ``rank_sig`` 는 순위에 쓰는 신호(진짜 또는 순열), 적격은 진짜 신호 ``sig`` 로 정한다(널에서 신호만 섞는다). 순열 값이 NaN 인 적격 종목은 고르지 않는다.
+
+    ``min_after_nan`` 은 NaN 을 뺀 뒤 ``min_names`` 를 다시 본다. 널에서 고를 종목이 몇 개 안 남은 트랜치를 없애는 쪽이 옳지만 B 의 R 널 숫자가 바뀌어 기본은 끔이다(재현). 새 연구는 켠다(``BookSpec.min_names_after_nan``).
     """
     el = rank_band_eligible(t, sig, adv, cap, in_u, adv_floor=adv_floor, cap_rank=cap_rank)
     if el.size < min_names:
@@ -22,6 +24,8 @@ def tranche_names(t, rank_sig, sig, adv, cap, in_u, top_n=DEFAULT_SPEC.top_n, mi
     vals = rank_sig[idx, t]
     keep = np.isfinite(vals)
     idx, vals = idx[keep], vals[keep]
+    if min_after_nan and idx.size < min_names:
+        return None
     return idx[np.argsort(-vals)[:top_n]]
 
 

@@ -61,7 +61,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             rec.u_excl_cap_missing, rec.u_excl_model, rec.cap_missing_in_u = why["cap_missing"], why["risk_model"], why["cap_missing_in_u"]
         if kind == "R":
             tranches[k] = tranche_names(t, rank_sig, ctx.sig, ctx.adv, ctx.cap, in_u, spec.top_n, spec.min_names,
-                                        adv_floor=spec.adv_floor, cap_rank=spec.cap_rank)
+                                        adv_floor=spec.adv_floor, cap_rank=spec.cap_rank, min_after_nan=spec.min_names_after_nan)
         # 결정일 t 의 표류 비중
         val_t = np.where(u > 0, u * Cff[:, t], 0.0)
         nav_t = val_t.sum() + cash
@@ -191,7 +191,7 @@ def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_w
     """성과와 무관한 불변식(스텝마다). 위반 문장 목록을 돌려준다(비면 통과). 러너는 하나라도 있으면 결과를 쓰지 않는다.
 
     - Σw + 현금 = 1, w ≥ −ε. O: (거래 가능·안 얼린 종목) max w ≤ 상한 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례 + 먼지),
-      구축 뒤 회전율 ≤ 상한 + 표류·폐지 + 강제 매도 + 재비례 + 2·먼지.
+      구축 뒤 회전율 ≤ 상한 + 표류·폐지 + 강제 매도 + 재비례 + 2·먼지. 해는 no_buy 종목을 사지 않고 참여율 상한을 지킨다.
     - 비용: cost1 ≥ 0, 회전이 있으면 cost1/회전 ∈ [1.5bp, 300bp](1배).
     - R: 예열 뒤(k ≥ n−1) 활성 트랜치 n.
     """
@@ -218,6 +218,10 @@ def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_w
                 out.append(f"{tag} 업종 편차 {r.sector_dev:.6f} > 허용 {r.sector_tol:.6f}")
             if np.isfinite(r.turn_bound) and r.turnover > r.turn_bound:
                 out.append(f"{tag} 회전율 {r.turnover:.6f} > 한도 {r.turn_bound:.6f}")
+            if r.n_buy_outside:
+                out.append(f"{tag} 매수 금지 종목 {r.n_buy_outside}개를 샀다")
+            if np.isfinite(r.max_part) and r.max_part > spec.max_participation + INV_EPS:
+                out.append(f"{tag} 참여율 {r.max_part:.6f} > {spec.max_participation}")
         if kind == "R" and r.k >= spec.n_tranches - 1 and r.n_tranches != spec.n_tranches:
             out.append(f"{tag} 활성 트랜치 {r.n_tranches} ≠ {spec.n_tranches}")
     return out

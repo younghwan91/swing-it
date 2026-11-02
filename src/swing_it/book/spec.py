@@ -18,8 +18,10 @@ class BookSpec:
     adv_floor: float = RANK_BAND_ADV_FLOOR
     cap_rank: tuple[int, int] = RANK_BAND
     max_weight: float = 0.10        # O 종목 상한
-    max_turnover: float = 2.0 / 3.0  # O 편도 회전율 상한
+    max_turnover: float = 2.0 / 3.0  # O 회전율 상한 Σ|Δw|(매수 + 매도 합이다. 편도가 아니다)
     max_participation: float = 0.05  # O 참여율 상한
+    min_names_after_nan: bool = False  # 순열 NaN 을 뺀 뒤 min_names 를 다시 본다. 새 연구는 켠다(끔 = B 재현)
+    strict_lam_cause: bool = False  # λ 실패 원인 분리(match_lambda strict). 새 연구는 켠다(끔 = B 재현)
 
     @property
     def n_tranches(self) -> int:
