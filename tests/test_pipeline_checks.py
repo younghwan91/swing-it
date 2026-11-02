@@ -45,13 +45,17 @@ def _forecast(date="2020-03-03", train_end="2020-01-02", forecast=0.1):
 CAL = pd.bdate_range("2019-12-02", "2020-06-30")
 
 
+def _attr(**kw):
+    return pd.DataFrame({"date": ["d"], "f": [0.1], "specific": [0.1], "total": [0.2], **kw})
+
+
 def test_valid_inputs_pass():
     check_universe(_universe())
     check_panels(_prices(), _earnings(), "2020-01-03")
     check_signal(np.array([[1.0, np.nan]]))
     check_forecast(_forecast(), 20, CAL)
     check_weights([0.5, 0.5], ["A", "B"])
-    check_attribution(pd.DataFrame({"date": ["d"], "f": [0.1], "specific": [0.1], "total": [0.2]}), ("f",))
+    check_attribution(_attr(), ("f",), [0.2])
 
 
 @pytest.mark.parametrize("call,match", [
@@ -91,7 +95,12 @@ def test_valid_inputs_pass():
     (lambda: check_weights([np.nan]), "NaN"),
     (lambda: check_weights([0.1, 0.1], ["A", "A"]), "중복"),
     (lambda: check_weights([0.1, 0.1], ["A"]), "길이"),
-    (lambda: check_attribution(pd.DataFrame({"date": ["d"], "f": [0.1], "specific": [0.1], "total": [0.3]}), ("f",)), "기여 합"),
+    (lambda: check_attribution(_attr(total=[0.3]), ("f",), [0.3]), "기여 합"),
+    (lambda: check_attribution(_attr(), ("f",), [0.25]), "실제 수익"),
+    (lambda: check_attribution(_attr(), ("f",), [0.2, 0.2]), "길이"),
+    (lambda: check_attribution(_attr(), ("f",), [np.nan]), "actual"),
+    (lambda: check_attribution(_attr(f=[np.nan], total=[np.nan]), ("f",), [0.2]), "NaN"),
+    (lambda: check_attribution(_attr(specific=[np.inf], total=[np.inf]), ("f",), [0.2]), "NaN"),
 ], ids=lambda x: x if isinstance(x, str) else "")
 def test_violation_is_refused(call, match):
     with pytest.raises(CheckError, match=match):
@@ -101,6 +110,13 @@ def test_violation_is_refused(call, match):
 def test_aftermarket_window_has_no_way_around():
     """"처리했다"고 말하는 인자는 없다 — main 의 read_prices 는 정규장 값을 만들지 못한다."""
     assert "handled" not in check_panels.__code__.co_varnames
+
+
+def test_attribution_can_be_true_to_itself_and_wrong_about_the_book():
+    """옛 검사는 total 이 Σ 칸인지만 봤다. core 가 total 을 그렇게 만드니 동어반복이었다. 실제 수익과 대조해야 뜻이 있다."""
+    check_attribution(_attr(), ("f",), [0.21], actual_atol=0.02)
+    with pytest.raises(CheckError, match="실제 수익"):
+        check_attribution(_attr(), ("f",), [0.21])
 
 
 def test_forecast_overlap_counts_trading_days_not_weekdays():

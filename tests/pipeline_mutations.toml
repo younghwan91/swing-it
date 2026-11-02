@@ -747,3 +747,11 @@ guards = ["tests/test_pipeline_gate.py::test_a_line_separator_in_a_quote_does_no
 file = "src/swing_it/pipeline/gate.py"
 find = "    lines = path.read_text(encoding=\"utf-8\").split(\"\\n\")\n"
 replace = "    lines = path.read_text(encoding=\"utf-8\").splitlines() + [\"\"]\n"
+
+[[mutation]]
+id = "attribution-only-checks-its-own-sum"
+why = "total = Σ 칸은 core 가 늘 그렇게 만든다. 실제 수익과 안 맞대면 검사가 동어반복이다"
+guards = ["tests/test_pipeline_checks.py::test_attribution_can_be_true_to_itself_and_wrong_about_the_book"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if worst > actual_atol:"
+replace = "    if False:"

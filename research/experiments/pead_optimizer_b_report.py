@@ -21,6 +21,7 @@ from krx_quant_core.risk.attribution import factor_attribution
 from krx_quant_core.stats.sharpe import deflated_sharpe_from_sample, t_haircut
 
 from swing_it.diagnostics.hac import NW_LAG, nw_t_rows, ols_hac
+from swing_it.pipeline.checks import check_attribution
 
 __all__ = ["NW_LAG", "ols_hac"]  # 옮긴 구현을 이 이름으로 부르는 러너가 있다
 
@@ -215,17 +216,22 @@ def step_active_weights(ctx, r, el: np.ndarray) -> tuple[np.ndarray, np.ndarray,
     return rows, days, W
 
 
-def attribution_report(ctx, recs, fr, prep, eligible_of) -> dict:
+def attribution_report(ctx, recs, fr, prep, eligible_of, *, detail: bool = False, actual_atol: float = 0.05) -> dict:
     """스텝 능동수익(비용 전)을 core ``factor_attribution`` 으로 팩터·특이로 나눈다.
 
     - 날짜 d 비중 = 체결 뒤 비중의 표류(북) − 벤치 표류, 노출 = d−1 열, f·u = ``factor_returns`` (가드 뒤 수익, v4 와 같은 X).
     - 쥔 종목의 u 또는 노출이 그날 결측이면 그 종목-날은 비중 0 으로 두고 센다(정지·마스크 밖 — 그날 수익 없음).
     - 몫: 분산 몫 = var(s)/(var(φ)+var(s)) (공분산 따로), 평균 몫 = mean(s)/mean(φ+s). 묶음별 평균(시장·업종·스타일).
+    - ``detail``(새 연구용, 기본 끔은 B.json 재현): 스텝마다 ``check_attribution`` 으로 귀속 합을 실제 수익과 대조(``actual_atol``)하고, 부호 있는 평균 차와
+      실제 수익 기준 특이 몫을 더한다. 평균 몫의 분모는 귀속 합이라 실제 수익 기준과 다르다(B: 0.896 대 0.806).
+
+    **백테스트 전용이다.** 전진 모니터링 경로는 아직 없다(``docs/PIPELINE.md`` 11단계).
     """
     names = list(fr.names)
     groups = {"market": [n for n in names if n == "market"], "sector": [n for n in names if n not in prep["Xs"] and n != "market"],
               "style": [n for n in names if n in prep["Xs"]]}
     phi, spec, gross_act, tot_sum, zeroed = [], [], [], [], 0
+    frames = []
     gsum = {g: [] for g in groups}
     for r in recs:
         if r.f_next <= r.f:
@@ -247,10 +253,18 @@ def attribution_report(ctx, recs, fr, prep, eligible_of) -> dict:
         for g, cols in groups.items():
             gsum[g].append(float(a[cols].to_numpy().sum()) if cols else 0.0)
         gross_act.append(r.gross - r.bench)
+        if detail:
+            frames.append({"date": r.date, **{n: float(a[n].sum()) for n in names}, "specific": spec[-1], "total": tot_sum[-1]})
     phi, spec = np.array(phi), np.array(spec)
     vs, vf = float(np.var(spec, ddof=1)), float(np.var(phi, ddof=1))
     tot = phi + spec
-    return {"n_steps": int(phi.size), "specific_share_var": vs / (vs + vf) if vs + vf > 0 else float("nan"),
+    extra = {}
+    if detail:
+        check_attribution(pd.DataFrame(frames), names, gross_act, atol=1e-9, actual_atol=actual_atol)
+        act = float(np.mean(gross_act))
+        extra = {"mean_actual": act, "signed_gap_mean": float(np.mean(np.array(tot_sum) - np.array(gross_act))),
+                 "specific_share_of_actual": float(spec.mean() / act) if act != 0 else float("nan")}
+    return {**extra, "n_steps": int(phi.size), "specific_share_var": vs / (vs + vf) if vs + vf > 0 else float("nan"),
             "cov_phi_spec": float(np.cov(phi, spec, ddof=1)[0, 1]) if phi.size > 1 else float("nan"),
             "mean_factor": float(phi.mean()), "mean_specific": float(spec.mean()),
             "specific_share_mean": float(spec.mean() / tot.mean()) if tot.mean() != 0 else float("nan"),

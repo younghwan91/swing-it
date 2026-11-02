@@ -18,7 +18,7 @@
 | 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` | `swing_it.book.costs` |
 | 9 | 백테스트 | `simulate`·`check_invariants`·`book_summary`, `full_parity`, `permutation_nulls`, `ols_hac` | `swing_it.book.accounting`·`metrics`·`parity`·`nulls`, `swing_it.diagnostics.hac` |
 | 10 | 주문 실행 | main 에 없음 — `docs/execution/DESIGN.md` | 먼저 dry-run. 실주문 경로의 첫 문장은 `require_execution_approval` 이다(린트 (l)). 아래 **게이트가 막지 못하는 주문** 참고 |
-| 11 | 성과 기여·모니터링 | `attribution_report`, core `factor_attribution` | `research/experiments/pead_optimizer_b_report.py` |
+| 11 | 성과 기여·모니터링 | `attribution_report`, core `factor_attribution` | `research/experiments/pead_optimizer_b_report.py`. **백테스트 전용, 전진 모니터링 미구현** |
 
 북의 규칙은 `swing_it.book.spec.BookSpec` 으로 넘긴다. 기본값은 PEAD 단계 B 사전등록 값이다. 판정 바(`verdict`)는 연구마다 사전등록하므로 러너에 남는다.
 
@@ -40,6 +40,8 @@
 
 **8단계 비용의 한계.** KOSPI 반스프레드 5bp 는 2017~22 틱 하한 미만이다. 1배는 그 구간에서 낙관이고 2배가 덮는다(B 영향 상한 4.4bp). 2배는 세금까지 두 배다. ADV 는 core `_trailing_adv` 가 관측 1개로도 평균을 내므로 새 연구는 `trailing_adv(min_obs=ADV_MIN_OBS)` 를 쓴다(B 재현은 그대로). core 쪽 메모(이 PR 범위 밖): `costs/impact.py` 의 ADV 가드는 하한뿐이라 원을 다시 ×1e6 한 값이 통과한다. `costs/tax.py` 의 시행일은 2차 출처다.
 
+**11단계의 범위.** 전진 모니터링은 구현되지 않았다. 귀속은 백테스트 전용이다. core `load_risk_inputs` 가 `end` ≥ 2026-09-14 를 거부하므로 지금 경로로는 전진 구간을 귀속할 수 없다. 페이퍼 장부 경보는 quant-airflow paper-monitor 쪽 일이다. 11단계가 열려도 볼 것이 없다는 뜻이다. `attribution_report` 의 평균 몫은 귀속 합이 분모다(B: 0.896). 실제 수익 기준(0.806)과 부호 있는 차는 `detail=True` 로 낸다. 기본 끔은 B 재현 때문이다. core `rolling_ic` 의 `date` 는 신호일이고 라벨이 끝나 알게 된 날이 아니다. 모니터링에 쓰면 h+1 거래일을 미뤄 읽는다.
+
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
 ## 경계 검사
@@ -53,7 +55,7 @@
 | `check_signal(sig)` | inf, 전부 NaN |
 | `check_forecast(df, horizon, calendar)` | 학습 구간 안 예측, `train_end` 뒤 거래일 `horizon` 일(마지막 라벨일까지의 거래일 수) 안의 예측, 거래일이 아닌 날짜 |
 | `check_weights(w, codes)` | 빈 배열, 숫자가 아닌 값, 음수, 합 초과, NaN, 코드 중복 |
-| `check_attribution(frame, names)` | 기여 합과 total 의 차이 |
+| `check_attribution(frame, names, actual)` | NaN·inf, 기여 합과 total 의 차이, total 과 실제 수익의 차이(`actual_atol`) |
 
 **보증하지 않는 것.** `check_panels` 는 알게 된 날 규칙을 모른다. 실적을 쓸 수 있는 첫날은 max(`avail_date`, 정기보고서 첫 접수일) 다음 거래일이고, 신호를 `yoy_strict_wide` 로 만들어야 지켜진다.
 

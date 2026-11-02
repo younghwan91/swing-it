@@ -145,9 +145,24 @@ def check_weights(w: Any, codes: Any = None, *, budget: float = 1.0, tol: float 
             raise CheckError("codes 가 중복이다")
 
 
-def check_attribution(frame: pd.DataFrame, names: Sequence[str]) -> None:
-    """11단계. date·<팩터…>·specific·total. 날짜마다 total = Σ 팩터 + specific — 설명 안 된 몫이 숨지 않는다."""
+def check_attribution(frame: pd.DataFrame, names: Sequence[str], actual: Any, *, atol: float = 1e-9, actual_atol: float = 1e-9) -> None:
+    """11단계. date·<팩터…>·specific·total, 날짜마다 total = Σ 팩터 + specific, 그리고 total 이 ``actual``(실제 수익, 같은 순서)과 맞는가.
+
+    앞의 항등식은 core 가 total 을 그렇게 만들어 늘 참이다. 설명 안 된 몫이 숨는 곳은 total 과 실제 수익 사이다. 일 단리 합과 복리 스텝 수익을 맞대면
+    차이가 있으니 ``actual_atol`` 을 넉넉히 주되 부호 있는 차를 함께 보고한다(``attribution_report(detail=True)``). NaN·inf 는 거부한다.
+    """
     _long_frame(frame, ("date", *names, "specific", "total"), "attribution", key=("date",))
-    parts = frame[[*names, "specific"]].to_numpy(dtype=np.float64).sum(axis=1)
-    if not np.allclose(parts, frame["total"].to_numpy(dtype=np.float64), atol=1e-9, equal_nan=True):
+    cells = frame[[*names, "specific"]].to_numpy(dtype=np.float64)
+    total = frame["total"].to_numpy(dtype=np.float64)
+    if not (np.isfinite(cells).all() and np.isfinite(total).all()):
+        raise CheckError("attribution 에 NaN·inf 가 있다 — 그 몫이 합에서 조용히 빠진다")
+    if not np.allclose(cells.sum(axis=1), total, rtol=0.0, atol=atol):
         raise CheckError("기여 합이 total 과 다르다 — 설명 안 된 몫이 숨었다")
+    act = np.asarray(actual, dtype=np.float64)
+    if act.shape != total.shape:
+        raise CheckError(f"actual 길이 {act.shape} 가 attribution {total.shape} 과 다르다")
+    if not np.isfinite(act).all():
+        raise CheckError("actual 에 NaN·inf 가 있다")
+    worst = float(np.abs(total - act).max())
+    if worst > actual_atol:
+        raise CheckError(f"귀속 합이 실제 수익과 다르다 — 최대 차 {worst:.6f} > {actual_atol}")
