@@ -34,6 +34,7 @@ SIGMA_WIN = 63
 TAIL_ROWS = 10
 LIMIT_CHANGE = np.datetime64("2015-06-15")
 MOM_STEP = 20
+TICK_REFORM = date(2023, 1, 25)
 BAD_ADJ_RATIO = 0.02           # 정정 SC-2: 수정가/원가 < 2% 칸은 자료 오류(008080 수정가 1원)
 
 # 이름 거르개. '리츠' 는 메리츠를 잡지 않게 앞 글자를 본다.
@@ -70,8 +71,13 @@ def market_group(label: "str | None") -> str:
     raise ValueError(f"모르는 시장 라벨: {label!r}")
 
 
-def tick_size(raw: float, market: str) -> float:
-    """2023-01-25 개편 전 호가표(표본은 전부 그 전). 코스닥 5만원 이상은 100원."""
+def tick_size(raw: float, market: str, day: "date | None" = None) -> float:
+    """그 날의 호가단위. 2023-01-25 개편 전 표(코스닥 5만원 이상 100원), 뒤는 두 시장 공통 표. ``day`` 없으면 개편 전."""
+    if day is not None and day >= TICK_REFORM:
+        for hi, t in ((2000, 1), (5000, 5), (20000, 10), (50000, 50), (200000, 100), (500000, 500)):
+            if raw < hi:
+                return float(t)
+        return 1000.0
     for hi, t in ((1000, 1), (5000, 5), (10000, 10), (50000, 50)):
         if raw < hi:
             return float(t)
@@ -83,10 +89,10 @@ def tick_size(raw: float, market: str) -> float:
     return 1000.0
 
 
-def half_spread_bp(adv_m: float, raw: float, market: str) -> float:
+def half_spread_bp(adv_m: float, raw: float, market: str, day: "date | None" = None) -> float:
     """반스프레드 = max(ADV 구간 폴백, 호가 하한). 원 가격이 없으면 호가 하한 25bp."""
     fb = next(hs for hi, hs in FALLBACK_HS if adv_m < hi)
-    floor = tick_size(raw, market) / (2.0 * raw) * 1e4 if np.isfinite(raw) and raw > 0 else 25.0
+    floor = tick_size(raw, market, day) / (2.0 * raw) * 1e4 if np.isfinite(raw) and raw > 0 else 25.0
     return max(fb, floor)
 
 
@@ -99,7 +105,7 @@ def cost_one_way(side: str, day: date, market: str, adv_m: float, sigma: float, 
                  order_won: float = ORDER_WON) -> float:
     """편도 1배 비용(분수). 수수료 + 매도세(매도만) + 반스프레드 + 충격."""
     tax = sell_tax_rate(day, market) * 1e4 if side == "SELL" else 0.0
-    return (COMMISSION_BP + tax + half_spread_bp(adv_m, raw, market) + impact_bp(order_won, adv_m, sigma)) * 1e-4
+    return (COMMISSION_BP + tax + half_spread_bp(adv_m, raw, market, day) + impact_bp(order_won, adv_m, sigma)) * 1e-4
 
 
 def _roll(a: np.ndarray, win: int, min_obs: int, how: str) -> np.ndarray:
@@ -124,6 +130,7 @@ class Panel:
     r: np.ndarray = field(init=False)
     Cb: np.ndarray = field(init=False)
     Cp: np.ndarray = field(init=False)
+    sig_start: str = SIG_START
 
     def __post_init__(self) -> None:
         N, T = self.C.shape
@@ -186,7 +193,7 @@ class Panel:
         self.TP = np.where(ok, (self.H + self.L + self.C) / 3.0, self.C)
         self.LOWPX = np.where(ok, self.L, self.C)
         self.exit_days = [np.flatnonzero(self.X[i]) for i in range(N)]
-        self.sig_t0 = int(np.searchsorted(self.dates, np.datetime64(SIG_START)))
+        self.sig_t0 = int(np.searchsorted(self.dates, np.datetime64(self.sig_start)))
         self.cache: dict = {}
 
     def universe(self, band: tuple) -> np.ndarray:
