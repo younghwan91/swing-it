@@ -8,6 +8,8 @@
       → 진단(swing_it.diagnostics) → go/no-go(리포트를 읽고 판단) → 로그(research/logs/)
 ```
 
+새 러너는 `PIPELINE` 을 선언하고 게이트를 먼저 부른다 — [`docs/PIPELINE.md`](../docs/PIPELINE.md), 린트 (k).
+
 ## 5원칙 (비협상)
 
 1. **확률적, 결정론 아님.** 한 백테스트 경로 = 노이즈 분포의 한 표본. 결정론적 극값을 좇지
