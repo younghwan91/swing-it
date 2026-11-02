@@ -218,10 +218,43 @@ def top_exposures(sub: Sub, d: np.ndarray, k: int = 3) -> list:
     return [(str(sub.names[j]), float(y[j])) for j in order]
 
 
-def clean_dust(w: np.ndarray, price: np.ndarray, aum: float, fixed: np.ndarray) -> tuple[np.ndarray, int]:
+def capped_rescale(x: np.ndarray, total: float, cap: float | None) -> np.ndarray:
+    """PO-9 — 음 아닌 ``x`` 를 합 ``total`` 로 비례 조정하되 어느 칸도 ``cap`` 을 넘지 않게 한다(물 채우기).
+
+    넘친 몫은 cap 에 닿지 않은 칸에 비례로 다시 나누고, 모두 cap 이면 남는다(합 < total — 부르는 쪽에서 현금).
+    ``cap`` 이 None 이면 그냥 비례(R 북 — 상한 없음). 줄이는 방향(total < Σx)은 cap 을 건드리지 않는다.
+    """
+    x = np.asarray(x, dtype=np.float64).copy()
+    s = x.sum()
+    if s <= 0 or total <= 0:
+        return x
+    if cap is None:
+        return x * (total / s)
+    x = np.minimum(x, cap)
+    fixed = np.zeros(x.size, dtype=bool)
+    for _ in range(x.size + 1):
+        rem = total - x[fixed].sum()
+        free = ~fixed & (x > 0)
+        sf = x[free].sum()
+        if sf <= 0 or rem <= 0:
+            break
+        y = x[free] * (rem / sf)
+        over = y > cap
+        if not over.any():
+            x[free] = y
+            break
+        idx = np.flatnonzero(free)
+        x[idx[over]] = cap
+        fixed[idx[over]] = True
+    return x
+
+
+def clean_dust(w: np.ndarray, price: np.ndarray, aum: float, fixed: np.ndarray,
+               cap: float | None = MAX_W) -> tuple[np.ndarray, int]:
     """PO-7 M2 — 솔버 먼지 제거. 고정(``no_trade``) 아닌 종목의 w < max(1e-6, 1주 가격/AUM) 은 0, 음수도 0.
 
-    지운 만큼은 남은(고정 아닌, 양수) 비중에 비례로 돌려 합을 지킨다. 반환 ``(w, 지운 수)``.
+    지운 만큼은 남은(고정 아닌, 양수) 비중에 비례로 돌려 합을 지킨다 — PO-9: ``cap`` 을 넘기지 않게(:func:`capped_rescale`,
+    모두 cap 이면 그 몫은 남아 현금이 된다). 반환 ``(w, 지운 수)``.
     """
     w = np.asarray(w, dtype=np.float64).copy()
     thr = np.maximum(DUST_EPS, np.where(np.isfinite(price), price, 0.0) / aum)
@@ -231,7 +264,7 @@ def clean_dust(w: np.ndarray, price: np.ndarray, aum: float, fixed: np.ndarray) 
     keep = ~fixed & (w > 0)
     s_keep = w[keep].sum()
     if s_keep > 0:
-        w[keep] *= (total - w[fixed].sum()) / s_keep
+        w[keep] = capped_rescale(w[keep], total - w[fixed].sum(), cap)
     return w, int(kill.sum())
 
 
@@ -512,7 +545,8 @@ class StepRec:
     n_tranches: int = 0  # R: 활성 트랜치 수
     cash: float = 0.0  # 체결 뒤 현금 비중
     min_w: float = 0.0
-    max_w: float = 0.0
+    max_w: float = 0.0  # PO-9: 거래 가능·안 얼린 종목 중 최대(체결 뒤)
+    max_w_frozen: float = 0.0  # 얼린 보유(거래 불가) 중 최대 — 표류로 상한을 넘을 수 있다(보고만)
     sector_dev: float = float("nan")  # O: max_g |Σw_g − b_g| (체결 뒤)
     sector_tol: float = float("nan")
     turn_bound: float = float("nan")  # O(구축 뒤): 2/3 + 강제 매도·폐지·표류·재비례 몫
@@ -627,8 +661,8 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             room = 1.0 - w_f[frozen].sum()
             s = want[free].sum()
             new = np.where(frozen, w_f, 0.0)
-            if s > 0:
-                new[free] = want[free] * (room / s)
+            if s > 0:  # PO-9: O 는 상한을 지키며 채운다(넘치는 몫은 현금)
+                new[free] = capped_rescale(want[free], room, MAX_W if kind == "O" else None)
                 renorm = abs(room - s)
             new_cash = 1.0 - new.sum()
         else:  # 최적화 실패 → 거래 안 함(강제 매도만, 대금은 현금)
@@ -647,7 +681,9 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         # PO-7 M3 — 성과와 무관한 불변식 재료(체결 뒤)
         rec.cash = float(new_cash)
         rec.min_w = float(new.min()) if new.size else 0.0
-        rec.max_w = float(new.max()) if new.size else 0.0
+        ctrl = tradeable & ~frozen  # PO-9: 상한 불변식은 이 스텝에 최적화기가 정한 종목만(얼린 보유는 따로 적는다)
+        rec.max_w = float(new[ctrl].max()) if ctrl.any() else 0.0
+        rec.max_w_frozen = float(new[frozen].max()) if frozen.any() else 0.0
         if kind == "O" and rec.status == "optimal" and el.size:
             bvec = np.zeros(nN)
             bvec[el] = 1.0 / el.size
@@ -655,7 +691,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             groups = {g for g in labs[(new > 0) | (bvec > 0)] if g is not None}
             rec.sector_dev = max((abs(float(new[labs == g].sum() - bvec[labs == g].sum())) for g in groups), default=0.0)
             outside = float(w_f[frozen & ~np.isin(np.arange(nN), np.union1d(el, np.flatnonzero(held & in_u)))].sum())
-            rec.sector_tol = cell.band + INV_EPS + outside + renorm
+            rec.sector_tol = cell.band + INV_EPS + outside + renorm + rec.dust_mass  # PO-9: 먼지 재분배로 옮긴 몫
             if built:
                 drift = float(np.abs(w_f - w_t).sum())  # t→f 표류 + 폐지 현금화
                 rec.turn_bound = (MAX_TURNOVER + drift + float(w_f[forced & tradeable].sum()) + renorm
@@ -743,7 +779,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
 def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY) -> list[str]:
     """PO-7 M3 — 성과와 무관한 불변식(스텝마다). 위반 문장 목록을 돌려준다(비면 통과). ``--mode run`` 은 하나라도 있으면 결과를 쓰지 않는다.
 
-    - Σw + 현금 = 1, w ≥ −ε. O: max w ≤ 0.10 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례),
+    - Σw + 현금 = 1, w ≥ −ε. O: (거래 가능·안 얼린 종목) max w ≤ 0.10 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례 + 먼지),
       구축 뒤 회전율 ≤ 2/3 + 표류·폐지 + 강제 매도 + 재비례 + 2·먼지.
     - 비용: cost1 ≥ 0, 회전이 있으면 cost1/회전 ∈ [1.5bp, 300bp](1배).
     - R: 2019 예열 뒤(k ≥ 2) 활성 트랜치 3.
@@ -944,6 +980,7 @@ def book_summary(recs: list[StepRec]) -> dict:
     for key in ("n_forced", "n_delist", "n_frozen", "n_untradeable"):
         out[key] = int(sum(getattr(r, key) for r in recs))
     out["u_excl_mean"] = float(np.nanmean([r.u_excl for r in recs]))
+    out["max_w_frozen_max"] = float(max((r.max_w_frozen for r in recs), default=0.0))  # PO-9 보고만
     return out
 
 

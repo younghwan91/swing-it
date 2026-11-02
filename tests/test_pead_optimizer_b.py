@@ -342,10 +342,29 @@ def test_clean_dust_zeroes_tiny_keeps_sum_and_fixed():
     w = np.array([0.30, 0.2999995, 1e-9, -3.5e-10, 0.4, 0.0005])
     price = np.array([1e4, 1e4, 1e4, 1e4, 1e4, 5e5])  # 마지막: 1주 = 5e5/3e8 = 0.00167 > 0.0005 → 먼지
     fixed = np.array([False, False, False, False, True, False])
-    out, n = B.clean_dust(w, price, 3e8, fixed)
+    out, n = B.clean_dust(w, price, 3e8, fixed, cap=None)  # 먼지 규칙만(상한은 아래 시험)
     assert n == 3 and out[2] == 0 and out[3] == 0 and out[5] == 0
     assert out[4] == 0.4 and out.sum() == pytest.approx(w.sum())
     assert (out >= 0).all()
+
+
+def test_capped_rescale_respects_cap_and_leaves_cash_when_full():
+    x = np.array([0.10, 0.10, 0.05, 0.05])
+    out = B.capped_rescale(x, 0.40, 0.10)  # 0.30 → 0.40: 0.10 두 칸은 못 늘고, 나머지가 0.10 까지
+    assert (out <= 0.10 + 1e-15).all() and out.sum() == pytest.approx(0.40)
+    full = B.capped_rescale(np.array([0.10, 0.09]), 0.5, 0.10)  # 다 차면 남는다(현금)
+    assert np.allclose(full, [0.10, 0.10])
+    down = B.capped_rescale(np.array([0.10, 0.06]), 0.08, 0.10)  # 줄이는 방향은 비례
+    assert np.allclose(down, [0.05, 0.03])
+    assert np.allclose(B.capped_rescale(np.array([0.2, 0.1]), 0.6, None), [0.4, 0.2])  # R: 상한 없음
+
+
+def test_clean_dust_redistribution_never_breaks_cap():
+    # 실측(B 1차 실행 2026-11-02): 먼지 재분배가 상한 칸을 0.100134 까지 밀었다 — PO-9
+    w = np.array([0.10, 0.10, 0.10, 0.0005, 0.0995])
+    price = np.array([1e4, 1e4, 1e4, 5e5, 1e4])
+    out, n = B.clean_dust(w, price, 3e8, np.zeros(5, bool))
+    assert n == 1 and (out <= B.MAX_W + 1e-15).all() and out.sum() == pytest.approx(w.sum())
 
 
 def test_model_cache_name_binds_fingerprint_and_core():
