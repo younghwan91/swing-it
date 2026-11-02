@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 from swing_it.pipeline import Stage, require_stage
 from swing_it.storage import connect
 
@@ -69,5 +68,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    pd.set_option("display.width", 200)
     raise SystemExit(main())
