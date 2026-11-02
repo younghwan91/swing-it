@@ -564,3 +564,102 @@ def test_benchmark_etf_raw_only_last_day_snapshot_dropped():
     got = pa.read_inputs(con).sort_values("date")["raw_close"].tolist()
     assert got[:2] == [100, 101] and np.isnan(got[2])
     con.close()
+
+
+# --- 심판 없는 날의 병합: 상장주식수(shares_outstanding_history)를 심판으로 ------------------------------------------
+def _suspended_relisting(post, *, pre=(2000, 2050, 2080), frozen=30, code="A"):
+    """거래하던 날(pre) → 거래정지(frozen 일, 마지막 가격 고정·거래량 0) → 재개 첫날부터 post. 원주가 = 수정주가(네이버 백필)."""
+    px = list(pre) + [pre[-1]] * frozen + list(post)
+    df = _frame(list(px), list(px), code=code)
+    df["volume"] = [10_000] * len(pre) + [0] * frozen + [5_000] * len(post)
+    return df, len(pre) + frozen  # 재개 첫날 위치
+
+
+def _shares(code="A", rows=()):
+    return pd.DataFrame(rows, columns=["date", "shares_outstanding"]).assign(code=code)
+
+
+def _assert_shares_not_used(df, sh):
+    """주식수 심판이 붙지 않는다 — 주식수 없이 돌린 결과(옛 규칙 경로 포함)와 같고 shares_consolidation 이 없다."""
+    assert pa.adjust_prices(df, shares=sh)["close"].tolist() == pa.adjust_prices(df)["close"].tolist()
+    assert "shares_consolidation" not in set(pa.diagnose(df, shares=sh)["kind"])
+
+
+def test_canary_052670_consolidation_during_suspension_refereed_by_shares():
+    # 052670: 2023-07-20 뒤 거래정지(2,080 고정) → 2026-02-09 재개 625,000(×300.5). 심판(flu_rt)·corporate_actions 없음.
+    # 상장주식수 29,129,064 → 19,419(1500:1 병합, 정지 중 기준일 스냅숏). 그날 주주 수익률 = 625,000/(2,080×1500.03) ≈ 0.2003
+    # — 뒤이은 정리매매(−20%, −25% …)와 같은 쪽이다. 옛 규칙은 뒤 3일 유지 검사에서 떨어져 ×300 계단이 남았다.
+    df, t = _suspended_relisting([625000, 503000, 377000, 366500, 356000, 428500])
+    d = df["date"].tolist()
+    sh = _shares(rows=[(d[0], 29_129_064), (d[t - 5], 19_419)])
+    adj = pa.adjust_prices(df, shares=sh)["close"].tolist()
+    S = 29_129_064 / 19_419
+    r = _rets(adj)
+    assert abs(r[t - 1] - 625000 / (2080 * S)) < 1e-9, r[t - 1]
+    assert adj[t:] == [float(x) for x in df["close"].iloc[t:]]  # 재개 뒤는 그대로(뒤 기준)
+    np.testing.assert_allclose(adj[:t], df["close"].iloc[:t].to_numpy(float) * S)
+    ev = pa.diagnose(df, shares=sh)
+    assert ev["kind"].tolist() == ["shares_consolidation"] and ev["date"].tolist() == [d[t]]
+    # 주식수를 모르면(옛 호출) 조정하지 않고 진단에만 미해결로 남긴다 — 추측해서 곱하지 않는다
+    assert pa.adjust_prices(df)["close"].tolist() == [float(x) for x in df["close"]]
+    flagged = pa.diagnose(df, flagged=True)
+    assert flagged["kind"].tolist() == ["noref_jump"] and flagged["date"].tolist() == [d[t]]
+
+
+def test_shares_referee_ignores_reduction_already_in_raw_during_suspension():
+    # 141020·054630 류: 정지 중 원주가에 기준가 재설정 계단이 이미 찍혔다(수정주가는 그대로 = 이미 반영). 주식수 감소를
+    # 재개 첫날에 또 곱하면 이중 조정이다 — 정지 구간 원주가가 평평할 때만 주식수 비를 그날로 돌린다.
+    df, t = _suspended_relisting([5000, 4800, 4600, 4400])  # 재개 날 ×2.4 — 3:1 이면 그날 −20% 로 '설명'되는 모양
+    raw = df["raw_close"].to_numpy(float).copy()
+    raw[: t - 10] = raw[: t - 10] / 10  # 정지 중(t−10) 원주가 ×10 계단, 수정주가는 평평
+    df["raw_close"] = raw
+    d = df["date"].tolist()
+    sh = _shares(rows=[(d[0], 30_000_000), (d[t - 5], 10_000_000)])  # 3:1(+ 증자 섞임)
+    _assert_shares_not_used(df, sh)
+
+
+def test_shares_referee_needs_snapshot_before_the_jump():
+    # 024810·093230 류: 감자가 정리매매·상장폐지 **뒤**(회생)에 있었다 — 줄어든 주식수의 기준일이 점프 날 뒤면 쓰지 않는다.
+    # 재개 날 ×2.4 에 3:1 이면 '설명'되는 모양이지만 줄어든 스냅숏의 기준일이 마지막 날이다.
+    df, t = _suspended_relisting([5000, 4000, 3000, 2500])
+    d = df["date"].tolist()
+    sh = _shares(rows=[(d[0], 30_000_000), (d[-1], 10_000_000)])
+    _assert_shares_not_used(df, sh)
+
+
+def test_shares_referee_needs_suspension_window():
+    # 035480 류: 전날까지 거래가 이어진 정리매매 중의 ×3.7 은 병합이 아니다(병합은 주권 교환 동안 거래가 멈춘다).
+    px = [7000, 7100, 7050, 514, 1920, 2220, 880, 1030]
+    df = _frame(list(px), list(px))
+    df["volume"] = 10_000
+    d = df["date"].tolist()
+    sh = _shares(rows=[(d[0], 45_000_000), (d[4], 9_000_000)])  # 점프 날 기준 스냅숏 5:1
+    _assert_shares_not_used(df, sh)
+    assert pa.adjust_prices(df, shares=sh)["close"].tolist() == [float(x) for x in px]
+
+
+def test_shares_referee_rejects_ratio_that_does_not_explain_the_jump():
+    # 주식수 비가 점프보다 훨씬 크면(×2.5 점프에 30:1) 그 비로 곱한 그날 수익률이 원래보다 더 극단이다 — 시점이 다른 감자다.
+    df, t = _suspended_relisting([5200, 5000, 4900, 4800])
+    d = df["date"].tolist()
+    sh = _shares(rows=[(d[0], 30_000_000), (d[t - 5], 1_000_000)])
+    _assert_shares_not_used(df, sh)  # 레벨이 유지되니 옛 규칙(3일 유지)이 그대로 맡는다
+
+
+def test_rebuild_reads_shares_on_sqlite():
+    # rebuild_adjusted_table 이 shares_outstanding_history 를 읽어 심판으로 쓴다.
+    df, t = _suspended_relisting([625000, 503000, 377000, 366500])
+    con = storage.connect(":memory:")
+    for r in df.itertuples(index=False):
+        c = int(r.close)
+        con.execute("INSERT INTO daily_bars(code,date,open,high,low,close,volume,trade_value,source) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)", (r.code, r.date, c, c, c, c, int(r.volume), 1, "naver"))
+        con.execute("INSERT INTO supply_demand(code,date,close,source) VALUES (?,?,?,?)", (r.code, r.date, c, "naver"))
+    d = df["date"].tolist()
+    con.executemany("INSERT INTO shares_outstanding_history(code,date,shares_outstanding) VALUES (?,?,?)",
+                    [("A", d[0], 29_129_064), ("A", d[t - 5], 19_419)])
+    con.commit()
+    rebuild_adjusted_table(con)
+    adj = pd.read_sql_query("SELECT close FROM daily_bars_adjusted ORDER BY date", con)["close"].to_numpy(float)
+    assert abs(adj[t] / adj[t - 1] - 625000 / (2080 * 29_129_064 / 19_419)) < 1e-6
+    con.close()

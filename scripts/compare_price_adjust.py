@@ -45,7 +45,7 @@ def _connect():
 
 
 def load(cache: Path | None) -> tuple[pd.DataFrame, ...]:
-    files = None if cache is None else [cache / f"{n}.pkl" for n in ("inputs", "old", "v2", "ca", "rawspan")]
+    files = None if cache is None else [cache / f"{n}.pkl" for n in ("inputs", "old", "v2", "ca", "rawspan", "shares")]
     if files and all(f.exists() for f in files):
         return tuple(pd.read_pickle(f) for f in files)  # type: ignore[return-value]
     con = _connect()
@@ -66,23 +66,25 @@ def load(cache: Path | None) -> tuple[pd.DataFrame, ...]:
     # 검사는 daily_bars_raw 가 있는 칸만 본다(폐지 종목의 supply_demand 대용 원주가는 안 본다)
     rawspan = pd.read_sql("SELECT code, min(date) AS rmin, max(date) AS rmax FROM daily_bars_raw GROUP BY code", con)
     rawspan[["rmin", "rmax"]] = rawspan[["rmin", "rmax"]].astype(str)
+    shares = pa.read_shares(con)  # 심판 없는 병합의 심판(운영 재계산과 같은 입력)
     con.close()
     for d in (old, v2):
         d["date"] = d["date"].astype(str)
     if files:
         cache.mkdir(parents=True, exist_ok=True)
-        for f, d in zip(files, (inputs, old, v2, ca, rawspan)):
+        for f, d in zip(files, (inputs, old, v2, ca, rawspan, shares)):
             d.to_pickle(f)
-    return inputs, old, v2, ca, rawspan
+    return inputs, old, v2, ca, rawspan, shares
 
 
 def _ret(df: pd.DataFrame, col: str) -> pd.Series:
     return df[col] / df.groupby("code")[col].shift(1)
 
 
-def build(inputs: pd.DataFrame, old: pd.DataFrame, v2: pd.DataFrame, ca: pd.DataFrame | None = None) -> pd.DataFrame:
-    new = pa.adjust_prices(inputs, cols=("close",))
-    plan = pa._plan(inputs)[["code", "date", "_factor", "_kind"]]
+def build(inputs: pd.DataFrame, old: pd.DataFrame, v2: pd.DataFrame, ca: pd.DataFrame | None = None,
+          shares: pd.DataFrame | None = None) -> pd.DataFrame:
+    new = pa.adjust_prices(inputs, cols=("close",), shares=shares)
+    plan = pa._plan(inputs, shares)[["code", "date", "_factor", "_kind"]]
     df = (inputs[["code", "date", "close", "raw_close", "flu_rt", "source"]].rename(columns={"close": "db"})
           .assign(new=new["close"].to_numpy()))
     df = df.merge(old.rename(columns={"close": "old"}), on=["code", "date"], how="left")
@@ -135,6 +137,8 @@ CANARIES = [
     ("107640", "2024-06-24", "raw"),   # 코넥스 → 이전상장 첫날 — 기준가 = 공모가, 원주가 움직임 그대로
     ("139050", "2023-06-28", None),    # 네이버 백필 12.77:1 병합(+1442%) — |r|<0.3
     ("138360", "2023-01-27", "db"),    # m 이 제한폭 밖(−52.9%) — 심판으로 안 쓴다
+    # 심판 없는 병합 — 상장주식수 심판(정지 중 29,129,064 → 19,419, 그날 주주 수익률 = 원주가 비 / 주식수 비)
+    ("052670", "2026-02-09", 625000 / (2080 * 29129064 / 19419)),
 ]
 
 
@@ -218,10 +222,10 @@ def main() -> int:
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 30)
 
-    inputs, old, v2, ca, rawspan = load(a.cache)
+    inputs, old, v2, ca, rawspan, shares = load(a.cache)
     print(f"입력 {len(inputs):,}행 {inputs.code.nunique():,}종목", flush=True)
     t0 = time.time()
-    df = build(inputs, old, v2)
+    df = build(inputs, old, v2, shares=shares)
     print(f"재계산 {time.time() - t0:.0f}s")
 
     print("\n## quant-airflow check_adjusted_vs_raw 규칙(이벤트·제한폭 밖 제외, |r_adj/r_raw−1|>20%) 깨진 칸")
@@ -264,6 +268,16 @@ def main() -> int:
         print(f"  >{t:g}: {(chg > t).sum():,}칸 {w[chg > t].code.nunique():,}종목")
     lvl = (df.new / df.old - 1).abs()
     print(f"  가격 수준이 1% 넘게 바뀌는 행(전 구간): {(lvl > 0.01).sum():,}행 {df[lvl > 0.01].code.nunique():,}종목")
+    wa = df[df.pdate.notna()]
+    chg_all = wa[(wa.r_new / wa.r_old - 1).abs() > 1e-6]
+    print(f"  일간 수익률이 바뀌는 칸(전 구간): {len(chg_all)}칸")
+    if len(chg_all):
+        print(chg_all[["code", "pdate", "date", "raw_close", "r_raw_close", "r_old", "r_new", "r_v2", "_kind"]]
+              .head(50).to_string(index=False))
+    flags = df[df._kind.isin(pa.FLAG_KINDS)]
+    print(f"\n## 미해결(곱하지 않음, {'·'.join(pa.FLAG_KINDS)}) {len(flags)}칸")
+    if len(flags):
+        print(flags[["code", "pdate", "date", "raw_close", "r_raw_close", "r_new", "r_v2", "source"]].to_string(index=False))
 
     adj = df[df._factor != 1]
     print("\n## 새 계산의 조정 지점(종류별)")
