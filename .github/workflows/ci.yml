@@ -6,6 +6,25 @@ on:
   pull_request:
 
 jobs:
+  # 파이프라인 가드를 없앴을 때 시험이 정말 빨개지는가(docs/PIPELINE.md). 인터프리터별로 달라질 것이 없어 한 번만 돈다.
+  pipeline-mutations:
+    runs-on: ubuntu-latest
+    steps:
+      # 린트 (k) 가 origin/main 의 원장과 비교한다. fetch 를 run: 단계로 두지 않는다 — pre-push 의 ci-local 이 run: 을 공유 .git 에서
+      # 돌려 저장소가 shallow 가 됐다(2026-11-02). uses: 는 로컬에서 돌지 않는다.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Pipeline guard mutations
+        run: python scripts/check_pipeline_mutations.py
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -13,6 +32,8 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}

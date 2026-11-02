@@ -8,7 +8,7 @@ data/
 *.png
 collect.log
 
-# 일일 리포트 산출물 (scripts/daily_report.sh) — 생성물이지 소스가 아니다
+# 옛 일일 리포트 산출물 — 리포트는 별도 저장소로 옮겼고 운영 체크아웃에 폴더만 남아 있다
 /reports/
 # README 커버 이미지는 추적 (재현: scripts/make_figures.py)
 !docs/images/*.png
