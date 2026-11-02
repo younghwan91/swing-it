@@ -26,7 +26,9 @@ EXTRA_PATH = [str(REPO / "research" / "experiments"), str(REPO / "research" / "s
 # dev 환경에는 그 모듈이 없다 — 그 모듈의 부재만 건너뛰고, 다른 import 오류는 그대로 실패시킨다.
 NEEDS_PORTFOLIO_LAYER = {"pead_optimizer_c0.py", "pead_optimizer_po2.py", "pead_optimizer_po3.py",
                          "pead_optimizer_po4.py", "pead_optimizer_b.py", "pead_optimizer_b_report.py",
-                         "pead_optimizer_b_feasibility.py"}
+                         "pead_optimizer_b_feasibility.py", "ml_forecast_common.py", "ml_forecast_data.py",
+                         "ml_forecast_features.py", "ml_forecast_ic.py", "ml_forecast_models.py", "ml_forecast_nulls.py",
+                         "ml_forecast_stage0.py", "ml_forecast_target.py", "ml_forecast_s1_diag.py", "ml_forecast_book.py"}
 PORTFOLIO_LAYER_MODULES = ("krx_quant_core.data.risk_inputs", "krx_quant_core.risk", "krx_quant_core.portfolio")
 
 

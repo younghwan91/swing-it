@@ -47,3 +47,22 @@ jobs:
         run: python scripts/check_guardrails.py
       - name: Test
         run: pytest -q
+
+  # ML 예측·PEAD 최적화 테스트. dev 환경의 core 0.7.0(PyPI)에는 risk·portfolio 가 없어 이 테스트들이 조용히 건너뛰어졌다
+  # (정정 ML-4 ⑦). PyPI·태그 0.8.0 도 portfolio 층 전이라 핀으로는 안 된다 — 머지된 main 커밋을 직접 깐다. 건너뛰면 실패다.
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,ml]"
+          pip install "krx-quant-core[portfolio] @ git+https://github.com/younghwan91/krx-quant-core@8286e3e"
+      - name: Research tests (no skips)
+        run: |
+          python -m pytest -q -rs --junitxml=research-tests.xml tests/test_ml_forecast_*.py tests/test_pead_optimizer_*.py
+          python -c "import xml.etree.ElementTree as E; n = int(E.parse('research-tests.xml').getroot()[0].get('skipped')); raise SystemExit(f'건너뛴 테스트 {n}개 — 이 작업은 건너뛰면 실패다' if n else 0)"

@@ -1,0 +1,405 @@
+{
+ "status": "사후 진단 — 판정에 쓰지 않는다",
+ "s1_code_sha": "a0ca864",
+ "train_2019": {
+  "by_date": [
+   {
+    "date": "2019-01-08",
+    "mask": 1750,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 164
+   },
+   {
+    "date": "2019-01-15",
+    "mask": 1749,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 164
+   },
+   {
+    "date": "2019-01-22",
+    "mask": 1749,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 168
+   },
+   {
+    "date": "2019-01-29",
+    "mask": 1750,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 174
+   },
+   {
+    "date": "2019-02-08",
+    "mask": 1748,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 178
+   },
+   {
+    "date": "2019-02-15",
+    "mask": 1747,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 186
+   },
+   {
+    "date": "2019-02-22",
+    "mask": 1745,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 191
+   },
+   {
+    "date": "2019-03-04",
+    "mask": 1748,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 195
+   },
+   {
+    "date": "2019-03-11",
+    "mask": 1748,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 204
+   },
+   {
+    "date": "2019-03-18",
+    "mask": 1749,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 204
+   },
+   {
+    "date": "2019-03-25",
+    "mask": 1731,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 205
+   },
+   {
+    "date": "2019-04-01",
+    "mask": 1739,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 198
+   },
+   {
+    "date": "2019-04-08",
+    "mask": 1792,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 194
+   },
+   {
+    "date": "2019-04-15",
+    "mask": 1790,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 196
+   },
+   {
+    "date": "2019-04-22",
+    "mask": 1788,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 187
+   },
+   {
+    "date": "2019-04-29",
+    "mask": 1788,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 183
+   },
+   {
+    "date": "2019-05-08",
+    "mask": 1789,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 185
+   },
+   {
+    "date": "2019-05-15",
+    "mask": 1787,
+    "v4_ok": 0,
+    "U": 0,
+    "U_if_no_D_condition": 187
+   },
+   {
+    "date": "2019-05-22",
+    "mask": 1791,
+    "v4_ok": 1791,
+    "U": 179,
+    "U_if_no_D_condition": 179
+   },
+   {
+    "date": "2019-05-29",
+    "mask": 1792,
+    "v4_ok": 1792,
+    "U": 187,
+    "U_if_no_D_condition": 187
+   },
+   {
+    "date": "2019-06-05",
+    "mask": 1794,
+    "v4_ok": 1794,
+    "U": 188,
+    "U_if_no_D_condition": 188
+   },
+   {
+    "date": "2019-06-13",
+    "mask": 1795,
+    "v4_ok": 1795,
+    "U": 185,
+    "U_if_no_D_condition": 185
+   },
+   {
+    "date": "2019-06-20",
+    "mask": 1796,
+    "v4_ok": 1796,
+    "U": 185,
+    "U_if_no_D_condition": 185
+   },
+   {
+    "date": "2019-06-27",
+    "mask": 1794,
+    "v4_ok": 1794,
+    "U": 179,
+    "U_if_no_D_condition": 179
+   },
+   {
+    "date": "2019-07-04",
+    "mask": 1798,
+    "v4_ok": 1798,
+    "U": 178,
+    "U_if_no_D_condition": 178
+   },
+   {
+    "date": "2019-07-11",
+    "mask": 1799,
+    "v4_ok": 1799,
+    "U": 168,
+    "U_if_no_D_condition": 168
+   },
+   {
+    "date": "2019-07-18",
+    "mask": 1797,
+    "v4_ok": 1797,
+    "U": 165,
+    "U_if_no_D_condition": 165
+   },
+   {
+    "date": "2019-07-25",
+    "mask": 1799,
+    "v4_ok": 1799,
+    "U": 156,
+    "U_if_no_D_condition": 156
+   },
+   {
+    "date": "2019-08-01",
+    "mask": 1800,
+    "v4_ok": 1800,
+    "U": 152,
+    "U_if_no_D_condition": 152
+   },
+   {
+    "date": "2019-08-08",
+    "mask": 1800,
+    "v4_ok": 1800,
+    "U": 170,
+    "U_if_no_D_condition": 170
+   },
+   {
+    "date": "2019-08-16",
+    "mask": 1801,
+    "v4_ok": 1801,
+    "U": 173,
+    "U_if_no_D_condition": 173
+   },
+   {
+    "date": "2019-08-23",
+    "mask": 1791,
+    "v4_ok": 1791,
+    "U": 173,
+    "U_if_no_D_condition": 173
+   },
+   {
+    "date": "2019-08-30",
+    "mask": 1791,
+    "v4_ok": 1791,
+    "U": 172,
+    "U_if_no_D_condition": 172
+   },
+   {
+    "date": "2019-09-06",
+    "mask": 1790,
+    "v4_ok": 1790,
+    "U": 156,
+    "U_if_no_D_condition": 156
+   },
+   {
+    "date": "2019-09-17",
+    "mask": 1789,
+    "v4_ok": 1789,
+    "U": 159,
+    "U_if_no_D_condition": 159
+   },
+   {
+    "date": "2019-09-24",
+    "mask": 1790,
+    "v4_ok": 1790,
+    "U": 158,
+    "U_if_no_D_condition": 158
+   },
+   {
+    "date": "2019-10-01",
+    "mask": 1791,
+    "v4_ok": 1791,
+    "U": 149,
+    "U_if_no_D_condition": 149
+   },
+   {
+    "date": "2019-10-10",
+    "mask": 1791,
+    "v4_ok": 1791,
+    "U": 151,
+    "U_if_no_D_condition": 151
+   },
+   {
+    "date": "2019-10-17",
+    "mask": 1792,
+    "v4_ok": 1792,
+    "U": 150,
+    "U_if_no_D_condition": 150
+   },
+   {
+    "date": "2019-10-24",
+    "mask": 1792,
+    "v4_ok": 1792,
+    "U": 162,
+    "U_if_no_D_condition": 162
+   },
+   {
+    "date": "2019-10-31",
+    "mask": 1793,
+    "v4_ok": 1793,
+    "U": 169,
+    "U_if_no_D_condition": 169
+   },
+   {
+    "date": "2019-11-07",
+    "mask": 1793,
+    "v4_ok": 1793,
+    "U": 176,
+    "U_if_no_D_condition": 176
+   },
+   {
+    "date": "2019-11-14",
+    "mask": 1793,
+    "v4_ok": 1793,
+    "U": 172,
+    "U_if_no_D_condition": 172
+   },
+   {
+    "date": "2019-11-21",
+    "mask": 1795,
+    "v4_ok": 1795,
+    "U": 170,
+    "U_if_no_D_condition": 170
+   },
+   {
+    "date": "2019-11-28",
+    "mask": 1795,
+    "v4_ok": 1795,
+    "U": 164,
+    "U_if_no_D_condition": 164
+   },
+   {
+    "date": "2019-12-05",
+    "mask": 1795,
+    "v4_ok": 1795,
+    "U": 160,
+    "U_if_no_D_condition": 160
+   },
+   {
+    "date": "2019-12-12",
+    "mask": 1798,
+    "v4_ok": 1798,
+    "U": 155,
+    "U_if_no_D_condition": 155
+   },
+   {
+    "date": "2019-12-19",
+    "mask": 1797,
+    "v4_ok": 1797,
+    "U": 157,
+    "U_if_no_D_condition": 157
+   },
+   {
+    "date": "2019-12-27",
+    "mask": 1798,
+    "v4_ok": 1798,
+    "U": 164,
+    "U_if_no_D_condition": 164
+   }
+  ],
+  "first_nonempty_U": "2019-05-22",
+  "phase_days_2020_fold": 45,
+  "rows_U": 4546,
+  "rows_U_if_no_D_condition": 7909
+ },
+ "null_width": {
+  "M": {
+   "q95_reproduced_exactly": true,
+   "n2_q95_mean": 0.009152062622745653,
+   "n2_sd_of_mean": 0.005660237568719387,
+   "n2_mean_day_ic_sd": 0.06205055405328868,
+   "n2_mean_lag1_acf_of_ic": 0.16330484926139324,
+   "real_day_ic_sd": 0.07262541882122847,
+   "real_lag_acf": {
+    "1": 0.6040177182119832,
+    "2": 0.3180946257703078,
+    "3": 0.10229916784937187,
+    "4": -0.09186832666153291,
+    "6": -0.13481602336884632,
+    "8": -0.17614973815155482
+   },
+   "real_mean_nw6_t": 5.072808979899512,
+   "real_mean_nw12_t": 5.6119231716041265,
+   "prereg_sec12_q95_approx": 0.017199106802467272
+  },
+  "E": {
+   "q95_reproduced_exactly": true,
+   "n2_q95_mean": 0.009538467361974685,
+   "n2_sd_of_mean": 0.005901519195200525,
+   "n2_mean_day_ic_sd": 0.06199785812711113,
+   "n2_mean_lag1_acf_of_ic": 0.20237912847896664,
+   "real_day_ic_sd": 0.08471299766154079,
+   "real_lag_acf": {
+    "1": 0.7027520086210394,
+    "2": 0.4169932242131753,
+    "3": 0.16502856687673886,
+    "4": 0.02396566917273557,
+    "6": 0.058239253571195866,
+    "8": 0.06366683703015355
+   },
+   "real_mean_nw6_t": 1.1172991816771478,
+   "real_mean_nw12_t": 1.0413605575564377,
+   "prereg_sec12_q95_approx": 0.020061679753261834
+  }
+ },
+ "n1_width": {
+  "sd_of_means": 0.009338210066598669,
+  "implied_q95_if_mean0": 0.01536135555955481,
+  "reps": 20
+ },
+ "seam": {
+  "cells_panel": 103,
+  "cells_oos_label_span": 85,
+  "cells_oos_span_in_U_star_codes": 14
+ }
+}

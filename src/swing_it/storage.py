@@ -207,6 +207,31 @@ CREATE TABLE IF NOT EXISTS daily_bars_adjusted (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_dba_date ON daily_bars_adjusted(date);
+-- 네이버 투자자 동향(m.stock API). 상장·폐지 종목이 **같은 정의**다 — supply_demand 처럼
+-- 상장=키움·폐지=네이버로 원천이 갈리지 않는다. 순매수는 수량(주), 보유율은 %.
+CREATE TABLE IF NOT EXISTS naver_investor_trend (
+    code               TEXT NOT NULL,
+    date               TEXT NOT NULL,
+    close              INTEGER,
+    volume             INTEGER,
+    foreign_hold_ratio REAL,
+    foreign_net        INTEGER,
+    institution_net    INTEGER,
+    individual_net     INTEGER,
+    source             TEXT,
+    PRIMARY KEY (code, date)
+);
+-- 네이버 증권사 리포트. write_date 에 시각이 없다 — 다음 거래일부터 쓴다. prev_goal_price 는 비어 있다(2026-11 실측).
+CREATE TABLE IF NOT EXISTS naver_research_reports (
+    research_id     INTEGER PRIMARY KEY,
+    code            TEXT,
+    broker          TEXT,
+    write_date      TEXT,
+    goal_price      INTEGER,
+    prev_goal_price INTEGER,
+    opinion         TEXT,
+    source          TEXT
+);
 CREATE TABLE IF NOT EXISTS delisted_stocks (
     code            TEXT NOT NULL,
     name            TEXT,
@@ -557,6 +582,82 @@ def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
             f"individual IS NOT NULL 필터가 걸렸을 수 있다. 의도한 것이면 "
             f"require_delisted=False 로 명시하라."
         )
+
+
+INVESTOR_TREND_TABLE = "naver_investor_trend"
+_INVESTOR_TREND_COLS = ("code", "date", "foreign_net", "institution_net", "foreign_hold_ratio")
+RESEARCH_TABLE = "naver_research_reports"
+_RESEARCH_COLS = ("research_id", "code", "broker", "write_date", "goal_price")
+
+
+def _date_where(con: Any, col: str, start, end) -> tuple[list[str], list]:
+    ph = "%s" if _is_pg(con) else "?"
+    where, params = [], []
+    if start is not None:
+        where.append(f"{col} >= {ph}")
+        params.append(start)
+    if end is not None:
+        where.append(f"{col} <= {ph}")
+        params.append(end)
+    return where, params
+
+
+def _assert_table_has_delisted(con: Any, df, *, table: str, date_col: str, start, end) -> None:
+    """조회 구간에 이 표에 행이 있는 폐지 종목(``delisted_stocks``)이 결과에도 담겼는지 확인.
+
+    :func:`_assert_supply_has_delisted` 와 같은 꼴 — 구간을 좁히면 기대치도 그 구간으로 좁혀진다.
+    """
+    where, params = _date_where(con, date_col, start, end)
+    where.append("code IN (SELECT code FROM delisted_stocks)")
+    sql = f"SELECT DISTINCT code FROM {table} WHERE {' AND '.join(where)}"  # noqa: S608 — 모듈 상수
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            expected = {r[0] for r in cur.fetchall()}
+    else:
+        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+    if not expected or "code" not in getattr(df, "columns", []):
+        return
+    if not (expected & set(df["code"].astype(str))):
+        raise AssertionError(
+            f"{table} 조회 구간에 폐지 종목 {len(expected)}개가 있는데 결과엔 하나도 없다 — "
+            "유니버스를 좁히는 조건이 걸렸다(생존편향). 의도한 것이면 require_delisted=False 로 명시하라.")
+
+
+def read_investor_trend(con: Any, *, cols: "tuple[str, ...] | None" = None,
+                        start: "str | None" = None, end: "str | None" = None,
+                        require_delisted: bool = True):
+    """네이버 투자자 동향 정문(``naver_investor_trend``) — 외국인·기관 순매수(주)·외국인 보유율(%).
+
+    ``supply_demand`` 는 상장=키움(11분류)·폐지=네이버(외국인·기관만)로 원천이 갈려 정의 차이가 폐지 여부와
+    상관된다. 이 표는 상장·폐지 종목이 같은 원천·정의다(ML 예측 사전등록 §3 MINOR a). 폐지 종목 포함을 검사한다.
+    """
+    import pandas as pd
+
+    use = tuple(cols or _INVESTOR_TREND_COLS)
+    where, params = _date_where(con, "date", start, end)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    df = pd.read_sql_query(  # noqa: S608 — 컬럼은 모듈 상수, 날짜는 파라미터 바인딩
+        f"SELECT {', '.join(use)} FROM {INVESTOR_TREND_TABLE}{clause}", con, params=tuple(params) or None)
+    if require_delisted:
+        _assert_table_has_delisted(con, df, table=INVESTOR_TREND_TABLE, date_col="date", start=start, end=end)
+    return df
+
+
+def read_research_reports(con: Any, *, cols: "tuple[str, ...] | None" = None,
+                          start: "str | None" = None, end: "str | None" = None,
+                          require_delisted: bool = True):
+    """네이버 증권사 리포트 정문(``naver_research_reports``). ``write_date`` 구간으로 자른다. 폐지 종목 포함을 검사한다."""
+    import pandas as pd
+
+    use = tuple(cols or _RESEARCH_COLS)
+    where, params = _date_where(con, "write_date", start, end)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    df = pd.read_sql_query(  # noqa: S608 — 컬럼은 모듈 상수, 날짜는 파라미터 바인딩
+        f"SELECT {', '.join(use)} FROM {RESEARCH_TABLE}{clause}", con, params=tuple(params) or None)
+    if require_delisted:
+        _assert_table_has_delisted(con, df, table=RESEARCH_TABLE, date_col="write_date", start=start, end=end)
+    return df
 
 
 def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
