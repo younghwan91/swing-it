@@ -10,6 +10,7 @@ asof 이하로 자른다; 정규장 종가 항등식의 마지막 날 예외는 
 ``ARM_START`` 전 날짜는 쓰지 않는다. 판정 통계는 행의 ``step_closed``(스텝이 끝난 다음 거래일 행에 한 번 적힌다)의 ``a_2x`` 다.
 
 사용: ``set -a; . ~/git/quant-airflow/.env; set +a; uv run --extra pg python research/paper/pead_paper.py [--asof YYYY-MM-DD,...] [--ledger PATH]``
+판정 보고(장부만 읽는다, DB 불요): ``--report [--ledger PATH]``. 결정일 행이 부실하면 쓰지 않고 ``실패:`` 줄과 종료 코드 1(정정 F1-3).
 과거 재현(설계 확인용, 장부에 쓰지 않음): ``--replicate 2019-08-01:2023-12-28 --out <json>``.
 """
 
@@ -54,6 +55,11 @@ HALF_SPREAD_BP = {"KOSPI": float(DEFAULT_KOSPI_SLIPPAGE_PCT) * 1e4, "KOSDAQ": fl
 COMMISSION_BP = float(DEFAULT_COMMISSION_RATE) * 1e4
 WON_PER_MIL = 1e6
 WICS_STALE_DAYS = 21
+FIRST_FORWARD_K = 3               # k_s — SIM_FROM(k=0) 이 k_s − 3 이다. 전진 스텝 k = 3, 4, …
+N_FORWARD_STEPS = 36              # 전진 스텝 수(사전등록 §4 의 분모, LOOKS 끝과 같다)
+VOID_MISSING = 4                  # 36 중 이만큼 이상 결손이면 VOID(사전등록 §4)
+WICS_MIN_RATIO = 0.9              # 운영 점검(정정 F1-3): 마지막 스냅샷 < 직전 8개 중앙값의 90% = 부분 적재. 실측 주간 변동은 1% 안팎
+U_EXCL_MAX = 0.5                  # 운영 점검(정정 F1-3): 결정일 u_excl 이 이보다 크면 쓰지 않는다. 실측 격자 89개 최대 0.253
 STATEMENT_TIMEOUT_S = 600   # 정정 F1-1 M3: 패널이 날마다 길어진다(실측 ~0.39초/거래일 × 2 조회) — 300초면 2029-09 께 닿는다
 PRICE = {"session": "regular", "unpatched": "nan", "aftermarket_fix": True}   # 정문 인자(사전등록 §2)
 RULES = {"step": STEP, "horizon": HORIZON, "top_n": TOP_N, "min_names": MIN_NAMES, "cap_rank": list(CAP_RANK),
@@ -450,21 +456,43 @@ def holding_intervals(steps: list[dict], m: float = 2.0) -> np.ndarray:
     return np.asarray(done, dtype=np.float64)
 
 
-def forward_report(steps: list[dict], boundaries: "tuple[float, ...]", futility: "dict[int, float]") -> dict:
+def missing_steps(steps: list[dict], first_k: "int | None" = None, through_k: "int | None" = None) -> list[int]:
+    """기대 k(first_k..through_k, 없으면 기록의 최소·최대 k) 중 스텝이 없거나 a_2x·a_1x 가 유한하지 않은 k(정정 F1-3)."""
+    ks = [int(s["k"]) for s in steps]
+    ok = {int(s["k"]) for s in steps if math.isfinite(s["a_2x"]) and math.isfinite(s["a_1x"])}
+    lo = first_k if first_k is not None else (min(ks) if ks else 0)
+    hi = max([lo - 1] + ks + ([through_k] if through_k is not None else []))
+    return [k for k in range(lo, hi + 1) if k not in ok]
+
+
+def forward_report(steps: list[dict], boundaries: "tuple[float, ...]", futility: "dict[int, float]",
+                   first_k: "int | None" = None, through_k: "int | None" = None) -> dict:
     """장부의 ``step_closed`` 목록(k 순) → 보는 시점마다 HAC t·경계·판정. 숫자와 사전등록 라벨만 낸다.
+
+    정정 F1-3: K 는 격자 번호로 센다. ``first_k``(없으면 기록의 최소 k)부터 ``through_k``(끝났어야 할 마지막 k, 없으면 기록의 최대 k)까지
+    앞 36 스텝 중 결손이 있으면 뒤 스텝을 당겨 K 를 채우지 않는다 — 1~3 개면 "판단 불가(결측)", 4 개 이상이면 "VOID"(§4, 어떤 라벨보다 앞선다).
 
     판정(사전등록 §3): 보는 시점 K 에서 t_K ≥ b_K ∧ 상위 5 보유 구간 제거 EV(2배) > 0 → "엣지 확인". t_K < 무용 문턱 → "엣지 없음(무용 중단)".
     K=36 에서 확인이 없으면: 경계는 넘었는데 취약 → "판단 불가(취약 — 상위 5 보유 구간 의존)", t_36 ≤ 0 → "엣지 없음",
     나머지 → "판단 불가(검정력 부족)". 그 전 시점에서 어느 쪽도 아니면 "계속".
     """
+    ks = [int(s["k"]) for s in steps]
+    lo = first_k if first_k is not None else (ks[0] if ks else 0)
+    if any(b <= a for a, b in zip(ks, ks[1:])) or (ks and ks[0] < lo):      # 장부 순서·격자가 깨졌다 — K 를 믿을 수 없다
+        return {"n_steps": len(steps), "verdict": "판단 불가(결측)", "missing_steps": [], "n_missing": 0, "void": False, "looks": [],
+                "verdict_note": f"스텝 번호 k 가 {lo} 부터 증가하지 않는다: {ks}"}
+    window_end = lo + N_FORWARD_STEPS
+    missing = [k for k in missing_steps(steps, lo, through_k) if k < window_end]    # 정정 F1-1 m7·F1-3: 결측을 숨기거나 당겨 쓰지 않는다
+    steps = [s for s in steps if int(s["k"]) < window_end]
+    if missing:
+        void = len(missing) >= VOID_MISSING
+        return {"n_steps": len(steps), "verdict": "VOID" if void else "판단 불가(결측)", "missing_steps": missing,
+                "n_missing": len(missing), "void": void, "looks": []}
     a2 = np.array([s["a_2x"] for s in steps], dtype=np.float64)
     a1 = np.array([s["a_1x"] for s in steps], dtype=np.float64)
-    if not np.isfinite(a2).all() or not np.isfinite(a1).all():   # 정정 F1-1 m7: 결측을 조용히 NaN EV 로 두지 않는다
-        bad = [s.get("t") for s, x in zip(steps, a2) if not math.isfinite(x)]
-        return {"n_steps": int(a2.size), "verdict": "판단 불가(결측)", "missing_steps": bad, "looks": []}
     res = {"n_steps": int(a2.size), "EV_2x": float(a2.mean()) if a2.size else float("nan"),
            "EV_1x": float(a1.mean()) if a1.size else float("nan"),
-           "step_payoff_2x": payoff_ratio(a2), "looks": [], "verdict": "계속"}
+           "step_payoff_2x": payoff_ratio(a2), "looks": [], "verdict": "계속", "missing_steps": [], "n_missing": 0, "void": False}
     if a2.size >= 2:
         res["IR_2x"] = float(a2.mean() / a2.std(ddof=1) * math.sqrt(252.0 / STEP))
     iv = holding_intervals(steps, 2.0)
@@ -545,6 +573,16 @@ def yoy_from_frames(ea: pd.DataFrame, per: pd.DataFrame, codes: np.ndarray, days
     wide = panel.pivot(index="code", columns="date", values="yoy").reindex(index=[str(c) for c in codes], columns=cols)
     return wide.to_numpy(dtype=np.float64), {"earnings_rows_le_end": int(n_read), "dropped_2019Q1plus_no_periodic": n_drop,
                                              "rows_used": int(len(ea))}
+
+
+def wics_size_check(wics: pd.DataFrame) -> dict:
+    """마지막 WICS 스냅샷 크기 대 직전 8개 중앙값(정정 F1-3). ``wics_stale`` 은 날짜만 봐서 일부만 적재된 스냅샷을 못 본다."""
+    if wics.empty:
+        return {"wics_last_n": 0, "wics_median_n": None, "wics_partial": True}
+    n = wics.groupby("date")["code"].nunique().sort_index()
+    prev = n.iloc[:-1].tail(8)
+    med = float(prev.median()) if len(prev) else None
+    return {"wics_last_n": int(n.iloc[-1]), "wics_median_n": med, "wics_partial": bool(med is not None and n.iloc[-1] < WICS_MIN_RATIO * med)}
 
 
 def sector_panel(wics: pd.DataFrame, codes: np.ndarray, days: pd.DatetimeIndex) -> np.ndarray:
@@ -662,6 +700,7 @@ def load_panel(con, start: str, end: str) -> tuple[Panel, dict, dict]:
     if len(wics):                                    # m3: 스냅샷이 21일 넘게 묵으면 표시(신규 상장이 U_t 에 못 들어온다)
         info["wics_stale_days"] = int((pd.Timestamp(end) - pd.Timestamp(max(wics["date"]))).days)
         info["wics_stale"] = info["wics_stale_days"] > WICS_STALE_DAYS
+    info.update(wics_size_check(wics))
     has_sec = sector_panel(wics, codes, days)
     cur.execute("SELECT code, market, name FROM stocks")
     cur_m = {str(c): (m, n) for c, m, n in cur.fetchall()}
@@ -746,7 +785,7 @@ def build_row(p: Panel, out: SimOut, names: dict, info: dict, *, arm: str = ARM,
            "ret_today_1x": (1.0 + g) * (1.0 - c1) - 1.0 if math.isfinite(g) else -c1,
            "ret_today_2x": (1.0 + g) * (1.0 - 2.0 * c1) - 1.0 if math.isfinite(g) else -2.0 * c1,
            "bench_today": b, "bench_ret_today": bench_idx or {},
-           "step": None if st is None else {"t": str(D[st.t].date()), "f": str(D[st.f].date()),
+           "step": None if st is None else {"k": int(st.k), "t": str(D[st.t].date()), "f": str(D[st.f].date()),
                                             "f_next": str(D[st.f_next].date()) if st.f_next <= T else None},
            "positions": {str(p.codes[i]): {"name": names.get(str(p.codes[i]), ""), "w": round(float(out.w_last[i]), 6),
                                            "last": float(p.Cff[i, T])} for i in np.flatnonzero(out.w_last > 0)},
@@ -809,6 +848,73 @@ def ledger_steps(rows: list[dict]) -> list[dict]:
         for s in ([r["step_closed"]] if "step_closed" in r else []) + r.get("step_closed_catchup", []):
             seen.setdefault(s["t"], s)
     return [seen[t] for t in sorted(seen)]
+
+
+def closed_through_k(rows: list[dict]) -> "int | None":
+    """장부 마지막 날 행 기준으로 이미 ``step_closed`` 가 적혔어야 할 마지막 k. 끝난 다음 거래일 행에 적히므로 체결일 당일이면 하나 덜 끝났다."""
+    dated = [r for r in rows if (r.get("step") or {}).get("k") is not None]
+    if not dated:
+        return None
+    r = max(dated, key=lambda x: x["date"])
+    st = r["step"]
+    return int(st["k"]) - (2 if st["f"] == r["date"] else 1)
+
+
+def ledger_report(rows: list[dict], first_k: int = FIRST_FORWARD_K) -> dict:
+    """장부 행 → :func:`forward_report`(사전등록 경계·무용 문턱). ``--report`` 의 본체. 첫 행 전이면 스텝 0 개에 "계속"."""
+    through = closed_through_k(rows)
+    res = forward_report(ledger_steps(rows), BOUNDARIES, FUTILITY, first_k=first_k, through_k=through)
+    return {"arm": ARM, "n_rows": len(rows), "last_row": max((r["date"] for r in rows), default=None), "first_k": first_k, "through_k": through, **res}
+
+
+def decision_gate(pending: dict, info: dict) -> list[str]:
+    """결정일 행을 쓰면 안 되는 이유(없으면 빈 목록, 정정 F1-3). 장부는 (date, arm) 이 있으면 다시 안 쓰니 부실한 행은 영구히 남는다.
+    시뮬레이션·판정 통계는 건드리지 않는다 — 이 문턱은 행을 쓸지만 정하고, a_2x 는 다음 실행이 다시 계산한다."""
+    why = []
+    n = pending["n_eligible"]
+    if n < MIN_NAMES:
+        why.append(f"적격 {n} < 최소 {MIN_NAMES}")
+    if not pending["tranche"]:
+        why.append("새 트랜치 비었음")
+    if not sum(pending["target"].values()) > 0:
+        why.append("목표 비중 합 0")
+    u = pending["u_excl"]
+    if math.isfinite(u) and u > U_EXCL_MAX:
+        why.append(f"u_excl {u:.3f} > {U_EXCL_MAX}")
+    if info.get("wics_partial"):
+        why.append(f"WICS 부분 스냅샷({info.get('wics_last_n')} / 중앙값 {info.get('wics_median_n')})")
+    return why
+
+
+def monitor_line(row: dict, info: dict, missing: list[int]) -> str:
+    """paper_daily.sh 의 grep 이 남기는 한 줄(정정 F1-3) — 운영 지표만, 수익 숫자는 넣지 않는다."""
+    pm = [{"t": s["t"], **s["plan_mismatch"]} for s in ([row["step_closed"]] if "step_closed" in row else []) + row.get("step_closed_catchup", [])
+          if "plan_mismatch" in s]
+    d = row.get("decision") or {}
+    u = d.get("u_excl")
+    return (f"감시: {row['date']} {row['arm']} phase={row['phase']} wics_stale={info.get('wics_stale')} wics_stale_days={info.get('wics_stale_days')} "
+            f"wics_last_n={info.get('wics_last_n')} wics_partial={info.get('wics_partial')} "
+            f"last_day_masked={info.get('last_day_non_session_masked')} n_eligible={d.get('n_eligible', '-')} "
+            f"u_excl={'-' if u is None else round(u, 3)} missing_k={missing} plan_mismatch={json.dumps(pm, ensure_ascii=False)}")
+
+
+def label_existing(status: str, rows: list[dict], end: str, today: str) -> str:
+    """"이미 기록됨" 을 가른다(정정 F1-3): 오늘 쓴 행의 재실행 / DB 가 안 움직였다 — 날짜가 이전 실행과 같다(휴장이면 정상, 아니면 DB 지연).
+    이 프로그램만으로는 휴장과 지수까지 멈춘 DB 를 못 가른다 — quant-airflow 헬스체크(report_paper_ledger)가 틱으로 본다."""
+    if not status.startswith("이미 기록됨"):
+        return status
+    run_at = next((str(r.get("run_at", "")) for r in rows if r["date"] == end), "")
+    if run_at[:10] == today:
+        return f"이미 기록됨(재실행): {end} {ARM} — 오늘 쓴 행, 덧붙이지 않는다"
+    return f"이미 기록됨(새 거래일 없음): {end} {ARM} — {run_at[:10]} 실행 뒤 가격이 안 움직였다, 휴장이 아니면 DB 지연"
+
+
+def missed_decision_days(dates: pd.DatetimeIndex, grid: list[int], rows: list[dict], arm_start: str = ARM_START) -> list[str]:
+    """arm_start 이후 지나간 결정일 중 장부에 결정일 행이 없는 날(마지막 열 제외) — 정정 F1-3 의 따라잡기 대상."""
+    have = {r["decision"]["t"] for r in rows if "decision" in r}
+    T = len(dates) - 1
+    days = [str(dates[t].date()) for t in grid if t < T]
+    return [d for d in days if d >= arm_start and d not in have]
 
 
 def _json_default(o):
@@ -892,7 +998,21 @@ def check_calendar(dates: pd.DatetimeIndex, idx_dates, lo: str) -> dict:
     return {"checked_to": str(idx[-1].date()), "n_days": int(len(pan))}
 
 
-def run_day(con, asof: "str | None", ledger: str, backfilled: bool) -> dict:
+def index_lag(con, end: str, today: str) -> "str | None":
+    """가격 마지막 날이 KOSPI(001) 지수의 어제까지 마지막 날보다 뒤처지면 그 설명(정정 F1-3 — "이미 기록됨"·"시작 전" 이 DB 지연을 숨긴다)."""
+    from swing_it.storage import read_index
+
+    lo = str((pd.Timestamp(end) - pd.Timedelta(days=14)).date())
+    hi = str((pd.Timestamp(today) - pd.Timedelta(days=1)).date())
+    ix = read_index(con, "001", cols=("date", "close"), start=lo, end=hi, with_level=False, order_by_date=True, parse_dates=True)
+    if not len(ix):
+        return None
+    last = str(pd.to_datetime(ix["date"]).max().date())
+    return f"DB 지연 — 가격 마지막 날 {end} < 지수 001 마지막 날 {last}" if last > end else None
+
+
+def run_day(con, asof: "str | None", ledger: str, backfilled: bool, arm_start: str = ARM_START) -> bool:
+    """한 날 처리. 반환 = 문제 없음. 문제가 있으면 ``실패:`` 줄을 찍고 False — ``main`` 이 종료 코드 1 로 끝낸다(정정 F1-3)."""
     end = asof or last_price_day(con)
     p, info, names = load_panel(con, PANEL_START, end)
     if str(p.dates[-1].date()) != end:
@@ -905,6 +1025,19 @@ def run_day(con, asof: "str | None", ledger: str, backfilled: bool) -> dict:
     except ValueError as e:
         raise SystemExit(f"멈춤: {e}") from e
     grid = make_grid(p.dates, GRID_ANCHOR, SIM_FROM)
+    ok = True
+    today = str(pd.Timestamp.now().date())
+    if asof is None:
+        lag = index_lag(con, end, today)
+        if lag:                                      # 장부는 그래도 이 날짜 행을 쓴다(그 자체는 온전한 날) — 알리기만 한다
+            print(f"실패: {ARM} {lag}")
+            ok = False
+        for day in missed_decision_days(p.dates, grid, read_ledger(ledger), arm_start):
+            try:
+                ok = run_day(con, day, ledger, backfilled=True, arm_start=arm_start) and ok
+            except Exception as e:  # noqa: BLE001 — 따라잡기가 실패해도 오늘 행은 쓴다
+                print(f"실패: {ARM} 결정일 {day} 따라잡기 — {type(e).__name__}: {e}"[:300])
+                ok = False
     out = simulate(p, grid)
     T = len(p.dates) - 1
     live = live_recommend_safe(p, names, con, T, out.pending["tranche"]) if out.pending is not None else None
@@ -915,10 +1048,17 @@ def run_day(con, asof: "str | None", ledger: str, backfilled: bool) -> dict:
         if "decision" in r:
             plans.setdefault(r["decision"]["t"], r["decision"])
     row = build_row(p, out, names, info, live=live, bench_idx=index_returns(con, p.dates[-1]), backfilled=backfilled, written=written,
-                    plans=plans)
-    print(append_row(ledger, row))
+                    plans=plans, arm_start=arm_start)
+    why = decision_gate(out.pending, info) if out.pending is not None else []
+    if why and end >= arm_start and not any(r["date"] == end for r in rows):
+        print(f"실패: {end} {ARM} 결정일 행을 쓰지 않는다 — {'; '.join(why)}. 데이터가 들어오면 다음 실행 또는 --asof {end} 가 채운다")
+        print(monitor_line(row, info, missing_steps(ledger_steps(rows), FIRST_FORWARD_K, closed_through_k(rows))))
+        return False
+    print(label_existing(append_row(ledger, row, arm_start), rows, end, today))
+    rows = read_ledger(ledger)
+    print(monitor_line(row, info, missing_steps(ledger_steps(rows), FIRST_FORWARD_K, closed_through_k(rows))))
     print(json.dumps(row, ensure_ascii=False, indent=1, default=_json_default))
-    return row
+    return ok
 
 
 def replicate(con, span: str, out_path: str) -> dict:
@@ -959,14 +1099,18 @@ def replicate(con, span: str, out_path: str) -> dict:
 
 
 def main() -> None:
-    import psycopg2
-
     ap = argparse.ArgumentParser()
     ap.add_argument("--ledger", default=LEDGER)
     ap.add_argument("--asof", default="", help="빠진 날 채우기: 쉼표로 이은 거래일 — 그날까지의 데이터만으로 다시 만들고 행에 backfilled=true")
     ap.add_argument("--replicate", default="", help="과거 재현 구간 lo:hi(장부에 쓰지 않는다)")
     ap.add_argument("--out", default="", help="--replicate 결과 JSON 경로")
+    ap.add_argument("--report", action="store_true", help="장부로 판정 보고(forward_report)를 내고 끝낸다 — DB 불요, 장부에 쓰지 않는다")
     a = ap.parse_args()
+    if a.report:
+        print(json.dumps(ledger_report(read_ledger(a.ledger)), ensure_ascii=False, indent=1, default=_json_default))
+        return
+    import psycopg2
+
     con = psycopg2.connect(os.environ["KR_QUANT_DB"])
     con.set_session(readonly=True, autocommit=True)
     _cur(con)                                   # 세션 statement_timeout(정문 pandas 조회에도 걸린다)
@@ -975,8 +1119,11 @@ def main() -> None:
             raise SystemExit("--replicate 는 --out 이 필요하다")
         replicate(con, a.replicate, a.out)
         return
+    ok = True
     for end in [x for x in a.asof.split(",") if x] or [None]:
-        run_day(con, end, a.ledger, backfilled=end is not None)
+        ok = run_day(con, end, a.ledger, backfilled=end is not None) and ok
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

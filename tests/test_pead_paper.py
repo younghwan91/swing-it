@@ -52,6 +52,7 @@ def test_prereg_constants_fixed():
     assert PP.LOOKS == (12, 24, 36) and PP.OBF_SHAPE == (2.36, 1.67, 1.36) and PP.NW_LAG == 2
     assert PP.LEDGER == "research/paper/pead_rank_f1_ledger.jsonl"
     assert PP.BOUNDARIES == (3.068, 2.171, 1.768) and PP.FUTILITY == {24: 0.0}
+    assert (PP.FIRST_FORWARD_K, PP.N_FORWARD_STEPS, PP.VOID_MISSING) == (3, 36, 4) and PP.N_FORWARD_STEPS == PP.LOOKS[-1]
 
 
 def test_boundaries_match_calibration_file():
@@ -390,3 +391,289 @@ def test_yoy_tie_uses_later_period_regardless_of_input_order():
     for frame in (ea, ea.iloc[::-1]):
         out, _ = PP.yoy_from_frames(frame, per, codes, days)
         assert np.allclose(out[0], 0.17)  # 2017Q3 (늦은 분기), 2016Q3 의 2.0 이 아니라
+
+
+# ── 정정 F1-3 ────────────────────────────────────────────────────────────────
+
+
+def fstep(k, x=0.01):
+    return {"k": k, "t": f"s{k:03d}", "bench": 0.0, "a_2x": x, "a_1x": x, "contrib": [(f"C{k}", 0.1, x * 10, 0.0)]}
+
+
+def test_forward_report_gap_does_not_shift_into_k():
+    """k=3 이 빠진 35 스텝 — 예전엔 missing_steps=None·"계속" 에 뒤 스텝이 K 안으로 당겨졌다."""
+    a = list(np.random.default_rng(0).normal(0.01, 0.01, 36))
+    st = [fstep(k, a[k - 3]) for k in range(3, 39) if k != 5]
+    r = PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY, first_k=3)
+    assert r["verdict"] == "판단 불가(결측)" and r["missing_steps"] == [5] and r["n_missing"] == 1 and r["looks"] == [] and not r["void"]
+
+
+def test_forward_report_missing_first_step_is_seen_only_with_first_k():
+    st = [fstep(k) for k in range(4, 20)]
+    assert PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY, first_k=3)["missing_steps"] == [3]
+
+
+def test_forward_report_tail_missing_uses_through_k():
+    st = [fstep(k) for k in range(3, 10)]
+    assert PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY, first_k=3, through_k=9)["missing_steps"] == []
+    assert PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY, first_k=3, through_k=11)["missing_steps"] == [10, 11]
+
+
+@pytest.mark.parametrize("n,verdict", [(1, "판단 불가(결측)"), (3, "판단 불가(결측)"), (4, "VOID"), (6, "VOID")])
+def test_forward_report_void_boundary(n, verdict):
+    gone = set(range(10, 10 + n))
+    r = PP.forward_report([fstep(k) for k in range(3, 39) if k not in gone], PP.BOUNDARIES, PP.FUTILITY, first_k=3)
+    assert r["verdict"] == verdict and r["void"] == (n >= 4) and r["n_missing"] == n and r["looks"] == []
+
+
+def test_forward_report_nan_counts_as_missing_for_void():
+    st = [fstep(k, float("nan") if k in (4, 5) else 0.01) for k in range(3, 39) if k not in (7, 8)]
+    r = PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY, first_k=3)
+    assert r["verdict"] == "VOID" and r["missing_steps"] == [4, 5, 7, 8]
+
+
+def test_forward_report_void_counts_only_first_36():
+    a = np.random.default_rng(5).normal(0.0, 0.01, 36)
+    st = [fstep(k, a[k - 3]) for k in range(3, 39)] + [fstep(50)]        # 36 뒤 결손은 세지 않는다
+    r = PP.forward_report(st, PP.BOUNDARIES, {}, first_k=3, through_k=55)
+    assert not r["void"] and r["missing_steps"] == [] and r["n_steps"] == 36 and [x["K"] for x in r["looks"]][-1] == 36
+
+
+def test_forward_report_broken_k_order_is_not_judged():
+    r = PP.forward_report([fstep(5), fstep(4), fstep(6)], PP.BOUNDARIES, PP.FUTILITY, first_k=3)
+    assert r["verdict"] == "판단 불가(결측)" and "k" in r["verdict_note"]
+
+
+def test_forward_report_continuous_same_as_before():
+    """결손이 없으면 값은 first_k 를 주든 안 주든 같다 — 경계·판정 경로를 건드리지 않았다."""
+    a = list(np.random.default_rng(2).normal(0.02, 0.01, 24))
+    st = [fstep(k + 3, x) for k, x in enumerate(a)]
+    x, y = PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY, first_k=3), PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY)
+    assert x == y and x["missing_steps"] == [] and x["looks"][0]["K"] == 12 and x["looks"][0]["boundary"] == 3.068
+
+
+def test_ledger_report_entry_empty_and_cli(tmp_path, monkeypatch, capsys):
+    r = PP.ledger_report([])
+    assert r["n_steps"] == 0 and r["verdict"] == "계속" and r["through_k"] is None and r["first_k"] == 3
+    path = tmp_path / "l.jsonl"
+    rows = [{"date": f"2027-01-{d:02d}", "arm": PP.ARM, "step": {"k": 9, "t": "x", "f": "2027-01-02", "f_next": None},
+             **({"step_closed": fstep(3)} if d == 3 else {})} for d in (2, 3)]
+    path.write_text("".join(json.dumps(x) + "\n" for x in rows), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["pead_paper", "--report", "--ledger", str(path)])
+    monkeypatch.setitem(__import__("sys").modules, "psycopg2", None)   # DB 를 안 건드린다
+    PP.main()
+    out = json.loads(capsys.readouterr().out)
+    assert out["verdict"] == "VOID" and out["through_k"] == 8 and out["missing_steps"] == [4, 5, 6, 7, 8]
+
+
+def test_closed_through_k_matches_build_row():
+    """장부를 처음부터 쌓을 때 closed_through_k 까지의 스텝은 언제나 적혀 있다(거짓 결손 없음), 한 칸도 앞서가지 않는다."""
+    p = synth()
+    g = grid_of(p)
+    start = str(p.dates[g[2]].date())
+    rows: list = []
+    for cut in range(g[2], len(p.dates)):
+        q = p.truncate(cut)
+        out = PP.simulate(q, [x for x in g if x <= cut])
+        rows.append(PP.build_row(q, out, {}, {}, arm_start=start, written={s["t"] for s in PP.ledger_steps(rows)}))
+        assert PP.missing_steps(PP.ledger_steps(rows), 2, PP.closed_through_k(rows)) == []
+    done = PP.ledger_steps(rows)
+    assert len(done) >= 4 and PP.closed_through_k(rows) == done[-1]["k"]
+
+
+def decision_panel(blank_last=False, partial_sec=False):
+    p = synth()
+    g = grid_of(p)
+    t = g[5]
+    C, tv, sec = p.C.copy(), p.tv_won.copy(), p.has_sec.copy()
+    if blank_last:                      # 결정일 분봉 미적재 → mask_last_day 가 그날 종가를 전부 지운 상태
+        C[:, t] = np.nan
+        tv[:, t] = np.nan
+    if partial_sec:
+        sec[10:, t:] = False
+    q = PP.Panel(dates=p.dates, codes=p.codes, C=C, tv_won=tv, ret=p.ret, cap=p.cap, sig=p.sig, has_sec=sec, market=p.market, delist_after=p.delist_after)
+    return q, g, t
+
+
+def test_decision_gate_healthy_day_passes():
+    q, g, t = decision_panel()
+    out = PP.simulate(q.truncate(t), [x for x in g if x <= t])
+    assert PP.decision_gate(out.pending, {"wics_partial": False}) == []
+
+
+def test_decision_gate_no_last_day_bars():
+    q, g, t = decision_panel(blank_last=True)
+    out = PP.simulate(q.truncate(t), [x for x in g if x <= t])
+    why = PP.decision_gate(out.pending, {})
+    assert out.pending["n_eligible"] == 0 and any("적격" in w for w in why) and any("트랜치" in w for w in why)
+
+
+def test_decision_gate_partial_universe_and_flags():
+    q, g, t = decision_panel(partial_sec=True)
+    out = PP.simulate(q.truncate(t), [x for x in g if x <= t])
+    assert any("u_excl" in w for w in PP.decision_gate(out.pending, {}))
+    good = {"n_eligible": 60, "tranche": [1], "target": {1: 1.0}, "u_excl": 0.1}
+    assert PP.decision_gate(good, {}) == []
+    assert PP.decision_gate({**good, "n_eligible": PP.MIN_NAMES}, {}) == []                   # 경계: 최소는 통과
+    assert len(PP.decision_gate({**good, "n_eligible": PP.MIN_NAMES - 1}, {})) == 1
+    assert PP.decision_gate({**good, "u_excl": PP.U_EXCL_MAX}, {}) == []
+    assert len(PP.decision_gate({**good, "u_excl": PP.U_EXCL_MAX + 0.01}, {})) == 1
+    assert "WICS" in PP.decision_gate(good, {"wics_partial": True})[0]
+
+
+def test_wics_size_check_partial():
+    def w(sizes):
+        return pd.DataFrame([{"date": f"2026-{m + 1:02d}-01", "code": f"{i:06d}"} for m, n in enumerate(sizes) for i in range(n)])
+    assert PP.wics_size_check(w([100] * 5 + [90]))["wics_partial"] is False       # 경계: 90% 는 통과
+    assert PP.wics_size_check(w([100] * 5 + [89]))["wics_partial"] is True
+    assert PP.wics_size_check(w([100]))["wics_partial"] is False                 # 비교 대상 없음
+    assert PP.wics_size_check(w([100]))["wics_last_n"] == 100
+    assert PP.wics_size_check(pd.DataFrame(columns=["date", "code"]))["wics_partial"] is True
+
+
+@pytest.fixture
+def fake_db(monkeypatch):
+    """run_day 를 합성 패널로 — load_panel·지수·격자만 바꾼다. 나머지 경로(게이트·장부·따라잡기·줄 찍기)는 실제 코드."""
+    import swing_it.storage as ST
+
+    state = {"p": synth(), "last": None, "idx_last": None, "calls": []}
+    g = grid_of(state["p"])
+    state["g"] = g
+
+    def load(con, start, end):
+        p = state["p"]
+        cut = p.dates.get_loc(pd.Timestamp(end))
+        state["calls"].append(end)
+        return p.truncate(cut), {"wics_stale": False, "wics_stale_days": 3, "wics_last_n": 2456, "wics_partial": False}, {}
+
+    def read_index(con, codes, cols=None, start=None, end=None, **kw):
+        d = state["p"].dates
+        d = d[d <= pd.Timestamp(state["idx_last"] or state["last"])]       # 기본: 지수와 가격이 같은 날까지
+        return pd.DataFrame({"date": d[d <= pd.Timestamp(end)], "close": 1.0})
+
+    monkeypatch.setattr(PP, "load_panel", load)
+    monkeypatch.setattr(PP, "last_price_day", lambda con: state["last"])
+    monkeypatch.setattr(PP, "make_grid", lambda dates, a, s: [x for x in g if x < len(dates)])
+    monkeypatch.setattr(PP, "check_calendar", lambda *a: {"n_days": 0})
+    monkeypatch.setattr(PP, "index_returns", lambda con, day: {})
+    monkeypatch.setattr(PP, "live_recommend_safe", lambda *a: {"error": "x"})
+    monkeypatch.setattr(ST, "read_index", read_index)
+    return state
+
+
+def ds(state, col):
+    return str(state["p"].dates[col].date())
+
+
+def blank_day(state, col):
+    p = state["p"]
+    C, tv = p.C.copy(), p.tv_won.copy()
+    C[:, col] = np.nan
+    tv[:, col] = np.nan
+    state["p"] = PP.Panel(dates=p.dates, codes=p.codes, C=C, tv_won=tv, ret=p.ret, cap=p.cap, sig=p.sig, has_sec=p.has_sec, market=p.market, delist_after=p.delist_after)
+
+
+def test_run_day_bad_decision_day_fails_loud_then_next_run_catches_up(fake_db, tmp_path, capsys):
+    good = fake_db["p"]
+    t = fake_db["g"][4]
+    start = ds(fake_db, t)
+    led = str(tmp_path / "l.jsonl")
+    blank_day(fake_db, t)
+    fake_db["last"] = start
+    assert PP.run_day(None, None, led, False, arm_start=start) is False
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert any(x.startswith("실패:") and "결정일 행을 쓰지 않는다" in x for x in lines)
+    assert any(x.startswith("감시:") for x in lines) and not any(x.startswith("기록") for x in lines)
+    assert PP.read_ledger(led) == []
+    # 분봉이 들어왔다 — 다음 날 실행이 지나간 결정일을 먼저 채우고 오늘 행을 쓴다
+    fake_db["p"] = good
+    fake_db["last"] = ds(fake_db, t + 1)
+    assert PP.run_day(None, None, led, False, arm_start=start) is True
+    rows = PP.read_ledger(led)
+    assert [r["date"] for r in rows] == [start, ds(fake_db, t + 1)]
+    assert rows[0]["phase"] == "decision" and rows[0]["backfilled"] is True and len(rows[0]["decision"]["tranche_new"]) == PP.TOP_N
+    assert "backfilled" not in rows[1]
+
+
+def test_run_day_catchup_still_bad_keeps_today_row_and_stays_failed(fake_db, tmp_path, capsys):
+    t = fake_db["g"][4]
+    start = ds(fake_db, t)
+    led = str(tmp_path / "l.jsonl")
+    blank_day(fake_db, t)
+    fake_db["last"] = ds(fake_db, t + 1)
+    assert PP.run_day(None, None, led, False, arm_start=start) is False
+    assert [r["date"] for r in PP.read_ledger(led)] == [ds(fake_db, t + 1)]
+    assert "실패:" in capsys.readouterr().out
+
+
+def test_run_day_bad_data_does_not_block_prestart_or_existing_row(fake_db, tmp_path, capsys):
+    t = fake_db["g"][4]
+    day = ds(fake_db, t)
+    led = str(tmp_path / "l.jsonl")
+    fake_db["last"] = day
+    assert PP.run_day(None, None, led, False, arm_start=day) is True
+    first = PP.read_ledger(led)
+    blank_day(fake_db, t)                                    # 이미 쓴 결정일에 나중에 나빠진 DB — 재실행은 실패가 아니다
+    assert PP.run_day(None, None, led, False, arm_start=day) is True
+    assert PP.read_ledger(led) == first and "이미 기록됨" in capsys.readouterr().out
+    later = ds(fake_db, t + 40)
+    assert PP.run_day(None, None, str(tmp_path / "l2.jsonl"), False, arm_start=later) is True    # 시작 전 결정일은 거부 대상이 아니다
+    assert "시작 전" in capsys.readouterr().out
+
+
+def test_run_day_price_behind_index_is_failure_even_when_prestart(fake_db, tmp_path, capsys):
+    """가격이 지수보다 뒤처지면 "시작 전"·"이미 기록됨" 이 DB 지연을 숨기지 못한다."""
+    t = fake_db["g"][3] + 1
+    fake_db["last"] = ds(fake_db, t)
+    fake_db["idx_last"] = ds(fake_db, t + 1)
+    start = ds(fake_db, t + 30)
+    assert PP.run_day(None, None, str(tmp_path / "l.jsonl"), False, arm_start=start) is False
+    lines = capsys.readouterr().out.splitlines()
+    assert any(x.startswith("실패:") and "DB 지연" in x for x in lines) and any(x.startswith("시작 전") for x in lines)
+
+
+def test_label_existing_splits_rerun_from_no_new_day():
+    rows = [{"date": "2026-11-05", "run_at": "2026-11-06T07:58:00"}]
+    st = "이미 기록됨: 2026-11-05 pead_rank_F1 — 덧붙이지 않는다"
+    assert PP.label_existing(st, rows, "2026-11-05", "2026-11-06").startswith("이미 기록됨(재실행)")
+    assert PP.label_existing(st, rows, "2026-11-05", "2026-11-09").startswith("이미 기록됨(새 거래일 없음)")
+    assert PP.label_existing("기록: x", rows, "2026-11-05", "2026-11-06") == "기록: x"
+
+
+def test_monitor_line_is_one_line_with_flags_and_no_returns():
+    row = {"date": "2026-12-08", "arm": PP.ARM, "phase": "hold", "ret_today_gross": 0.12345,
+           "step_closed": {"t": "2026-11-05", "a_2x": 0.98765, "plan_mismatch": {"tranche_symdiff": 2, "weight_l1": 0.5}}}
+    line = PP.monitor_line(row, {"wics_stale": True, "wics_stale_days": 30, "wics_partial": False, "wics_last_n": 2400}, [7])
+    assert "\n" not in line and line.startswith("감시:")
+    assert "wics_stale=True" in line and '"tranche_symdiff": 2' in line and "missing_k=[7]" in line
+    assert "0.12345" not in line and "0.98765" not in line
+
+
+def pead_step_of_paper_daily() -> str:
+    from pathlib import Path
+
+    text = (Path(__file__).parents[1] / "scripts" / "paper_daily.sh").read_text(encoding="utf-8")
+    lines = [x for x in text.splitlines() if "pead_paper.py" in x and not x.startswith("#")]
+    assert len(lines) == 1
+    return lines[0]
+
+
+@pytest.mark.parametrize("py_out,rc,want,unwanted", [
+    ("기록: d\\n감시: x\\n {json", 0, ["기록: d", "감시: x"], ["실패", "{json"]),
+    ("이미 기록됨(새 거래일 없음): d\\n감시: x", 0, ["이미 기록됨(새 거래일 없음): d"], ["실패"]),
+    ("실패: d 결정일 행을 쓰지 않는다\\n감시: x", 1, ["실패: d 결정일", "실패: pead_rank_F1"], []),
+    ("기록: d", 1, ["기록: d", "실패: pead_rank_F1"], []),                      # 파이썬이 뒤에서 죽었다 — grep 이 삼키지 않는다
+    ("", 0, ["실패: pead_rank_F1"], []),
+])
+def test_paper_daily_pead_step_keeps_lines_and_failures(tmp_path, py_out, rc, want, unwanted):
+    import subprocess
+
+    uv = tmp_path / "uv"
+    uv.write_text(f"#!/bin/bash\nprintf '{py_out}\\n'\nexit {rc}\n", encoding="utf-8")
+    uv.chmod(0o755)
+    done = subprocess.run(["bash", "-c", f"UV={uv}\n{pead_step_of_paper_daily()}"], capture_output=True, text=True, timeout=30)
+    for w in want:
+        assert w in done.stdout
+    for u in unwanted:
+        assert u not in done.stdout
