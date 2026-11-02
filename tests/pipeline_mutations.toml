@@ -705,8 +705,8 @@ id = "invariants-pass-nan"
 why = "NaN 장부가 위반 0 으로 지나가면 불변식은 아무것도 지키지 않는다"
 guards = ["tests/test_book_accounting_hand.py::test_nan_does_not_pass_the_invariants"]
 file = "src/swing_it/book/accounting.py"
-find = "        if not abs(tot - 1.0) <= INV_EPS:"
-replace = "        if abs(tot - 1.0) > INV_EPS:"
+find = "        if not (r.min_w >= -INV_EPS and r.cash >= -INV_EPS):"
+replace = "        if r.min_w < -INV_EPS or r.cash < -INV_EPS:"
 
 [[mutation]]
 id = "reproduction-misses-a-section"

@@ -16,6 +16,9 @@
 그래서 기본은 B.json 의 ``ic_by_year`` 를 입력으로 쓰고 ``ic`` 절을 대조하지 않는다. ``SWING_IT_B_FULL_IC=1`` 은 잠금 대역을 읽으니 smallcap 판정 전에는 쓰지 않는다.
 
 **솔버 판.** ``uv.lock`` 에 cvxpy·clarabel 이 없어 새 환경에서 O 가 5e-6 안팎 움직인다. 결과 JSON 에 판을 적는다.
+
+**코드 회귀의 진짜 검사.** B.json 대조는 표·솔버 차이를 함께 본다. ``SWING_IT_B_BASELINE=<옛 트리 출력 JSON>`` 을 주면 같은 표·같은 환경에서 옛 코드가 낸 값과 맞대어 하나라도 다르면 실패한다.
+옛 출력은 ``SWING_IT_B_GOT`` 으로 만든다. 성과 숫자가 들어 있으니 레포 밖에 둔다.
 """
 
 from __future__ import annotations
@@ -36,8 +39,11 @@ REPO = Path(__file__).resolve().parents[2]
 TOL = 1e-10
 SECTIONS = ("cells", "ic", "invariants", "mode", "parity", "primary")  # code·fingerprints·elapsed_s 는 실행마다 다르다
 FP_OF_B_JSON = "e66f309e07de"
-#: 지문별 알려진 O 차이 폭. 9단계 검증과 재실행에서 잰 값의 올림이다. R 은 어느 표에서도 그대로다.
-KNOWN_TABLE_BOUNDS = {"400dfcc393ab": {"ir": 5e-6, "count": 5, "other": 5e-4}}
+#: 지문별 알려진 O 차이 폭(B.json 은 지문 e66f309e07de). R 은 어느 표에서도 그대로다.
+#: 400dfcc393ab 의 IR 차이는 솔버 환경에 달렸다: 한 환경 3.83e-6(검증 9단계 bmodels·docenv), 다른 환경 5.65e-6(cvxpy 1.9.3, clarabel 0.11.1, 둘 다 uv.lock 에 없다).
+#: 5.65e-6 쪽은 옮기기 전 코드(03fee83)도 같은 표·같은 환경에서 830개 값이 전부 같게 냈다 — 코드가 만든 차이가 아니다. 폭은 진짜 회귀 검사가 아니라 안전망이다.
+#: 코드 회귀는 ``SWING_IT_B_BASELINE`` 으로 옛 트리 출력과 맞대어 본다.
+KNOWN_TABLE_BOUNDS = {"400dfcc393ab": {"ir": 6e-6, "count": 5, "other": 5e-4}}
 _O_PATH = re.compile(r"/O/|^/cells/|^/primary/(rho|boot_dIR|report/f_boot|verdict/(dIR_|exante_risk_ratio|null_q95_O|realized_active_risk_ratio))")
 _IR_PATH = re.compile(r"/O/IR_\dx$|/verdict/dIR_\dx$")
 _COUNT_PATH = re.compile(r"/n_[a-z_]+$")
@@ -200,6 +206,14 @@ def test_promoted_code_reproduces_b_json():
            "sections_compared": [s for s in SECTIONS if s not in skip], "sections_skipped": list(skip), "elapsed_s": time.time() - t0,
            "verdict": v, "R_mismatch": [b[0] for b in bad if "/R/" in b[0]], "versions": versions,
            "note": "code·fingerprints·elapsed_s 는 실행마다 달라 뺐다. ic 절을 건너뛰면 IC 는 B.json 의 ic_by_year 를 입력으로 쓴 것이다."}
+    if os.environ.get("SWING_IT_B_GOT"):            # 코드끼리 대조할 때만 — 성과 숫자가 들어 있으니 레포 밖에 둔다
+        Path(os.environ["SWING_IT_B_GOT"]).write_text(json.dumps(got, ensure_ascii=False), encoding="utf-8")
+    base_bad: list = []
+    if os.environ.get("SWING_IT_B_BASELINE"):
+        base = json.loads(Path(os.environ["SWING_IT_B_BASELINE"]).read_text(encoding="utf-8"))
+        base_bad, (base_n, base_worst) = compare_sections(got, base, skip=skip)
+        out["vs_baseline"] = {"path": Path(os.environ["SWING_IT_B_BASELINE"]).name, "compared_numbers": base_n, "n_mismatch": len(base_bad), "max_abs_diff": base_worst}
     if os.environ.get("SWING_IT_B_OUT"):
         Path(os.environ["SWING_IT_B_OUT"]).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    assert base_bad == [], base_bad[:20]
     assert v["kind"] in ("같음", "표 바뀜"), (v, bad[:20])
