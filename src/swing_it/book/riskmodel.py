@@ -56,7 +56,7 @@ def build_panels(x) -> dict:
     """:func:`build_models` 입력 묶음. 업종이 처음 나오는 날(``first``)부터 자른다. 마스크 = 업종 있음 ∧ 시총 > 0 ∧ 종가 유한."""
     style_panels = core_layer("krx_quant_core.data.risk_inputs").style_panels
     sector = x.sector
-    has_sec = np.vectorize(lambda s: s is not None, otypes=[bool])(sector)
+    has_sec = np.not_equal(sector, None).astype(bool)      # 객체 배열 칸별. NaN 은 None 이 아니다(옛 ``s is not None`` 과 같다)
     mask = has_sec & np.isfinite(x.cap) & (x.cap > 0) & np.isfinite(x.close)
     raw = style_panels(x)
     xall = exposures(x, raw, mask)
@@ -74,7 +74,7 @@ def _hash_array(h, arr: np.ndarray) -> None:
         h.update(json.dumps([str(u) for u in uniques]).encode())
         arr = codes
     h.update(str(arr.dtype).encode())
-    h.update(np.ascontiguousarray(arr).tobytes())
+    h.update(np.ascontiguousarray(arr))
 
 
 def model_key(c: dict, need: Iterable[int], *, vra: "float | None" = None, shrink: float = 0.3) -> str:

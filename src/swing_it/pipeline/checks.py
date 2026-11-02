@@ -33,7 +33,9 @@ def _long_frame(frame: Any, cols: Sequence[str], name: str, *, key: Sequence[str
 
 
 def _day(values: pd.Series, name: str) -> pd.Series:
-    days = pd.to_datetime(values.astype(str), errors="coerce", format="mixed")
+    # 패널은 고유 날짜가 적다. mixed 파싱은 값마다 돌아 비싸다. 결측도 한 칸으로 둔다 — 표지값 -1 로 받으면 마지막 날짜로 둔갑한다
+    codes, uniques = pd.factorize(values.astype(str), use_na_sentinel=False)
+    days = pd.Series(pd.to_datetime(pd.Series(uniques, dtype=object), errors="coerce", format="mixed").to_numpy()[codes], index=values.index)
     if days.isna().any():
         raise CheckError(f"{name} 에 날짜가 아닌 값·결측이 있다")
     return days

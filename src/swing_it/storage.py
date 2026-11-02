@@ -484,18 +484,18 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
 
     ``volume`` 은 수정주가 표에서도 **조정되지 않는다**. 분할 앞뒤로 이어지지 않으니 ADV 는 ``trade_value`` 만 쓴다.
 
-    Returns: pandas DataFrame, (code, date) 순서.
+    Returns: pandas DataFrame. ``end`` 를 주면 (code, date) 순서다. ``None`` 이면 표 전체라 정렬을 걸지 않는다(순서 보장 없음).
     """
     import pandas as pd
 
     from swing_it.pipeline.checks import check_price_end  # noqa: PLC0415 — 가격 조정 마운트가 이 모듈을 안 끌어오게 부를 때 import
 
     sel = ", ".join(cols or _PRICE_READ_COLS)
-    where, params = "", None
+    tail, params = "", None
     if end is not None:
         check_price_end(end)
-        where, params = f" WHERE date <= {'%s' if _is_pg(con) else '?'}", (end,)
-    df = pd.read_sql_query(f"SELECT {sel} FROM {table}{where} ORDER BY code, date", con, params=params)  # noqa: S608 — 컬럼·테이블은 모듈 상수
+        tail, params = f" WHERE date <= {'%s' if _is_pg(con) else '?'} ORDER BY code, date", (end,)
+    df = pd.read_sql_query(f"SELECT {sel} FROM {table}{tail}", con, params=params)  # noqa: S608 — 컬럼·테이블은 모듈 상수
     if require_delisted:
         _assert_universe_has_delisted(con, df, table=table, end=end)
     return df
@@ -520,11 +520,12 @@ def read_seam_sources(con: Any, codes, dates, end: str):
                 "AND close IS NOT NULL AND close <> 0"):
         cur.execute(sql, (lo, end))
         df = pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "date", "close"])
-        if len(df) and pd.to_datetime(df["date"]).max() > pd.Timestamp(end):
+        day = pd.to_datetime(df["date"])
+        if len(df) and day.max() > pd.Timestamp(end):
             raise AssertionError(f"이음매 재료에 end({end}) 뒤 날짜가 있다")
         a = np.full((len(codes), len(dates)), np.nan)
         i = cidx.get_indexer(df["code"].astype(str))
-        t = didx.get_indexer(pd.to_datetime(df["date"]))
+        t = didx.get_indexer(day)
         ok = (i >= 0) & (t >= 0)
         a[i[ok], t[ok]] = df["close"].to_numpy(float)[ok]
         out.append(a)

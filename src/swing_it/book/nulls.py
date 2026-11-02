@@ -46,11 +46,24 @@ def stationary_boot_dir(aO, aR, n=N_BOOT, mean_block=BOOT_MEAN_BLOCK, seed_key="
     return out
 
 
+class _RowPermuted:
+    """``sig[pi]`` 의 읽기 전용 보기 — ``view[rows, t]`` 만 받는다. 스텝마다 그 칸만 읽으니 작업마다 패널을 통째로 복사하지 않는다."""
+
+    __slots__ = ("sig", "pi")
+
+    def __init__(self, sig: np.ndarray, pi: np.ndarray):
+        self.sig, self.pi = sig, pi
+
+    def __getitem__(self, key):
+        rows, t = key
+        return self.sig[self.pi[rows], t]
+
+
 def _perm_task(a):
     r, kind = a
     ctx, cell, icy, sr, window, spec, flags, ann = (_G[k] for k in ("ctx", "cell", "ic", "sr", "window", "spec", "flags", "ann"))
     pi = keyed_rng("perm", r).permutation(ctx.sig.shape[0])
-    recs = simulate(ctx, kind, cell, flags, rank_sig=ctx.sig[pi], ic_by_year=icy, sigma_r=sr, spec=spec)
+    recs = simulate(ctx, kind, cell, flags, rank_sig=_RowPermuted(ctx.sig, pi), ic_by_year=icy, sigma_r=sr, spec=spec)
     nan_share = float(np.nanmean([x.perm_nan_share for x in recs])) if kind == "O" else float("nan")
     viol = check_invariants(recs, kind, cell, spec=spec, costs=flags.costs)
     return r, kind, ir(oos(step_returns(recs, 2.0), window)["a"], ann), nan_share, viol
@@ -66,6 +79,8 @@ def permutation_nulls(ctx, cell, ic_by_year, sigma_r, workers: int, n: int = N_P
     if not any(in_window):
         raise ValueError(f"평가 창 {window} 에 격자일이 없다 — 널이 전부 NaN 이 된다")
     _G.update({"ctx": ctx, "cell": cell, "ic": ic_by_year, "sr": sigma_r, "window": window, "spec": spec, "flags": flags, "ann": ann})
+    for t in ctx.grid:      # 포크 전에 채워 작업자들이 같은 값을 공유한다
+        ctx.vol(t)
     tasks = [(r, k) for r in range(n) for k in kinds]
     with mp.get_context("fork").Pool(workers) as pool:
         res = list(pool.imap_unordered(_perm_task, tasks, chunksize=1))

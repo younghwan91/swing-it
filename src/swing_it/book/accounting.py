@@ -7,7 +7,7 @@ from dataclasses import replace
 import numpy as np
 
 from swing_it.book.context import Ctx, StepRec, delisted, index_mask
-from swing_it.book.costs import linear_bp, trade_costs, trailing_vol
+from swing_it.book.costs import linear_bp, trade_costs
 from swing_it.book.optimized import FACTOR_ALARM, capped_rescale, o_target
 from swing_it.book.rank import r_target, tranche_names
 from swing_it.book.risk import active_risk, factor_share, sub_model, top_exposures
@@ -148,7 +148,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             tradeable = np.isfinite(C[:, f]) & (np.nan_to_num(ctx.tv_won[:, f]) > 0)
         else:
             tradeable = np.isfinite(Cff[:, f])
-        vol = trailing_vol(ctx.ret, t)
+        vol = ctx.vol(t)
         adv_won = ctx.adv[:, t] * 1e6
         costable = np.isfinite(vol) & np.isfinite(adv_won) & (adv_won >= 1e6) & (vol <= 1.0)
         if flags.costs:

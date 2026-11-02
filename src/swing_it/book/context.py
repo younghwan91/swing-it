@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from krx_quant_core.market.codes import Market
 
-from swing_it.book.costs import HALF_SPREAD_BP
+from swing_it.book.costs import HALF_SPREAD_BP, trailing_vol
 from swing_it.engine.panels import ffill_axis1
 
 
@@ -41,11 +41,20 @@ class Ctx:
             # 표기는 Market.parse 가 푼다(한글·소문자). 모르는 값은 예외다. KONEX 만 정가 값이 없어 비용 큰 쪽(KOSDAQ)으로 둔다
             self.hs_bp = np.array([HALF_SPREAD_BP.get(Market.parse(m).value, HALF_SPREAD_BP["KOSDAQ"]) for m in self.market])
         self._u = {}
+        self._vol = {}
 
     def in_u(self, t: int) -> np.ndarray:
         if t not in self._u:
             self._u[t] = index_mask(self.C.shape[0], self.models[t][0])
         return self._u[t]
+
+    def vol(self, t: int) -> np.ndarray:
+        """``trailing_vol(ret, t)`` 캐시 — 널이 같은 격자일을 수백 번 다시 잰다. 읽기 전용이다."""
+        if t not in self._vol:
+            v = trailing_vol(self.ret, t)
+            v.flags.writeable = False
+            self._vol[t] = v
+        return self._vol[t]
 
 
 def models_from_mask(mask: np.ndarray, grid: list[int]) -> dict:

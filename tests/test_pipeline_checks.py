@@ -13,6 +13,7 @@ import pytest
 
 from swing_it.core_layers import CoreLayerMissing, core_layer
 from swing_it.pipeline.checks import (
+    _day,
     CheckError,
     check_attribution,
     check_forecast,
@@ -265,3 +266,11 @@ def test_trade_costs_on_a_missing_layer_is_a_clear_error_not_a_zero(monkeypatch)
                           pd.Timestamp("2023-06-01").date(), np.array([5.0]), 3e8)
     assert costs.trade_costs(np.array([0.0]), np.array([1e10]), np.array([0.02]), np.array(["KOSPI"], dtype=object),
                              pd.Timestamp("2023-06-01").date(), np.array([5.0]), 3e8)[0] == 0.0
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), "nope"])
+def test_day_parses_unique_values_but_a_missing_one_still_fails(bad):
+    """고유 값만 파싱한다. 결측이 ``factorize`` 표지값으로 새면 마지막 날짜로 둔갑해 검사를 통과한다."""
+    with pytest.raises(CheckError, match="날짜"):
+        _day(pd.Series(["2020-01-02", bad, "2020-01-03"]), "x")
+    assert _day(pd.Series(["2020-01-02", "2020-01-02", "20200103"]), "x").dt.strftime("%Y%m%d").tolist() == ["20200102", "20200102", "20200103"]
