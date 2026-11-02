@@ -176,6 +176,19 @@ def _backfill_problem(backfill: Any, stage: Stage) -> "str | None":
     return None
 
 
+def _shape_problems(ev: dict[str, Any]) -> list[str]:
+    """파일에서 읽은 줄의 모양. 어긋난 줄을 규칙 검사로 넘기면 예외로 죽어 원인이 가려진다."""
+    if not isinstance(ev.get("stage"), int):
+        return [f"stage 가 정수가 아니다: {ev.get('stage')!r}"]
+    refs = ev.get("evidence")
+    if not isinstance(refs, list):
+        return ["evidence 가 목록이 아니다"]
+    refs = refs + [ev[k] for k in ("reviewer", "forward_evidence") if ev.get(k) is not None]
+    bad = [r for r in refs if not (isinstance(r, dict) and isinstance(r.get("path"), str)
+                                   and isinstance(r.get("sha256"), str))]
+    return [f"증거 참조 모양이 어긋난다: {bad}"] if bad else []
+
+
 def _event_problems(ev: dict[str, Any]) -> list[str]:
     """줄 하나만 보고 판단할 수 있는 규칙 위반들."""
     try:
@@ -283,7 +296,7 @@ def read_events(study: str, *, root: "Path | str | None" = None) -> list[dict[st
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: 체인이 끊겼다 — 줄이 빠졌거나 순서가 바뀌었다")
         if ev.get("study") != study:
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: 다른 연구의 줄이다 ({ev.get('study')!r})")
-        problems = _event_problems(ev)
+        problems = _shape_problems(ev) or _event_problems(ev)
         if problems:
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: " + "; ".join(problems))
         stage = Stage(ev["stage"])

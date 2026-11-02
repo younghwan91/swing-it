@@ -20,6 +20,9 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
 
+  (k) 파이프라인 순서 — 러너는 study·단계를 선언하고 데이터를 읽기 전에 게이트를 부른다(docs/PIPELINE.md).
+      원장 체인·행 규칙·증거 해시도 여기서 다시 본다.
+
 무의존·표준 라이브러리만. exit 0 = 위반 없음, exit 1 = 위반.
 실행: ``python scripts/check_guardrails.py``
 """
@@ -35,6 +38,7 @@ REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "swing_it"
 EXPERIMENTS = REPO / "research" / "experiments"
 LOGS = REPO / "research" / "logs"
+PAPER = REPO / "research" / "paper"
 
 # --- (b) 게이트 → 로그 디렉터리 매핑 규약 --------------------------------------
 # 기본 규약: ``<name>_gate.py`` → ``research/logs/<name>/VERDICT.md``.
@@ -342,6 +346,243 @@ VERDICT_RUNNER = {
 _IRREPRODUCIBLE_MARKER = "재현 불가 고지"
 
 
+# (k) 파이프라인 순서(docs/PIPELINE.md) — 이미지의 11단계를 코드로 강제한다.
+#
+# 러너는 파일 위에 PIPELINE = ("<study>", <단계>) 를 적고, 데이터를 읽기 전에 require_stage(*PIPELINE) 을 부른다.
+# 러너가 아닌 파일은 PIPELINE_LIBRARY = "<사유>" 로 선언한다. "진입점이 없으면 러너가 아니다"로 추정하면 진입점을
+# 빼는 것으로 이 규칙을 피할 수 있어서, 선언을 요구하고 선언과 실제(진입점 유무)가 맞는지 본다.
+#
+# 2026-11-02 면제 목록. **이 날 있던 파일만 있고, 줄어들기만 한다** — tests/test_check_guardrails.py 가 고정한다.
+# 재현이 바이트 동일해야 하는 옛 러너를 고치지 않으려고 둔다. 새 러너에는 면제가 없다.
+# ml_forecast_*.py 는 일부러 넣지 않았다(younghwan91/ml-forecast-prereg, 미머지) — 머지 시 선언한다.
+PIPELINE_GRANDFATHER = frozenset({
+    # main
+    "research/experiments/catalyst_flow_swing_gate.py",
+    "research/experiments/contrarian_bo.py",
+    "research/experiments/contrarian_distribution.py",
+    "research/experiments/contrarian_selective.py",
+    "research/experiments/contrarian_validate.py",
+    "research/experiments/inst_flow_accel_gate.py",
+    "research/experiments/news_persistence_swing.py",
+    "research/experiments/pead_concentrated_gate.py",
+    "research/experiments/pead_gate.py",
+    "research/experiments/pead_optimizer_b.py",
+    "research/experiments/pead_optimizer_b_feasibility.py",
+    "research/experiments/pead_optimizer_b_report.py",
+    "research/experiments/pead_optimizer_c0.py",
+    "research/experiments/pead_optimizer_po2.py",
+    "research/experiments/pead_optimizer_po3.py",
+    "research/experiments/pead_optimizer_po4.py",
+    "research/experiments/pead_optimizer_repaired.py",
+    "research/experiments/pead_optimizer_seam.py",
+    "research/experiments/pead_refinement.py",
+    "research/experiments/prop_feasibility.py",
+    "research/experiments/prop_gate.py",
+    "research/experiments/prop_swing_common.py",
+    "research/experiments/pullback_prop_gate.py",
+    "research/experiments/regime_switch.py",
+    "research/experiments/slippage_check.py",
+    "research/experiments/survivorship_bias_gate.py",
+})
+# 2026-11-02 feature-combined-strategy 에만 있는 파일. fcs 를 머지하기 전까지 main 에 없는 것이 정상이다.
+# 오늘 적어 두지 않으면 다음 머지 때 "늘어나지 않는다"를 어기는 수밖에 없다. 이름뿐이고 fcs 는 건드리지 않는다.
+PIPELINE_GRANDFATHER_FCS = frozenset({
+    "research/experiments/adapt18.py",
+    "research/experiments/ana31.py",
+    "research/experiments/convergence_posthoc.py",
+    "research/experiments/convergence_run.py",
+    "research/experiments/core25.py",
+    "research/experiments/event_families_build.py",
+    "research/experiments/event_sources_build.py",
+    "research/experiments/evo_ablate.py",
+    "research/experiments/evo_consensus.py",
+    "research/experiments/evo_flow_coverage.py",
+    "research/experiments/evo_judge.py",
+    "research/experiments/evo_report.py",
+    "research/experiments/exit_ablate.py",
+    "research/experiments/exits_v2_run.py",
+    "research/experiments/flow_layer.py",
+    "research/experiments/ga2_post.py",
+    "research/experiments/ga2_run.py",
+    "research/experiments/ga_run.py",
+    "research/experiments/indep30.py",
+    "research/experiments/indep30_coverage.py",
+    "research/experiments/index27.py",
+    "research/experiments/index28.py",
+    "research/experiments/leader21.py",
+    "research/experiments/leader22.py",
+    "research/experiments/leader23.py",
+    "research/experiments/leader24.py",
+    "research/experiments/leader26.py",
+    "research/experiments/leaderM_desc.py",
+    "research/experiments/live_portfolio_backtest.py",
+    "research/experiments/market_mood_run.py",
+    "research/experiments/meta20.py",
+    "research/experiments/meta20_post.py",
+    "research/experiments/meta_gen1_run.py",
+    "research/experiments/meta_gen2_run.py",
+    "research/experiments/meta_gen3_run.py",
+    "research/experiments/meta_gen4_run.py",
+    "research/experiments/meta_gen5_run.py",
+    "research/experiments/meta_gen6_run.py",
+    "research/experiments/minervini_exits_run.py",
+    "research/experiments/mood_avail_run.py",
+    "research/experiments/news_veto_posthoc.py",
+    "research/experiments/pattern_ga_run.py",
+    "research/experiments/pattern_ga_view.py",
+    "research/experiments/pead19.py",
+    "research/experiments/rawcap_rerun.py",
+    "research/experiments/recheck29.py",
+    "research/experiments/regime_panel_run.py",
+    "research/experiments/relax_run.py",
+    "research/experiments/rl32.py",
+    "research/experiments/sepa_confluence_gate.py",
+    "research/experiments/sepa_explore.py",
+    "research/experiments/sepa_momentum.py",
+    "research/experiments/source_scan.py",
+    "research/experiments/vcp_retest_run.py",
+    "research/experiments/wedge_d_run.py",
+    "research/experiments/wedge_test_run.py",
+    "research/paper/index_paper.py",
+    "research/paper/leader_paper.py",
+    "research/paper/pead_forward_calib.py",
+    "research/paper/pead_paper.py",
+})
+# 여기 있는 연구는 research/logs/<연구>/ 가 있으면 PIPELINE.jsonl 도 있어야 한다.
+# ml_forecast 는 main 에 로그가 없어 지금은 걸리지 않는다. 머지하는 순간 이 줄이 원장을 요구한다.
+PIPELINE_LEDGER_REQUIRED = ("pead_optimizer", "pead_forward", "ml_forecast")
+
+#: 게이트 앞에 와도 되는 호출 — 인자 파싱뿐이다. --help 는 게이트 없이 떠야 한다.
+_BEFORE_GATE_OK = frozenset({
+    "ArgumentParser", "add_argument", "add_argument_group", "add_mutually_exclusive_group",
+    "add_subparsers", "add_parser", "set_defaults", "parse_args", "print",
+})
+
+
+#: 이 호출이 있으면 9단계 이상이다. 1단계로 선언하면 앞 단계가 없어 게이트가 비어 버린다.
+_BACKTEST_CALLS = frozenset({
+    "prop_gate", "gate_sim", "pead_backtest", "staggered_backtest", "staggered_tranche_backtest",
+    "rank_tilt_backtest", "run_recipe",
+})
+
+
+def _load_gate():
+    """이 스크립트 옆 src 의 게이트. 표준 라이브러리만 쓰니 패키지가 설치되지 않아도 돈다."""
+    src = str(Path(__file__).resolve().parent.parent / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from swing_it.pipeline import gate  # noqa: PLC0415 — 이 규칙에서만 쓴다
+
+    return gate
+
+
+def _module_constant(tree: ast.Module, name: str):
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            return node.value
+    return None
+
+
+def _main_block(tree: ast.Module) -> "list[ast.stmt] | None":
+    for node in tree.body:
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) \
+                and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__":
+            return node.body
+    return None
+
+
+def _is_gate_call(stmt: ast.stmt) -> bool:
+    """정확히 require_stage(*PIPELINE) 인 문장 하나. 조건문 안·다른 인자는 치지 않는다."""
+    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+        return False
+    call = stmt.value
+    return (_called_name(call) == "require_stage" and not call.keywords and len(call.args) == 1
+            and isinstance(call.args[0], ast.Starred) and isinstance(call.args[0].value, ast.Name)
+            and call.args[0].value.id == "PIPELINE")
+
+
+def _gate_comes_first(body: "list[ast.stmt]", funcs: dict) -> bool:
+    """문장을 앞에서부터 본다. 게이트 전에 인자 파싱 말고 다른 호출이 있으면 거짓. main() 이면 그 안으로 따라간다."""
+    for stmt in body:
+        if _is_gate_call(stmt):
+            return True
+        calls = {_called_name(n) for n in ast.walk(stmt) if isinstance(n, ast.Call)} - {None}
+        if "main" in calls and "main" in funcs:
+            return _gate_comes_first(funcs["main"].body, {})
+        if calls - _BEFORE_GATE_OK:
+            return False
+    return False
+
+
+def _pipeline_problem(tree: ast.Module, gate) -> "str | None":
+    """파일 하나의 선언 위반 사유. 문제 없으면 None."""
+    entry = _main_block(tree)
+    library = _module_constant(tree, "PIPELINE_LIBRARY")
+    declared = _module_constant(tree, "PIPELINE")
+    if library is not None:
+        if not (isinstance(library, ast.Constant) and isinstance(library.value, str) and library.value.strip()):
+            return "PIPELINE_LIBRARY 는 사유 문자열이어야 한다."
+        if entry is not None:
+            return "PIPELINE_LIBRARY 인데 __main__ 진입점이 있다 — 러너면 PIPELINE 을 선언한다."
+        return None
+    if declared is None:
+        return ('PIPELINE = ("<study>", <단계>) 선언이 없다. 러너가 아니면 PIPELINE_LIBRARY = "<사유>" 를 적는다. '
+                "면제 목록은 늘리지 않는다.")
+    if not (isinstance(declared, ast.Tuple) and len(declared.elts) == 2):
+        return 'PIPELINE 은 ("<study>", <단계>) 튜플 리터럴이어야 한다.'
+    study, stage = declared.elts
+    if not (isinstance(study, ast.Constant) and isinstance(study.value, str) and gate._STUDY.match(study.value)):
+        return "PIPELINE 의 study 는 소문자·숫자·밑줄 문자열이어야 한다."
+    value = stage.value if isinstance(stage, ast.Constant) else stage.attr if isinstance(stage, ast.Attribute) else None
+    try:
+        parsed = gate.Stage.parse(value)
+    except ValueError:
+        return f"PIPELINE 의 단계가 1~11 또는 Stage.<이름> 이 아니다: {ast.unparse(stage)}"
+    called = {_called_name(n) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    if parsed < gate.Stage.BACKTEST and called & _BACKTEST_CALLS:
+        return (f"{sorted(called & _BACKTEST_CALLS)} 를 부르는데 {parsed.label} 로 선언했다 — 백테스트는 9단계다. "
+                "앞 단계로 적으면 게이트가 비어 버린다.")
+    if entry is None:
+        return "PIPELINE 을 선언했는데 __main__ 진입점이 없다 — 러너가 아니면 PIPELINE_LIBRARY 를 적는다."
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    if not _gate_comes_first(entry, funcs):
+        return ("데이터를 읽기 전에 require_stage(*PIPELINE) 을 불러야 한다 — __main__ 블록이나 main() 의 맨 위 문장으로, "
+                "조건문 없이. 앞에는 인자 파싱만 온다.")
+    return None
+
+
+def check_pipeline_declared() -> list[str]:
+    """(k) research/experiments·research/paper 의 파일은 면제 목록이 아니면 파이프라인 선언이 있어야 한다."""
+    gate = _load_gate()
+    out = []
+    for root in (EXPERIMENTS, PAPER):
+        if not root.is_dir():
+            continue
+        for p in _iter_py(root):
+            rel = p.relative_to(REPO).as_posix()
+            if p.name == "__init__.py" or rel in PIPELINE_GRANDFATHER or rel in PIPELINE_GRANDFATHER_FCS:
+                continue
+            try:
+                problem = _pipeline_problem(ast.parse(p.read_text(encoding="utf-8")), gate)
+            except SyntaxError as exc:                  # 파싱 실패는 침묵시키지 않는다
+                problem = f"파싱 실패: {exc}"
+            if problem:
+                out.append(f"[pipeline] {rel} — {problem} (docs/PIPELINE.md)")
+    return out
+
+
+def check_pipeline_ledgers() -> list[str]:
+    """(k) 원장 체인·행 규칙·최신 증거 해시, 그리고 있어야 할 원장의 존재."""
+    gate = _load_gate()
+    out = [f"[pipeline] {p}" for p in gate.verify(root=REPO)]
+    for study in PIPELINE_LEDGER_REQUIRED:
+        if (LOGS / study).is_dir() and not (LOGS / study / gate.LEDGER_NAME).exists():
+            out.append(f"[pipeline] research/logs/{study} 에 {gate.LEDGER_NAME} 가 없다 — "
+                       f"실제 상태를 python -m swing_it.pipeline record 로 적는다(docs/PIPELINE.md).")
+    return out
+
+
 # (i) 커밋 신원이 레포 설정과 다르면 실패.
 #
 # 커밋 시 `git -c user.email=...` 로 신원을 덮어쓰면 의도치 않은 주소가 공개
@@ -431,6 +672,8 @@ def main() -> int:
     violations += check_no_raw_price_select()
     violations += check_no_survivor_only_join()
     violations += check_verdicts_have_runner()
+    violations += check_pipeline_declared()
+    violations += check_pipeline_ledgers()
     violations += check_commit_identity()
 
     if violations:
@@ -440,7 +683,7 @@ def main() -> int:
         print("\n(GUARDRAILS.md §5 — 경계·판정·리포터 규칙)")
         return 1
 
-    print("가드레일 린트 통과 — 경계·VERDICT·리포터 위반 없음.")
+    print("가드레일 린트 통과 — 경계·VERDICT·리포터·파이프라인 위반 없음.")
     return 0
 
 

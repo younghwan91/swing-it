@@ -534,6 +534,20 @@ def test_forged_skip_without_reason_is_rejected(tmp_path):
         require_stage(STUDY, Stage.RISK_MODEL, root=tmp_path)
 
 
+@pytest.mark.parametrize("fields,match", [
+    ({"stage": "4"}, "정수"),
+    ({"stage": 12}, "모르는 단계"),
+    ({"stage": 1, "evidence": "x.md"}, "목록"),
+    ({"stage": 1, "evidence": [{"path": "x.md"}]}, "모양"),
+    ({"stage": 1, "evidence": [{"path": "x.md", "sha256": "0"}], "reviewer": "x_verified.md"}, "모양"),
+])
+def test_malformed_line_is_corrupt_not_a_crash(tmp_path, fields, match):
+    """어긋난 줄이 KeyError·TypeError 로 죽으면 원인이 가려진다."""
+    _forge(tmp_path, **fields)
+    with pytest.raises(LedgerCorrupt, match=match):
+        require_stage(STUDY, Stage.DATA, root=tmp_path)
+
+
 def test_line_of_another_study_is_rejected(tmp_path):
     _forge(tmp_path, stage=1, study="other", evidence=_forge_evidence(tmp_path))
     with pytest.raises(LedgerCorrupt, match="연구"):
@@ -642,3 +656,75 @@ def test_gate_stays_dependency_free():
             "bad = {'numpy', 'pandas', 'krx_quant_core'} & set(sys.modules); "
             "sys.exit(1 if bad else 0)")
     assert subprocess.run([sys.executable, "-c", code], timeout=60).returncode == 0
+
+
+# --- 러너 끝까지 — 완료 조건 (a) -----------------------------------------------------
+
+_RUNNER = '''
+from swing_it.pipeline import require_stage
+
+PIPELINE = ("toy", 5)
+TOUCHED = []
+
+def main():
+    require_stage(*PIPELINE)
+    TOUCHED.append("data")          # 여기가 데이터 접근 자리다
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _load_runner(tmp_path):
+    import importlib.util
+
+    f = tmp_path / "runner_fixture.py"
+    f.write_text(_RUNNER, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("runner_fixture", f)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ready(root):
+    _open_upto(root, Stage.FORECAST)
+
+
+@pytest.mark.parametrize("state,match", [
+    ("no_ledger", "pending"),
+    ("earlier_stage_failed", "fail"),
+    ("earlier_stage_redone", "stale"),
+    ("evidence_tampered", "해시"),
+    ("evidence_missing", "없다"),
+    ("reviewer_doc_tampered", "해시"),
+    ("ledger_hand_edited", "체인"),
+])
+def test_runner_does_not_touch_data_when_earlier_evidence_is_not_good(tmp_path, monkeypatch, state, match):
+    monkeypatch.setattr(gate, "_repo_root", lambda: tmp_path)
+    if state != "no_ledger":
+        _ready(tmp_path)
+    if state == "earlier_stage_failed":
+        record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", reason="IC 없음", root=tmp_path)
+    elif state == "earlier_stage_redone":
+        _pass(tmp_path, Stage.DATA)
+    elif state == "evidence_tampered":
+        _doc(tmp_path, "s2.md", "고침\n")
+    elif state == "evidence_missing":
+        (tmp_path / "research/logs/toy/s2.md").unlink()
+    elif state == "reviewer_doc_tampered":
+        _doc(tmp_path, "S_verified.md", "리뷰 고침\n")
+    elif state == "ledger_hand_edited":
+        p = _ledger(tmp_path)
+        p.write_text(p.read_text(encoding="utf-8").replace('"stage": 2', '"stage": 3', 1), encoding="utf-8")
+    runner = _load_runner(tmp_path)
+    with pytest.raises(StageGateError, match=match):
+        runner.main()
+    assert runner.TOUCHED == []
+
+
+def test_runner_runs_once_earlier_stages_are_open(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "_repo_root", lambda: tmp_path)
+    _ready(tmp_path)
+    runner = _load_runner(tmp_path)
+    runner.main()
+    assert runner.TOUCHED == ["data"]

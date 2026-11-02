@@ -304,3 +304,344 @@ def test_identity_allows_github_merge_commits_but_not_other_addresses(lint, tmp_
                    "GIT_COMMITTER_EMAIL": "someone@corp.example.com"})
     out = lint.check_commit_identity()
     assert out and "corp.example.com" in out[0], f"사내 메일을 못 잡는다: {out}"
+
+
+# --- (k) 파이프라인 순서 ------------------------------------------------------------
+#
+# 러너가 study·단계를 선언하고 데이터를 읽기 전에 게이트를 부르는가. 위반을 주입해 실제로 잡는지 본다.
+
+#: 2026-11-02 고정. 린트의 면제 목록은 이 집합의 부분집합이어야 한다 — 줄어들 수는 있어도 늘어날 수 없다.
+_PINNED_GRANDFATHER = frozenset({
+    "research/experiments/catalyst_flow_swing_gate.py",
+    "research/experiments/contrarian_bo.py",
+    "research/experiments/contrarian_distribution.py",
+    "research/experiments/contrarian_selective.py",
+    "research/experiments/contrarian_validate.py",
+    "research/experiments/inst_flow_accel_gate.py",
+    "research/experiments/news_persistence_swing.py",
+    "research/experiments/pead_concentrated_gate.py",
+    "research/experiments/pead_gate.py",
+    "research/experiments/pead_optimizer_b.py",
+    "research/experiments/pead_optimizer_b_feasibility.py",
+    "research/experiments/pead_optimizer_b_report.py",
+    "research/experiments/pead_optimizer_c0.py",
+    "research/experiments/pead_optimizer_po2.py",
+    "research/experiments/pead_optimizer_po3.py",
+    "research/experiments/pead_optimizer_po4.py",
+    "research/experiments/pead_optimizer_repaired.py",
+    "research/experiments/pead_optimizer_seam.py",
+    "research/experiments/pead_refinement.py",
+    "research/experiments/prop_feasibility.py",
+    "research/experiments/prop_gate.py",
+    "research/experiments/prop_swing_common.py",
+    "research/experiments/pullback_prop_gate.py",
+    "research/experiments/regime_switch.py",
+    "research/experiments/slippage_check.py",
+    "research/experiments/survivorship_bias_gate.py",
+})
+_PINNED_GRANDFATHER_FCS = frozenset({
+    "research/experiments/adapt18.py",
+    "research/experiments/ana31.py",
+    "research/experiments/convergence_posthoc.py",
+    "research/experiments/convergence_run.py",
+    "research/experiments/core25.py",
+    "research/experiments/event_families_build.py",
+    "research/experiments/event_sources_build.py",
+    "research/experiments/evo_ablate.py",
+    "research/experiments/evo_consensus.py",
+    "research/experiments/evo_flow_coverage.py",
+    "research/experiments/evo_judge.py",
+    "research/experiments/evo_report.py",
+    "research/experiments/exit_ablate.py",
+    "research/experiments/exits_v2_run.py",
+    "research/experiments/flow_layer.py",
+    "research/experiments/ga2_post.py",
+    "research/experiments/ga2_run.py",
+    "research/experiments/ga_run.py",
+    "research/experiments/indep30.py",
+    "research/experiments/indep30_coverage.py",
+    "research/experiments/index27.py",
+    "research/experiments/index28.py",
+    "research/experiments/leader21.py",
+    "research/experiments/leader22.py",
+    "research/experiments/leader23.py",
+    "research/experiments/leader24.py",
+    "research/experiments/leader26.py",
+    "research/experiments/leaderM_desc.py",
+    "research/experiments/live_portfolio_backtest.py",
+    "research/experiments/market_mood_run.py",
+    "research/experiments/meta20.py",
+    "research/experiments/meta20_post.py",
+    "research/experiments/meta_gen1_run.py",
+    "research/experiments/meta_gen2_run.py",
+    "research/experiments/meta_gen3_run.py",
+    "research/experiments/meta_gen4_run.py",
+    "research/experiments/meta_gen5_run.py",
+    "research/experiments/meta_gen6_run.py",
+    "research/experiments/minervini_exits_run.py",
+    "research/experiments/mood_avail_run.py",
+    "research/experiments/news_veto_posthoc.py",
+    "research/experiments/pattern_ga_run.py",
+    "research/experiments/pattern_ga_view.py",
+    "research/experiments/pead19.py",
+    "research/experiments/rawcap_rerun.py",
+    "research/experiments/recheck29.py",
+    "research/experiments/regime_panel_run.py",
+    "research/experiments/relax_run.py",
+    "research/experiments/rl32.py",
+    "research/experiments/sepa_confluence_gate.py",
+    "research/experiments/sepa_explore.py",
+    "research/experiments/sepa_momentum.py",
+    "research/experiments/source_scan.py",
+    "research/experiments/vcp_retest_run.py",
+    "research/experiments/wedge_d_run.py",
+    "research/experiments/wedge_test_run.py",
+    "research/paper/index_paper.py",
+    "research/paper/leader_paper.py",
+    "research/paper/pead_forward_calib.py",
+    "research/paper/pead_paper.py",
+})
+
+_RUNNER_OK = """
+import argparse
+from swing_it.pipeline import require_stage, Stage
+from swing_it.storage import connect
+
+PIPELINE = ("toy", Stage.BACKTEST)
+
+def main() -> int:
+    \"\"\"돈다.\"\"\"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db")
+    args = ap.parse_args()
+    require_stage(*PIPELINE)
+    connect(args.db)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
+def _tree(lint, tmp_path, monkeypatch):
+    monkeypatch.setattr(lint, "REPO", tmp_path)
+    monkeypatch.setattr(lint, "EXPERIMENTS", tmp_path / "research" / "experiments")
+    monkeypatch.setattr(lint, "PAPER", tmp_path / "research" / "paper")
+    monkeypatch.setattr(lint, "LOGS", tmp_path / "research" / "logs")
+    lint.EXPERIMENTS.mkdir(parents=True)
+    lint.PAPER.mkdir(parents=True)
+    lint.LOGS.mkdir(parents=True)
+
+
+def _rule_k(lint, tmp_path, monkeypatch, source, *, where="EXPERIMENTS", name="new_runner.py"):
+    _tree(lint, tmp_path, monkeypatch)
+    (getattr(lint, where) / name).write_text(source, encoding="utf-8")
+    return lint.check_pipeline_declared()
+
+
+def test_rule_k_accepts_a_declared_runner(lint, tmp_path, monkeypatch):
+    assert _rule_k(lint, tmp_path, monkeypatch, _RUNNER_OK) == []
+
+
+@pytest.mark.parametrize("where", ["EXPERIMENTS", "PAPER"])
+def test_rule_k_catches_a_new_runner_without_declaration(lint, tmp_path, monkeypatch, where):
+    src = """
+from swing_it.storage import connect
+
+def main():
+    connect("x")
+
+if __name__ == "__main__":
+    main()
+"""
+    out = _rule_k(lint, tmp_path, monkeypatch, src, where=where)
+    assert len(out) == 1 and "[pipeline]" in out[0] and "PIPELINE =" in out[0], out
+
+
+def test_rule_k_catches_a_file_with_no_entry_point_and_no_declaration(lint, tmp_path, monkeypatch):
+    """진입점을 빼는 것으로 규칙을 피하지 못한다."""
+    assert len(_rule_k(lint, tmp_path, monkeypatch, "x = 1\n")) == 1
+
+
+@pytest.mark.parametrize("old,new,why", [
+    ("    require_stage(*PIPELINE)\n", "", "게이트 호출 없음"),
+    ("    require_stage(*PIPELINE)\n    connect(args.db)\n", "    connect(args.db)\n    require_stage(*PIPELINE)\n",
+     "데이터를 먼저 읽음"),
+    ("    require_stage(*PIPELINE)\n", "    if args.db:\n        require_stage(*PIPELINE)\n", "조건문 안"),
+    ("    require_stage(*PIPELINE)\n", "    try:\n        require_stage(*PIPELINE)\n    except Exception:\n        pass\n",
+     "try 로 삼킴"),
+    ("    require_stage(*PIPELINE)\n", '    require_stage("other", 1)\n', "선언과 다른 인자"),
+    ("    require_stage(*PIPELINE)\n", '    require_stage(*PIPELINE, root="/tmp")\n', "원장 바꿔치기"),
+    ('PIPELINE = ("toy", Stage.BACKTEST)\n', "", "선언 없음"),
+    ('PIPELINE = ("toy", Stage.BACKTEST)\n', 'PIPELINE = ("toy", 12)\n', "없는 단계"),
+    ('PIPELINE = ("toy", Stage.BACKTEST)\n', 'PIPELINE = ("toy", Stage.NOPE)\n', "없는 단계 이름"),
+    ('PIPELINE = ("toy", Stage.BACKTEST)\n', 'PIPELINE = ("Bad/Name", 9)\n', "잘못된 study"),
+    ('PIPELINE = ("toy", Stage.BACKTEST)\n', 'PIPELINE = make()\n', "리터럴 아님"),
+    ('if __name__ == "__main__":\n    raise SystemExit(main())\n', "", "진입점 없음"),
+], ids=lambda x: x if " " not in x and "\n" not in x else None)
+def test_rule_k_catches_each_way_of_dodging_the_gate(lint, tmp_path, monkeypatch, old, new, why):
+    assert old in _RUNNER_OK
+    out = _rule_k(lint, tmp_path, monkeypatch, _RUNNER_OK.replace(old, new))
+    assert len(out) == 1, f"{why}: {out}"
+
+
+def test_rule_k_accepts_the_gate_in_the_main_block(lint, tmp_path, monkeypatch):
+    src = """
+import argparse
+from swing_it.pipeline import require_stage
+
+PIPELINE = ("toy", 4)
+
+if __name__ == "__main__":
+    args = argparse.ArgumentParser().parse_args()
+    require_stage(*PIPELINE)
+    print(args)
+"""
+    assert _rule_k(lint, tmp_path, monkeypatch, src) == []
+
+
+def test_rule_k_does_not_follow_other_entry_functions(lint, tmp_path, monkeypatch):
+    """main 이 아닌 함수 안의 게이트는 따라가지 않는다 — 그런 러너는 __main__ 블록에서 먼저 부른다."""
+    src = """
+from swing_it.pipeline import require_stage
+
+PIPELINE = ("toy", 4)
+
+def run():
+    require_stage(*PIPELINE)
+
+if __name__ == "__main__":
+    run()
+"""
+    assert len(_rule_k(lint, tmp_path, monkeypatch, src)) == 1
+
+
+def test_rule_k_catches_a_backtest_declared_as_an_early_stage(lint, tmp_path, monkeypatch):
+    """1단계로 적으면 앞 단계가 없어 게이트가 비어 버린다."""
+    src = """
+from swing_it.pipeline import require_stage
+from swing_it.strategies.pead import staggered_backtest
+
+PIPELINE = ("toy", 1)
+
+def main():
+    require_stage(*PIPELINE)
+    staggered_backtest(None, None)
+
+if __name__ == "__main__":
+    main()
+"""
+    out = _rule_k(lint, tmp_path, monkeypatch, src)
+    assert len(out) == 1 and "백테스트는 9단계" in out[0], out
+    assert _rule_k_again(lint, tmp_path, src.replace('("toy", 1)', '("toy", 9)')) == []
+
+
+def _rule_k_again(lint, tmp_path, source):
+    (lint.EXPERIMENTS / "new_runner.py").write_text(source, encoding="utf-8")
+    return lint.check_pipeline_declared()
+
+
+def test_rule_k_accepts_a_declared_library(lint, tmp_path, monkeypatch):
+    src = 'PIPELINE_LIBRARY = "ml_forecast 러너들의 공용 함수"\n\ndef f():\n    return 1\n'
+    assert _rule_k(lint, tmp_path, monkeypatch, src) == []
+
+
+@pytest.mark.parametrize("src", [
+    'PIPELINE_LIBRARY = "라이브러리인 척"\n\nif __name__ == "__main__":\n    print(1)\n',
+    'PIPELINE_LIBRARY = "  "\n',
+    "PIPELINE_LIBRARY = make()\n",
+])
+def test_rule_k_catches_a_false_library_declaration(lint, tmp_path, monkeypatch, src):
+    assert len(_rule_k(lint, tmp_path, monkeypatch, src)) == 1
+
+
+def test_rule_k_reports_unparsable_files(lint, tmp_path, monkeypatch):
+    assert "파싱 실패" in _rule_k(lint, tmp_path, monkeypatch, "def (:\n")[0]
+
+
+def test_rule_k_skips_init_and_grandfathered_files_only(lint, tmp_path, monkeypatch):
+    _tree(lint, tmp_path, monkeypatch)
+    (lint.EXPERIMENTS / "__init__.py").write_text("", encoding="utf-8")
+    (lint.EXPERIMENTS / "pead_gate.py").write_text("x = 1\n", encoding="utf-8")        # 면제
+    (lint.EXPERIMENTS / "pead_gate2.py").write_text("x = 1\n", encoding="utf-8")       # 비슷한 이름은 면제 아님
+    (lint.PAPER / "pead_paper.py").write_text("x = 1\n", encoding="utf-8")             # fcs 면제
+    (lint.PAPER / "new_arm.py").write_text("x = 1\n", encoding="utf-8")                # 새 팔은 면제 아님
+    out = lint.check_pipeline_declared()
+    assert [o.split(" — ")[0] for o in out] == [
+        "[pipeline] research/experiments/pead_gate2.py", "[pipeline] research/paper/new_arm.py"]
+
+
+def test_grandfather_list_never_grows(lint):
+    """면제 목록은 2026-11-02 파일만 담고 줄어들기만 한다."""
+    assert lint.PIPELINE_GRANDFATHER <= _PINNED_GRANDFATHER, lint.PIPELINE_GRANDFATHER - _PINNED_GRANDFATHER
+    assert lint.PIPELINE_GRANDFATHER_FCS <= _PINNED_GRANDFATHER_FCS, (
+        lint.PIPELINE_GRANDFATHER_FCS - _PINNED_GRANDFATHER_FCS)
+    assert len(_PINNED_GRANDFATHER) == 26 and len(_PINNED_GRANDFATHER_FCS) == 60
+
+
+def test_ml_forecast_is_not_grandfathered(lint):
+    """ML 러너는 미머지다. 머지할 때 면제 없이 선언하게 둔다."""
+    names = lint.PIPELINE_GRANDFATHER | lint.PIPELINE_GRANDFATHER_FCS
+    assert not [n for n in names if "ml_forecast" in n]
+
+
+def test_grandfather_entries_on_main_exist(lint):
+    """지운 파일의 면제를 남겨 두면 같은 이름으로 새 러너를 면제 없이 넣을 수 있다."""
+    assert [n for n in lint.PIPELINE_GRANDFATHER if not (lint.REPO / n).is_file()] == []
+
+
+def test_ledger_required_studies_are_enforced_when_their_logs_exist(lint, tmp_path, monkeypatch):
+    """ML 을 머지해 research/logs/ml_forecast 가 생기는 순간 원장을 요구한다."""
+    _tree(lint, tmp_path, monkeypatch)
+    assert lint.check_pipeline_ledgers() == []
+    (lint.LOGS / "ml_forecast").mkdir()
+    out = lint.check_pipeline_ledgers()
+    assert len(out) == 1 and "ml_forecast" in out[0]
+
+
+def _ledger_with_one_pass(lint):
+    gate = lint._load_gate()
+    ev = lint.REPO / "e.md"
+    ev.write_text("증거\n", encoding="utf-8")
+    gate.record_stage("toy", 1, "pass", evidence=["e.md"], root=lint.REPO)
+    return gate, ev
+
+
+def test_rule_k_catches_tampered_evidence(lint, tmp_path, monkeypatch):
+    _tree(lint, tmp_path, monkeypatch)
+    _, ev = _ledger_with_one_pass(lint)
+    assert lint.check_pipeline_ledgers() == []
+    ev.write_text("고쳐 쓴 증거\n", encoding="utf-8")
+    out = lint.check_pipeline_ledgers()
+    assert len(out) == 1 and "해시" in out[0]
+
+
+def test_rule_k_catches_a_hand_edited_ledger(lint, tmp_path, monkeypatch):
+    _tree(lint, tmp_path, monkeypatch)
+    gate, _ = _ledger_with_one_pass(lint)
+    p = gate.ledger_path("toy", root=lint.REPO)
+    p.write_text(p.read_text(encoding="utf-8").replace('"stage": 1', '"stage": 2'), encoding="utf-8")
+    assert any("체인" in x for x in lint.check_pipeline_ledgers())
+
+
+@pytest.mark.parametrize("inject", ["runner", "evidence"])
+def test_main_is_wired_to_the_pipeline_rules(lint, tmp_path, monkeypatch, capsys, inject):
+    """규칙 함수가 살아 있어도 main() 에서 안 부르면 CI 는 초록이다 — 끝까지 본다."""
+    _tree(lint, tmp_path, monkeypatch)
+    monkeypatch.setattr(lint, "SRC", tmp_path / "src")
+    (tmp_path / "src").mkdir()
+    assert lint.main() == 0
+    if inject == "runner":
+        (lint.EXPERIMENTS / "new_runner.py").write_text("x = 1\n", encoding="utf-8")
+    else:
+        _, ev = _ledger_with_one_pass(lint)
+        ev.write_text("고쳐 쓴 증거\n", encoding="utf-8")
+    assert lint.main() == 1
+    assert "[pipeline]" in capsys.readouterr().out
+
+
+def test_ci_runs_the_guardrail_lint_on_pull_requests():
+    """이 린트가 CI 단계라는 전제가 깨지면 위 규칙은 전부 부탁이 된다."""
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "pull_request" in ci
+    assert "run: python scripts/check_guardrails.py" in ci
