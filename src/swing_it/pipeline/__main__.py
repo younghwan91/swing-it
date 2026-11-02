@@ -54,7 +54,9 @@ def _record(args: argparse.Namespace) -> int:
     _refuse_other_repo(args)
     approval = None
     if args.approval_date is not None or args.approval_quote is not None:
-        approval = {"date": args.approval_date, "quote": args.approval_quote}
+        approval = {"date": args.approval_date, "quote": args.approval_quote, "expires": args.approval_expires, "max_amount_krw": args.approval_max_krw}
+        if args.approval_basket is not None:
+            approval["basket_hash"] = args.approval_basket
     ev = gate.record_stage(
         args.study, args.stage, args.status,
         evidence=args.evidence, reviewer=args.reviewer, reason=args.reason,
@@ -97,6 +99,9 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--data-fingerprint")
     p.add_argument("--approval-date", help="10단계: 사용자 승인 날짜 YYYY-MM-DD")
     p.add_argument("--approval-quote", help="10단계: 사용자의 말 그대로")
+    p.add_argument("--approval-expires", help=f"10단계: 승인 만료일 YYYY-MM-DD(승인일부터 {gate.APPROVAL_MAX_TERM_DAYS}일 안)")
+    p.add_argument("--approval-max-krw", type=int, help="10단계: 승인한 주문 금액 상한(원)")
+    p.add_argument("--approval-basket", help="10단계: 승인한 바구니 해시. 주면 그 바구니에만 쓴다")
     p.add_argument("--forward-evidence", help="10단계: 전진 페이퍼 결과")
     p.add_argument("--backfill", help=f"게이트 이전 작업의 실제 날짜(≤ {gate.BACKFILL_CUTOFF})")
     p.set_defaults(func=_record)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -28,7 +28,19 @@ from swing_it.pipeline import (
 from swing_it.pipeline.__main__ import main as cli
 
 STUDY = "toy"
-APPROVAL = {"date": "2026-11-01", "quote": "실주문 1주 파일럿 진행해"}
+TODAY = datetime(2026, 11, 2, 12, 0, tzinfo=timezone(timedelta(hours=9)))
+APPROVAL = {"date": "2026-11-02", "quote": "실주문 진행해", "expires": "2026-11-30", "max_amount_krw": 30000000}
+
+
+@pytest.fixture(autouse=True)
+def _fixed_clock(monkeypatch):
+    """승인 나이·소급 기록은 시계에 달린다. 시험이 내일 깨지지 않게 고정한다."""
+    monkeypatch.setattr(gate, "_now", lambda: TODAY)
+
+
+def _advance(monkeypatch, days):
+    monkeypatch.setattr(gate, "_now", lambda: TODAY + timedelta(days=days))
+
 
 
 def _doc(root: Path, name: str, text: str = "내용\n") -> str:
@@ -360,8 +372,11 @@ def test_fail_on_results_stage_needs_no_reviewer(tmp_path):
 # --- 10단계 주문 실행 --------------------------------------------------------------
 
 @pytest.mark.parametrize("approval", [
-    None, {}, {"date": "2026-11-01"}, {"quote": "진행해"}, {"date": "2026-11-01", "quote": "  "},
-    {"date": "언젠가", "quote": "진행해"}, {"date": "2999-01-01", "quote": "진행해"},
+    None, {}, {"date": "2026-11-02"}, {"quote": "진행해"}, {**APPROVAL, "quote": "  "},
+    {**APPROVAL, "date": "언젠가"}, {**APPROVAL, "date": "2999-01-01"}, {**APPROVAL, "date": "20261102"},
+    {k: v for k, v in APPROVAL.items() if k != "expires"}, {k: v for k, v in APPROVAL.items() if k != "max_amount_krw"},
+    {**APPROVAL, "expires": "2026-11-01"}, {**APPROVAL, "expires": "2027-11-02"}, {**APPROVAL, "expires": "20261130"},
+    {**APPROVAL, "max_amount_krw": 0}, {**APPROVAL, "max_amount_krw": "많이"}, {**APPROVAL, "max_amount_krw": True}, {**APPROVAL, "basket_hash": "  "},
 ])
 def test_execution_pass_needs_a_real_approval_record(tmp_path, approval):
     _open_upto(tmp_path, Stage.EXECUTION)
@@ -370,6 +385,50 @@ def test_execution_pass_needs_a_real_approval_record(tmp_path, approval):
     with pytest.raises(RecordRejected, match="승인"):
         record_stage(STUDY, Stage.EXECUTION, "pass", reason="왜", evidence=[ev], approval=approval,
                      forward_evidence=fwd, root=tmp_path)
+
+
+def test_approval_older_than_the_backtest_verdict_is_refused(tmp_path, monkeypatch):
+    """승인은 9단계 판정 뒤의 말이어야 한다. 판정을 보기 전 말을 끌어다 쓰면 소급이다."""
+    _open_upto(tmp_path, Stage.EXECUTION)
+    _advance(monkeypatch, 3)
+    with pytest.raises(RecordRejected, match="9단계"):
+        _pass(tmp_path, Stage.EXECUTION, approval={**APPROVAL, "date": "2026-11-01"})
+
+
+def test_approval_must_be_recorded_soon(tmp_path, monkeypatch):
+    _open_upto(tmp_path, Stage.EXECUTION)
+    _advance(monkeypatch, gate.APPROVAL_MAX_AGE_DAYS + 1)
+    with pytest.raises(RecordRejected, match="승인.*일"):
+        _pass(tmp_path, Stage.EXECUTION, approval={**APPROVAL, "expires": "2027-01-15"})
+
+
+def test_expired_approval_stops_the_order_path(tmp_path, monkeypatch):
+    _open_upto(tmp_path, Stage.EXECUTION)
+    _pass(tmp_path, Stage.EXECUTION)
+    assert require_execution_approval(STUDY, root=tmp_path)["expires"] == "2026-11-30"
+    _advance(monkeypatch, 29)
+    with pytest.raises(StageGateError, match="만료"):
+        require_execution_approval(STUDY, root=tmp_path)
+
+
+def test_order_amount_and_basket_are_held_to_the_approval(tmp_path):
+    _open_upto(tmp_path, Stage.EXECUTION)
+    _pass(tmp_path, Stage.EXECUTION, approval={**APPROVAL, "basket_hash": "abc"})
+    assert require_execution_approval(STUDY, amount_krw=30000000, basket_hash="abc", root=tmp_path)
+    with pytest.raises(StageGateError, match="금액"):
+        require_execution_approval(STUDY, amount_krw=30000001, basket_hash="abc", root=tmp_path)
+    with pytest.raises(StageGateError, match="바구니"):
+        require_execution_approval(STUDY, amount_krw=1, basket_hash="def", root=tmp_path)
+    with pytest.raises(StageGateError, match="바구니"):
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
+
+
+def test_a_line_separator_in_a_quote_does_not_brick_the_ledger(tmp_path):
+    """U+2028 은 JSON 에 그대로 적힌다. ``splitlines`` 로 읽으면 한 줄이 둘로 쪼개져 원장 전체가 손상으로 막혔다."""
+    _open_upto(tmp_path, Stage.EXECUTION)
+    _pass(tmp_path, Stage.EXECUTION, approval={**APPROVAL, "quote": "진행\u2028해"}, reason="이유\u0085끝")
+    assert verify(STUDY, root=tmp_path) == []
+    assert require_execution_approval(STUDY, root=tmp_path)["quote"] == "진행\u2028해"
 
 
 def test_execution_pass_needs_forward_evidence(tmp_path):
@@ -634,6 +693,21 @@ def test_forged_line_without_reviewer_is_rejected(tmp_path):
         require_stage(STUDY, Stage.FORECAST, root=tmp_path)
 
 
+def test_a_garbage_timestamp_is_corruption_not_a_crash(tmp_path):
+    _forge(tmp_path, stage=1, evidence=_forge_evidence(tmp_path), ts="어제")
+    with pytest.raises(LedgerCorrupt, match="ts"):
+        require_stage(STUDY, Stage.DATA, root=tmp_path)
+
+
+def test_a_forged_backdated_approval_is_caught_on_read(tmp_path):
+    _open_upto(tmp_path, Stage.EXECUTION)
+    fwd = _doc(tmp_path, "forward.md")
+    _forge(tmp_path, stage=10, evidence=_forge_evidence(tmp_path), approval={**APPROVAL, "date": "2026-11-01"},
+           forward_evidence={"path": fwd, "sha256": gate.sha256_file(tmp_path / fwd)})
+    with pytest.raises(LedgerCorrupt, match="9단계"):
+        require_execution_approval(STUDY, root=tmp_path)
+
+
 def test_forged_line_out_of_order_is_rejected(tmp_path):
     _forge(tmp_path, stage=8, evidence=_forge_evidence(tmp_path))
     with pytest.raises(LedgerCorrupt, match="앞 단계"):
@@ -706,6 +780,14 @@ def test_backfill_only_covers_work_before_the_gate_existed(tmp_path):
         record_stage(STUDY, Stage.RISK_MODEL, "pass", reason="왜", evidence=[ev], backfill=late, root=tmp_path)
 
 
+def test_backfill_cannot_be_written_after_the_cutoff(tmp_path, monkeypatch):
+    """날짜 칸만 보면 언제든 옛날 날짜로 적어 순서 검사를 피한다. 적는 시각도 본다."""
+    ev = _doc(tmp_path, "x.md")
+    _advance(monkeypatch, 1)
+    with pytest.raises(RecordRejected, match="소급"):
+        record_stage(STUDY, Stage.RISK_MODEL, "pass", reason="왜", evidence=[ev], backfill="2026-11-02", root=tmp_path)
+
+
 def test_backfill_still_needs_the_stage_rules(tmp_path):
     ev = _doc(tmp_path, "b.md")
     with pytest.raises(RecordRejected, match="검증 문서"):
@@ -747,9 +829,12 @@ def test_cli_execution_needs_both_approval_flags(tmp_path):
     fwd = _doc(tmp_path, "forward.md")
     root = ["--root", str(tmp_path)]
     assert cli(["record", STUDY, "10", "pass", "--evidence", ev, "--forward-evidence", fwd,
-                "--reason", "왜", "--approval-date", "2026-11-01", *root]) == 1
+                "--reason", "왜", "--approval-date", "2026-11-02", *root]) == 1
     assert cli(["record", STUDY, "10", "pass", "--evidence", ev, "--forward-evidence", fwd,
-                "--reason", "왜", "--approval-date", "2026-11-01", "--approval-quote", "진행해", *root]) == 0
+                "--reason", "왜", "--approval-date", "2026-11-02", "--approval-quote", "진행해", *root]) == 1, "만료·금액이 없다"
+    assert cli(["record", STUDY, "10", "pass", "--evidence", ev, "--forward-evidence", fwd, "--reason", "왜", "--approval-date", "2026-11-02",
+                "--approval-quote", "진행해", "--approval-expires", "2026-11-30", "--approval-max-krw", "30000000", "--approval-basket", "abc", *root]) == 0
+    assert require_execution_approval(STUDY, amount_krw=1, basket_hash="abc", root=tmp_path)["max_amount_krw"] == 30000000
 
 
 def test_cli_status_marks_blocked_stages(tmp_path, capsys):

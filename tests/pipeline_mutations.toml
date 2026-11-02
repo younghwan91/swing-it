@@ -715,3 +715,35 @@ guards = ["tests/real_db/test_b_json_reproduction.py::test_compare_sections_catc
 file = "tests/real_db/test_b_json_reproduction.py"
 find = "            bad.append((f\"/{sec}\", \"section\", False, True))"
 replace = "            continue"
+
+[[mutation]]
+id = "approval-can-predate-the-verdict"
+why = "판정 전 말을 승인으로 쓰면 소급 승인이다"
+guards = ["tests/test_pipeline_gate.py::test_approval_older_than_the_backtest_verdict_is_refused"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if verdict is not None and day < date.fromisoformat(verdict[\"ts\"][:10]):"
+replace = "    if False:"
+
+[[mutation]]
+id = "expired-approval-still-orders"
+why = "만료가 안 막으면 승인 한 번이 영원히 쓰인다"
+guards = ["tests/test_pipeline_gate.py::test_expired_approval_stops_the_order_path"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if _now().date() > date.fromisoformat(approval[\"expires\"]):"
+replace = "    if False:"
+
+[[mutation]]
+id = "order-path-without-the-gate"
+why = "주문 코드가 게이트를 안 불러도 린트가 초록이면 게이트는 장식이다"
+guards = ["tests/test_check_guardrails.py::test_order_path_needs_the_execution_gate"]
+file = "scripts/check_guardrails.py"
+find = "            hit = _order_use(tree)\n"
+replace = "            hit = None\n"
+
+[[mutation]]
+id = "ledger-read-with-splitlines"
+why = "인용문의 U+2028 이 줄을 쪼개면 원장 하나가 통째로 막힌다"
+guards = ["tests/test_pipeline_gate.py::test_a_line_separator_in_a_quote_does_not_brick_the_ledger"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    lines = path.read_text(encoding=\"utf-8\").split(\"\\n\")\n"
+replace = "    lines = path.read_text(encoding=\"utf-8\").splitlines() + [\"\"]\n"

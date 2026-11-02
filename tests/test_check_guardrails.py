@@ -212,6 +212,32 @@ def _rule_k(lint, tmp_path, monkeypatch, source, *, where="research/experiments"
     return lint.check_pipeline_declared()
 
 
+@pytest.mark.parametrize("src", [
+    "from krx_quant_core.execution.kiwoom_broker import KiwoomBroker\n",
+    "import krx_quant_core.execution.orders as o\n",
+    "from swing_it.live.brokers import make\n",
+    "from swing_it.execution import runner\n",
+    'API = "kt10000"\n',
+    'def f(c):\n    return c.post({"api-id": "kt10003"})\n',
+])
+def test_order_path_needs_the_execution_gate(lint, tmp_path, monkeypatch, src):
+    """주문 코드를 게이트 없이 둘 수 없다. 게이트가 있어도 부르는 쪽이 안 부르면 그만이다(fcs sw-live 가 그렇다)."""
+    _tree(lint, tmp_path, monkeypatch)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "orders.py").write_text(src, encoding="utf-8")
+    out = lint.check_order_path_gated()
+    assert len(out) == 1 and "require_execution_approval" in out[0], out
+    (tmp_path / "src" / "orders.py").write_text(
+        src + "from swing_it.pipeline import require_execution_approval\n\ndef run(s):\n    require_execution_approval(s)\n", encoding="utf-8")
+    assert lint.check_order_path_gated() == []
+
+
+def test_order_rule_ignores_a_mention_in_a_docstring(lint, tmp_path, monkeypatch):
+    _tree(lint, tmp_path, monkeypatch)
+    (tmp_path / "scripts" / "x.py").write_text('"""kt10000 은 쓰지 않는다."""\n# kt10001\n', encoding="utf-8")
+    assert lint.check_order_path_gated() == []
+
+
 def test_rule_k_accepts_a_declared_runner(lint, tmp_path, monkeypatch):
     assert _rule_k(lint, tmp_path, monkeypatch, _RUNNER_OK) == []
 

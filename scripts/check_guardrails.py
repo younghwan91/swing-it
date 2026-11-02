@@ -16,6 +16,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (g) raw 가격 SELECT — 유니버스에서 폐지 종목이 조용히 빠지는 걸 막는다.
   (g2) 생존자 전용 조인 — ``supply_demand JOIN stocks`` 는 WHERE 없이도 폐지분을 떨군다.
   (h) 코드 없는 판정 — (b)의 역방향. VERDICT 에 러너가 등록·실재하거나 재현불가 선언 필요.
+  (l) 주문 API 를 쓰는 파일은 ``require_execution_approval`` 을 부른다.
   (j) ML 예측 피처 원천 — ``ml_forecast_*.py`` 가 생존자 전용·원천이 갈린 표를 읽으면 실패.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
@@ -870,6 +871,54 @@ def check_pipeline_ledgers_append_only() -> list[str]:
     return out
 
 
+# (l) 주문 경로는 게이트를 부른다. 게이트가 있어도 부르는 쪽이 안 부르면 그만이다 — fcs ``sw-live --execute --confirm-real`` 이 그렇다.
+_ORDER_MODULES = ("krx_quant_core.execution", "swing_it.live", "swing_it.execution")
+_ORDER_API_ID = re.compile(r"\bkt1000\d\b")
+_ORDER_CALLS = frozenset({"place_order", "submit_order", "send_order", "buy_order", "sell_order", "cancel_order"})
+
+
+def _order_use(tree: ast.Module) -> "str | None":
+    """파일이 주문 API 를 쓰면 그 근거 하나. 문서 문자열과 주석의 언급은 치지 않는다."""
+    docs = {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            hit = next((a.name for a in n.names if a.name.startswith(_ORDER_MODULES)), None)
+        elif isinstance(n, ast.ImportFrom):
+            hit = n.module if (n.module or "").startswith(_ORDER_MODULES) else None
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs and _ORDER_API_ID.search(n.value):
+            hit = n.value
+        elif isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) in _ORDER_CALLS:
+            hit = getattr(n.func, "attr", getattr(n.func, "id", None))
+        else:
+            hit = None
+        if hit:
+            return hit
+    return None
+
+
+def check_order_path_gated() -> list[str]:
+    """(l) src·research·scripts·examples 에서 주문 API 를 쓰는 파일은 ``require_execution_approval`` 을 불러야 한다."""
+    out = []
+    for name in ("src", "research", "scripts", "examples"):
+        root = REPO / name
+        if not root.is_dir():
+            continue
+        for p in _iter_py(root):
+            if p.name == "check_guardrails.py":        # 이 규칙의 패턴을 담고 있다
+                continue
+            try:
+                tree = ast.parse(p.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue                                # 파싱 실패는 규칙 (k) 가 말한다
+            hit = _order_use(tree)
+            if hit and not any(isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) == "require_execution_approval"
+                               for n in ast.walk(tree)):
+                out.append(f"[order] {p.relative_to(REPO).as_posix()} — {hit} 를 쓰는데 require_execution_approval 을 안 부른다(docs/PIPELINE.md 10단계).")
+    return out
+
+
 # (i) 커밋 신원이 레포 설정과 다르면 실패.
 #
 # 커밋 시 `git -c user.email=...` 로 신원을 덮어쓰면 의도치 않은 주소가 공개
@@ -987,6 +1036,7 @@ def main() -> int:
     violations += check_no_survivor_only_join()
     violations += check_verdicts_have_runner()
     violations += check_pipeline_declared()
+    violations += check_order_path_gated()
     violations += check_pipeline_ledgers()
     violations += check_pipeline_ledgers_append_only()
     violations += check_commit_identity()

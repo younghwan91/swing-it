@@ -26,6 +26,8 @@ from typing import Any, Iterable
 from swing_it.pipeline.stages import Stage
 
 __all__ = [
+    "APPROVAL_MAX_AGE_DAYS",
+    "APPROVAL_MAX_TERM_DAYS",
     "BACKFILL_CUTOFF",
     "LEDGER_NAME",
     "MONITORING_MAY_PRECEDE",
@@ -59,11 +61,30 @@ NOT_SKIPPABLE = frozenset({Stage.UNIVERSE, Stage.DATA, Stage.ALPHA, Stage.COSTS,
 MONITORING_MAY_PRECEDE = frozenset({Stage.BACKTEST, Stage.EXECUTION})
 #: 소급 기록(``backfill``)은 게이트가 생기기 전 작업에만 쓴다.
 BACKFILL_CUTOFF = "2026-11-02"
+#: 승인은 들은 지 이 일수 안에 적는다. 오래된 말을 끌어다 쓰지 못하게 한다.
+APPROVAL_MAX_AGE_DAYS = 14
+#: 승인의 만료는 승인일에서 이 일수 안이다. 그 뒤는 다시 묻는다.
+APPROVAL_MAX_TERM_DAYS = 92
 
 _STUDY = re.compile(r"[a-z][a-z0-9_]*\Z")
 _VERIFIED_DOC = re.compile(r"(.+_verified|REVIEW_.+)\.md\Z")
 _REVIEW_MARK = re.compile(r"리뷰|review", re.IGNORECASE)
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 _KST = timezone(timedelta(hours=9))
+
+
+def _now() -> datetime:
+    return datetime.now(_KST)
+
+
+def _strict_day(value: Any) -> "date | None":
+    """YYYY-MM-DD 만 받는다. ``date.fromisoformat`` 은 ``20261102``·``2026-W45-1`` 도 받는다."""
+    if not isinstance(value, str) or not _ISO_DAY.match(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 class StageGateError(RuntimeError):
@@ -151,31 +172,57 @@ def event_sha(ev: dict[str, Any]) -> str:
 
 
 def _approval_problem(approval: Any) -> "str | None":
+    """승인 한 건의 모양: 날짜·사용자의 말·만료·금액 상한. 한 바구니로 좁히려면 ``basket_hash`` 를 적는다. 재사용은 만료·금액·바구니로만 제한한다."""
     if not isinstance(approval, dict):
         return "사용자 승인 기록(날짜·인용)이 없다 — 추론하지 않는다"
     quote = approval.get("quote")
     if not isinstance(quote, str) or not quote.strip():
         return "사용자 승인 인용문이 비었다 — 사용자의 말을 그대로 적는다"
-    try:
-        day = date.fromisoformat(approval.get("date", ""))
-    except (TypeError, ValueError):
+    day = _strict_day(approval.get("date"))
+    if day is None:
         return f"사용자 승인 날짜가 YYYY-MM-DD 가 아니다: {approval.get('date')!r}"
-    if day > datetime.now(_KST).date():
+    if day > _now().date():
         return f"사용자 승인 날짜가 미래다: {day}"
+    expires = _strict_day(approval.get("expires"))
+    if expires is None:
+        return f"사용자 승인 만료일이 YYYY-MM-DD 가 아니다: {approval.get('expires')!r}"
+    if expires < day or expires > day + timedelta(days=APPROVAL_MAX_TERM_DAYS):
+        return f"사용자 승인 만료일 {expires} 는 승인일부터 {APPROVAL_MAX_TERM_DAYS}일 안이어야 한다"
+    amount = approval.get("max_amount_krw")
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not 0 < amount < float("inf"):
+        return f"사용자 승인 금액 상한(max_amount_krw)은 양수여야 한다: {amount!r}"
+    basket = approval.get("basket_hash")
+    if basket is not None and (not isinstance(basket, str) or not basket.strip()):
+        return "사용자 승인 바구니 해시가 비었다"
     return None
 
 
-def _backfill_problem(backfill: Any, stage: Stage) -> "str | None":
+def _approval_timing_problem(ev: dict[str, Any], events: list[dict[str, Any]]) -> "str | None":
+    """승인과 판정의 순서. 승인은 9단계 pass 날 이후의 말이고, 적는 날에서 :data:`APPROVAL_MAX_AGE_DAYS` 안이어야 한다(소급 승인 금지)."""
+    if ev.get("status") != "pass" or ev.get("stage") != int(Stage.EXECUTION):
+        return None
+    day = date.fromisoformat(ev["approval"]["date"])
+    verdict = next((e for e in reversed(events) if e["stage"] == int(Stage.BACKTEST) and e["status"] == "pass"), None)
+    if verdict is not None and day < date.fromisoformat(verdict["ts"][:10]):
+        return f"승인 {day} 가 9단계 pass({verdict['ts'][:10]})보다 앞선다 — 판정을 보기 전의 말이다"
+    age = (date.fromisoformat(str(ev["ts"])[:10]) - day).days
+    if age > APPROVAL_MAX_AGE_DAYS:
+        return f"승인 {day} 뒤 {age}일이 지났다({APPROVAL_MAX_AGE_DAYS}일 안에 적는다) — 다시 묻는다"
+    return None
+
+
+def _backfill_problem(backfill: Any, stage: Stage, written: str) -> "str | None":
     if backfill is None:
         return None
     if stage is Stage.EXECUTION:
         return "10단계는 소급 기록을 쓸 수 없다 — 승인은 추론하지 않는다"
-    try:
-        day = date.fromisoformat(backfill)
-    except (TypeError, ValueError):
+    day = _strict_day(backfill)
+    if day is None:
         return f"소급 기록 날짜가 YYYY-MM-DD 가 아니다: {backfill!r}"
     if day > date.fromisoformat(BACKFILL_CUTOFF):
         return f"소급 기록은 게이트 이전 작업(≤ {BACKFILL_CUTOFF})에만 쓴다: {day}"
+    if written[:10] > BACKFILL_CUTOFF:
+        return f"소급 기록은 {BACKFILL_CUTOFF} 까지만 적는다 — {written[:10]} 에 옛 날짜로 적으면 순서 검사를 피한다"
     return None
 
 
@@ -183,6 +230,8 @@ def _shape_problems(ev: dict[str, Any]) -> list[str]:
     """파일에서 읽은 줄의 모양. 어긋난 줄을 규칙 검사로 넘기면 예외로 죽어 원인이 가려진다."""
     if not isinstance(ev.get("stage"), int):
         return [f"stage 가 정수가 아니다: {ev.get('stage')!r}"]
+    if _strict_day(str(ev.get("ts"))[:10]) is None:
+        return [f"ts 가 날짜로 시작하지 않는다: {ev.get('ts')!r}"]
     refs = ev.get("evidence")
     if not isinstance(refs, list):
         return ["evidence 가 목록이 아니다"]
@@ -223,7 +272,7 @@ def _event_problems(ev: dict[str, Any]) -> list[str]:
             out.append("10단계 pass 에는 전진 페이퍼 결과 증거가 필요하다")
     if stage is not Stage.EXECUTION and (ev.get("approval") or ev.get("forward_evidence")):
         out.append("승인·전진 증거 필드는 10단계 전용이다")
-    problem = _backfill_problem(ev.get("backfill"), stage)
+    problem = _backfill_problem(ev.get("backfill"), stage, str(ev.get("ts") or _now().isoformat()))
     if problem:
         out.append(problem)
     return out
@@ -325,7 +374,9 @@ def read_events(study: str, *, root: "Path | str | None" = None) -> list[dict[st
         return []
     events: list[dict[str, Any]] = []
     prev: "str | None" = None
-    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # splitlines 를 쓰지 않는다 — 인용문의 U+2028 이 JSON 에 그대로 적혀 한 줄이 둘로 쪼개지면 원장 전체가 막힌다.
+    lines = path.read_text(encoding="utf-8").split("\n")
+    for n, raw in enumerate(lines[:-1] if lines[-1] == "" else lines, 1):
         where = f"{path.name}:{n}"
         try:
             ev = json.loads(raw)
@@ -342,7 +393,7 @@ def read_events(study: str, *, root: "Path | str | None" = None) -> list[dict[st
         problems = _shape_problems(ev) or _event_problems(ev)
         if problems:
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: " + "; ".join(problems))
-        problem = _flip_problem(ev, events)
+        problem = _flip_problem(ev, events) or _approval_timing_problem(ev, events)
         if problem:
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: {problem}")
         stage = Stage(ev["stage"])
@@ -384,16 +435,27 @@ def require_stage(study: str, stage: "Stage | int | str", *, root: "Path | str |
     return states
 
 
-def require_execution_approval(study: str, *, root: "Path | str | None" = None) -> dict[str, str]:
+def require_execution_approval(study: str, *, amount_krw: "float | None" = None, basket_hash: "str | None" = None,
+                               root: "Path | str | None" = None) -> dict[str, Any]:
     """주문 경로의 정문. 10단계 자체의 유효한 pass(사용자 승인·전진 증거)가 있어야 승인 기록을 돌려준다.
 
-    ``require_stage(study, 10)`` 은 1~9 단계만 본다. 그것만으로는 승인 없이 주문이 나갈 수 있다.
+    ``require_stage(study, 10)`` 은 1~9 단계만 본다. 그것만으로는 승인 없이 주문이 나갈 수 있다. 만료가 지났거나, ``amount_krw`` 가 상한을 넘거나,
+    승인이 한 바구니로 좁혀졌는데 ``basket_hash`` 가 다르면 막는다. 실주문 경로는 둘 다 넘긴다.
+
+    **이 함수는 부른 코드만 막는다.** scalp-it·daytrade-it 의 주문 코드와 fcs ``sw-live`` 는 부르지 않는다(``docs/PIPELINE.md``).
     """
     states = require_stage(study, Stage.EXECUTION, root=root)
     state = next(st for st in states if st.stage is Stage.EXECUTION)
     if state.status != "pass":
         raise StageGateError(f"{study}: 주문 실행 승인이 없다 — {state.describe()}", [state])
-    return dict(state.event["approval"])
+    approval = dict(state.event["approval"])
+    if _now().date() > date.fromisoformat(approval["expires"]):
+        raise StageGateError(f"{study}: 승인이 만료됐다({approval['expires']}) — 다시 묻고 새로 적는다", [state])
+    if amount_krw is not None and not amount_krw <= approval["max_amount_krw"]:
+        raise StageGateError(f"{study}: 주문 금액 {amount_krw} 가 승인 상한 {approval['max_amount_krw']} 를 넘는다", [state])
+    if approval.get("basket_hash") is not None and basket_hash != approval["basket_hash"]:
+        raise StageGateError(f"{study}: 승인한 바구니({approval['basket_hash']})가 아니다: {basket_hash!r}", [state])
+    return approval
 
 
 def _ref(path: Any, root: Path) -> dict[str, str]:
@@ -446,6 +508,7 @@ def record_stage(
         "evidence": list(evidence),
         "reviewer": {"path": reviewer} if reviewer else None,
         "forward_evidence": {"path": forward_evidence} if forward_evidence else None,
+        "ts": _now().isoformat(timespec="seconds"),
     }
     problems = _event_problems(draft)
     if problems:
@@ -477,10 +540,10 @@ def record_stage(
         "reason": reason,
         "backfill": backfill,
         "git_sha": _git_sha(base),
-        "ts": datetime.now(_KST).isoformat(timespec="seconds"),
+        "ts": draft["ts"],
         "prev": events[-1]["sha"] if events else None,
     }
-    problem = _flip_problem(ev, events)
+    problem = _flip_problem(ev, events) or _approval_timing_problem(ev, events)
     if problem:
         raise RecordRejected(f"{study} {target.label} {status} 거부: {problem}")
     ev["sha"] = event_sha(ev)

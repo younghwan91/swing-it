@@ -17,7 +17,7 @@
 | 7 | 포트폴리오 | 순위 북 `tranche_names`·`r_target`, 최적화 북 `o_target`·`match_lambda` | `swing_it.book.rank`, `swing_it.book.optimized` |
 | 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` | `swing_it.book.costs` |
 | 9 | 백테스트 | `simulate`·`check_invariants`·`book_summary`, `full_parity`, `permutation_nulls`, `ols_hac` | `swing_it.book.accounting`·`metrics`·`parity`·`nulls`, `swing_it.diagnostics.hac` |
-| 10 | 주문 실행 | 없음 — `docs/execution/DESIGN.md` | 먼저 dry-run. 실주문 경로의 첫 문장은 `require_execution_approval` 이다 |
+| 10 | 주문 실행 | main 에 없음 — `docs/execution/DESIGN.md` | 먼저 dry-run. 실주문 경로의 첫 문장은 `require_execution_approval` 이다(린트 (l)). 아래 **게이트가 막지 못하는 주문** 참고 |
 | 11 | 성과 기여·모니터링 | `attribution_report`, core `factor_attribution` | `research/experiments/pead_optimizer_b_report.py` |
 
 북의 규칙은 `swing_it.book.spec.BookSpec` 으로 넘긴다. 기본값은 PEAD 단계 B 사전등록 값이다. 판정 바(`verdict`)는 연구마다 사전등록하므로 러너에 남는다.
@@ -67,11 +67,18 @@
 - **pass** 는 증거 파일이 필수이고, 파일의 sha256 을 줄에 적는다.
 - **pass·skip·fail 모두 사유가 필수다.**
 - **4·5·9 의 pass** 는 검증 문서(`*_verified.md`·`REVIEW_*.md`) 참조가 필수다.
-- **10 의 pass** 는 사용자 승인 기록(날짜 + 사용자의 말 그대로)과 전진 페이퍼 결과 증거가 필수다. 소급 기록으로 적을 수 없다. 주문 경로는 `require_stage` 가 아니라 `require_execution_approval` 을 부른다.
+- **10 의 pass** 는 사용자 승인 기록(날짜·사용자의 말 그대로·만료일·금액 상한, 필요하면 바구니 해시)과 전진 페이퍼 결과 증거가 필수다. 승인일은 9단계 pass 날 이후이고, 적는 날에서 14일 안이고, 만료는 승인일에서 92일 안이다. 소급 기록으로 적을 수 없다. 주문 경로는 `require_stage` 가 아니라 `require_execution_approval(study, amount_krw=…, basket_hash=…)` 을 부른다. 만료·금액·바구니가 어긋나면 막는다. 같은 승인을 그 범위 안에서 여러 번 쓰는 것은 막지 않는다 — 주문 원장이 없다.
 - **stale** 은 뒤를 막는다. 앞 단계가 더 나중에 다시 적혔거나, 증거 파일이 없거나, 해시가 어긋난 경우다.
-- 손으로 고친 원장은 건너뛰지 않고 막는다.
+- 손으로 잘못 고친 원장은 건너뛰지 않고 막는다. **위조는 못 막는다.** 해시 체인에 키가 없어 체인을 맞춰 덧붙인 줄·날짜를 바꾼 `ts` 는 통과하고, 꼬리 삭제는 CI 의 `origin/main` 앞부분 대조로 머지된 줄만 잡는다. 실수와 망각을 막는 장치이지 보안 장치가 아니다.
+- 소급 기록(`backfill`)은 2026-11-02 까지 적은 줄만 받는다. 그 뒤에 옛 날짜로 적을 수 없다.
 
 pass·skip 은 앞 단계가 열려 있어야 적힌다. fail 은 언제든 적힌다.
+
+**게이트가 막지 못하는 주문.** 게이트는 부른 코드만 막는다.
+
+- main 에는 주문 경로가 없다. **fcs 브랜치에는 있다** — `src/swing_it/live/brokers.py`(`KiwoomBroker`)와 `cli.py`(`sw-live --execute --confirm-real`). 게이트를 부르지 않는다. 크론에는 없다. fcs 를 머지하면 린트 (l) 이 빨개진다.
+- scalp-it·daytrade-it 의 주문 코드는 다른 레포라 이 게이트와 린트 밖이다.
+- 판정 전 1주 실주문 파일럿은 **지금 합법 경로가 없다.** 10단계 pass 는 9단계 pass 를 요구하고, 전진 판정은 2027-10 무렵이다. 파일럿 전용 승인을 만들지는 사용자 결정이다(`docs/execution/DESIGN.md` §7).
 
 **전진 중인 페이퍼 북.** 전진 판정은 1년 뒤다. 그동안 볼 수 있어야 하므로 두 가지를 정했다.
 
