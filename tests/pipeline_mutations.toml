@@ -675,3 +675,43 @@ guards = ["tests/test_book_units.py::test_ctx_parses_market_names_instead_of_cha
 file = "src/swing_it/book/context.py"
 find = "HALF_SPREAD_BP.get(Market.parse(m).value, HALF_SPREAD_BP[\"KOSDAQ\"])"
 replace = "HALF_SPREAD_BP.get(m, HALF_SPREAD_BP[\"KOSDAQ\"])"
+
+[[mutation]]
+id = "zero-volume-is-tradeable"
+why = "거래량 0 인 날 체결하면 살 수 없는 값에 산 것이 된다 — 합성 불변식도 골든도 못 잡았다(검증 9단계)"
+guards = ["tests/test_book_accounting_hand.py::test_zero_volume_at_the_fill_freezes_a_holding"]
+file = "src/swing_it/book/accounting.py"
+find = "            tradeable = np.isfinite(C[:, f]) & (np.nan_to_num(ctx.tv_won[:, f]) > 0)"
+replace = "            tradeable = np.isfinite(C[:, f])"
+
+[[mutation]]
+id = "limit-up-buys-not-counted"
+why = "상한가 체결 수가 안 세지면 체결 불가 가능성을 보고에서 못 본다(검증 9단계)"
+guards = ["tests/test_book_accounting_hand.py::test_book_matches_the_hand_calculation"]
+file = "src/swing_it/book/accounting.py"
+find = "(rf >= LIMIT_UP_RET)"
+replace = "(rf >= 9.0)"
+
+[[mutation]]
+id = "cash-earns-a-return"
+why = "현금이 수익을 내면 풀투자가 아닌 스텝이 공짜로 번다(검증 9단계)"
+guards = ["tests/test_book_accounting_hand.py::test_cash_earns_nothing_and_the_book_re_enters_when_it_can"]
+file = "src/swing_it/book/accounting.py"
+find = "        rec.gross = float((new * g_i).sum())  # 현금은 수익 0"
+replace = "        rec.gross = float((new * g_i).sum()) + 0.001 * cash"
+
+[[mutation]]
+id = "invariants-pass-nan"
+why = "NaN 장부가 위반 0 으로 지나가면 불변식은 아무것도 지키지 않는다"
+guards = ["tests/test_book_accounting_hand.py::test_nan_does_not_pass_the_invariants"]
+file = "src/swing_it/book/accounting.py"
+find = "        if not abs(tot - 1.0) <= INV_EPS:"
+replace = "        if abs(tot - 1.0) > INV_EPS:"
+
+[[mutation]]
+id = "reproduction-misses-a-section"
+why = "빠진 절을 안 보면 재현이 일부만 맞아도 통과한다"
+guards = ["tests/real_db/test_b_json_reproduction.py::test_compare_sections_catches_a_missing_top_level_section"]
+file = "tests/real_db/test_b_json_reproduction.py"
+find = "            bad.append((f\"/{sec}\", \"section\", False, True))"
+replace = "            continue"

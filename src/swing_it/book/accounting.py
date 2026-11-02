@@ -71,7 +71,6 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         val_f = np.where(u > 0, u * Cff[:, f], 0.0)
         nav_f = val_f.sum() + cash
         w_f = val_f / nav_f
-        cash_f = cash / nav_f
         cost_vec = np.zeros(nN)
         # ④ 폐지 청산(마지막 종가, 선형 매도 비용)
         if flags.delist_cash:
@@ -80,7 +79,6 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
                 g = np.flatnonzero(gone)
                 if flags.costs:
                     cost_vec[g] += linear_bp(np.full(g.size, "SELL"), ctx.market[g], day, ctx.hs_bp[g]) / 1e4 * w_f[g]
-                cash_f += w_f[g].sum()
                 rec.delist_mass = float(w_f[g].sum())
                 w_f[g] = 0.0
                 rec.n_delist = int(g.size)
@@ -186,9 +184,11 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
     return out
 
 
-def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_weight: float = DEFAULT_SPEC.max_weight,
-                     spec: BookSpec = DEFAULT_SPEC, costs: bool = True) -> list[str]:
+def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_weight: "float | None" = None,
+                     spec: BookSpec = DEFAULT_SPEC, costs: bool = True, *, min_steps: int = 1) -> list[str]:
     """성과와 무관한 불변식(스텝마다). 위반 문장 목록을 돌려준다(비면 통과). 러너는 하나라도 있으면 결과를 쓰지 않는다.
+
+    NaN 은 통과가 아니다 — 비교는 "지켜졌다"를 묻는 꼴로 쓴다. 스텝이 ``min_steps`` 보다 적어도 위반이다(빈 장부는 아무것도 증명하지 않는다). 상한 기본값은 ``spec.max_weight``.
 
     - Σw + 현금 = 1, w ≥ −ε. O: (거래 가능·안 얼린 종목) max w ≤ 상한 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례 + 먼지),
       구축 뒤 회전율 ≤ 상한 + 표류·폐지 + 강제 매도 + 재비례 + 2·먼지. 해는 no_buy 종목을 사지 않고 참여율 상한을 지킨다.
@@ -196,24 +196,29 @@ def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_w
     - R: 예열 뒤(k ≥ n−1) 활성 트랜치 n.
     """
     out = []
+    if len(recs) < min_steps:
+        out.append(f"{kind}: 스텝 {len(recs)}개 < {min_steps} — 검사할 장부가 없다")
+    cap = spec.max_weight if max_weight is None else max_weight
     lo_bp, hi_bp = COST_BP_PER_TURN
     for r in recs:
         tag = f"{kind}:{cell.name if kind == 'O' else 'R'} k={r.k} {r.date}"
         tot = r.cash + (sum(w for _, w, _, _ in r.contrib if w > 0))
-        if abs(tot - 1.0) > INV_EPS:
+        if not abs(tot - 1.0) <= INV_EPS:
             out.append(f"{tag} Σw+현금 {tot:.9f} ≠ 1")
-        if r.min_w < -INV_EPS or r.cash < -INV_EPS:
+        if not (r.min_w >= -INV_EPS and r.cash >= -INV_EPS):
             out.append(f"{tag} 음수 비중 {r.min_w:.3e}·현금 {r.cash:.3e}")
-        if r.cost1 < 0:
-            out.append(f"{tag} 비용 음수 {r.cost1}")
+        if not r.cost1 >= 0:
+            out.append(f"{tag} 비용 음수·NaN {r.cost1}")
+        if not (np.isfinite(r.gross) and r.turnover >= 0):
+            out.append(f"{tag} 수익·회전 NaN: gross {r.gross}, turnover {r.turnover}")
         traded = r.turnover + r.delist_mass
         if costs and traded > 1e-9:     # costs=False 는 비용 끈 회계(Flags(costs=False))를 시험할 때만 쓴다
             bp = r.cost1 / traded * 1e4
             if not (lo_bp - 1e-6 <= bp <= hi_bp):
                 out.append(f"{tag} 비용/회전 {bp:.2f}bp 가 [{lo_bp}, {hi_bp}] 밖")
         if kind == "O" and r.status == "optimal" and r.n_names:
-            if r.max_w > max_weight + INV_EPS:
-                out.append(f"{tag} max w {r.max_w:.6f} > {max_weight}")
+            if not r.max_w <= cap + INV_EPS:
+                out.append(f"{tag} max w {r.max_w:.6f} > {cap}")
             if np.isfinite(r.sector_dev) and r.sector_dev > r.sector_tol:
                 out.append(f"{tag} 업종 편차 {r.sector_dev:.6f} > 허용 {r.sector_tol:.6f}")
             if np.isfinite(r.turn_bound) and r.turnover > r.turn_bound:
