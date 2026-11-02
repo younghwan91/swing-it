@@ -6,19 +6,42 @@
 
 from __future__ import annotations
 
-import multiprocessing as mp
+from dataclasses import dataclass
 
 import numpy as np
 
 from swing_it.book.accounting import check_invariants, simulate
+from swing_it.book.context import Ctx
 from swing_it.book.metrics import ANN_20, ir, oos, step_returns
-from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Flags
+from swing_it.book.pool import fork_pool
+from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Cell, Flags
 from swing_it.validation.keys import keyed_rng
 
 N_PERM = 300
 N_BOOT, BOOT_MEAN_BLOCK = 10_000, 3
 
-_G: dict = {}
+
+@dataclass(frozen=True)
+class _PermJob:
+    """널 작업자가 공유하는 입력."""
+
+    ctx: Ctx
+    cell: Cell
+    ic_by_year: dict
+    sigma_r: dict
+    window: tuple[str, str]
+    spec: BookSpec
+    flags: Flags
+    ann: float
+
+
+_JOB: "_PermJob | None" = None
+
+
+def _set_job(job: "_PermJob | None") -> None:
+    """작업자 초기화. 부모에서는 부르지 않는다."""
+    global _JOB
+    _JOB = job
 
 
 def stationary_boot_dir(aO, aR, n=N_BOOT, mean_block=BOOT_MEAN_BLOCK, seed_key="boot-dIR", ann: float = ANN_20):
@@ -61,12 +84,13 @@ class _RowPermuted:
 
 def _perm_task(a):
     r, kind = a
-    ctx, cell, icy, sr, window, spec, flags, ann = (_G[k] for k in ("ctx", "cell", "ic", "sr", "window", "spec", "flags", "ann"))
+    job = _JOB
+    ctx, cell, spec, flags = job.ctx, job.cell, job.spec, job.flags
     pi = keyed_rng("perm", r).permutation(ctx.sig.shape[0])
-    recs = simulate(ctx, kind, cell, flags, rank_sig=_RowPermuted(ctx.sig, pi), ic_by_year=icy, sigma_r=sr, spec=spec)
+    recs = simulate(ctx, kind, cell, flags, rank_sig=_RowPermuted(ctx.sig, pi), ic_by_year=job.ic_by_year, sigma_r=job.sigma_r, spec=spec)
     nan_share = float(np.nanmean([x.perm_nan_share for x in recs])) if kind == "O" else float("nan")
     viol = check_invariants(recs, kind, cell, spec=spec, costs=flags.costs)
-    return r, kind, ir(oos(step_returns(recs, 2.0), window)["a"], ann), nan_share, viol
+    return r, kind, ir(oos(step_returns(recs, 2.0), job.window)["a"], job.ann), nan_share, viol
 
 
 def permutation_nulls(ctx, cell, ic_by_year, sigma_r, workers: int, n: int = N_PERM, *, window: tuple[str, str],
@@ -78,13 +102,12 @@ def permutation_nulls(ctx, cell, ic_by_year, sigma_r, workers: int, n: int = N_P
     in_window = [window[0] <= str(ctx.dates[t].date()) <= window[1] for t in ctx.grid]
     if not any(in_window):
         raise ValueError(f"평가 창 {window} 에 격자일이 없다 — 널이 전부 NaN 이 된다")
-    _G.update({"ctx": ctx, "cell": cell, "ic": ic_by_year, "sr": sigma_r, "window": window, "spec": spec, "flags": flags, "ann": ann})
+    job = _PermJob(ctx, cell, ic_by_year, sigma_r, window, spec, flags, ann)
     for t in ctx.grid:      # 포크 전에 채워 작업자들이 같은 값을 공유한다
         ctx.vol(t)
     tasks = [(r, k) for r in range(n) for k in kinds]
-    with mp.get_context("fork").Pool(workers) as pool:
+    with fork_pool(workers, _set_job, (job,)) as pool:
         res = list(pool.imap_unordered(_perm_task, tasks, chunksize=1))
-    _G.clear()
     out = {"R": np.full(n, np.nan), "O": np.full(n, np.nan), "O_perm_nan_share": np.full(n, np.nan), "violations": []}
     for r, kind, v, s, viol in res:
         out[kind][r] = v

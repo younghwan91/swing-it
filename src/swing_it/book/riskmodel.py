@@ -9,7 +9,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import multiprocessing as mp
 import pickle
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -18,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from swing_it.book.seam import seam_guard
+from swing_it.book.pool import fork_pool
 from swing_it.core_layers import core_layer
 from swing_it.storage import read_seam_sources
 
@@ -89,6 +89,12 @@ def model_key(c: dict, need: Iterable[int], *, vra: "float | None" = None, shrin
     return h.hexdigest()[:16]
 
 
+def _set_ctx(job: dict) -> None:
+    """작업자 초기화. 부모에서는 부르지 않는다."""
+    global _CTX
+    _CTX = job
+
+
 def _build(a):
     build_risk_model = core_layer("krx_quant_core.risk.factor_model").build_risk_model
     c = _CTX
@@ -108,14 +114,9 @@ def build_models(c: dict, need, workers: int, path: Path, log: Callable[[str], N
     if keyed.exists():
         with keyed.open("rb") as f:
             return pickle.load(f)
-    _CTX.clear()
-    _CTX.update({k: c[k] for k in ("R", "Xs", "lab", "cap", "msk")})
-    _CTX.update({"vra": vra, "shrink": shrink})
-    try:
-        with mp.get_context("fork").Pool(workers) as pool:
-            models = dict(pool.imap_unordered(_build, need, chunksize=2))
-    finally:
-        _CTX.clear()
+    job = {**{k: c[k] for k in ("R", "Xs", "lab", "cap", "msk")}, "vra": vra, "shrink": shrink}
+    with fork_pool(workers, _set_ctx, (job,)) as pool:
+        models = dict(pool.imap_unordered(_build, need, chunksize=2))
     with keyed.open("wb") as f:
         pickle.dump(models, f)
     log(f"  모델 {len(models)}개 → {keyed.name}")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -384,12 +385,50 @@ def test_permutation_null_passes_spec_max_weight_to_the_invariant(monkeypatch):
     monkeypatch.setattr(nulls, "check_invariants", spy)
     spec = replace(DEFAULT_SPEC, max_weight=0.03)
     ctx = synthetic_ctx(0)
-    nulls._G.update({"ctx": ctx, "cell": None, "ic": None, "sr": None, "window": ("2019-01-01", "2030-01-01"), "spec": spec, "flags": NO_COSTS, "ann": 1.0})
+    nulls._set_job(nulls._PermJob(ctx, None, None, None, ("2019-01-01", "2030-01-01"), spec, NO_COSTS, 1.0))
     try:
         nulls._perm_task((0, "R"))
     finally:
-        nulls._G.clear()
+        nulls._set_job(None)
     assert seen["spec"].max_weight == 0.03 and seen["costs"] is False and seen["spec"] is spec
+
+
+def test_permutation_null_leaves_no_state_in_the_parent():
+    from swing_it.book import nulls
+
+    nulls.permutation_nulls(synthetic_ctx(0), None, None, None, 1, 1, window=("2019-01-01", "2030-01-01"), kinds=("R",), flags=NO_COSTS)
+    assert nulls._JOB is None
+
+
+def test_fork_pool_warns_without_the_thread_cap(monkeypatch):
+    """스레드 상한이 없으면 16코어에 190개가 경합했다(CLAUDE.md 실행 환경 함정)."""
+    from swing_it.book.pool import fork_pool
+
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    with pytest.warns(RuntimeWarning, match="OMP_NUM_THREADS"), fork_pool(1, print, ("",)):
+        pass
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with fork_pool(1, print, ("",)):
+            pass
+
+
+def test_row_permuted_view_reads_like_the_permuted_panel():
+    from swing_it.book.nulls import _RowPermuted
+
+    sig = np.random.default_rng(0).normal(size=(20, 8))
+    pi = np.random.default_rng(1).permutation(20)
+    for rows, t in ((np.arange(5), 3), (np.array([19, 0, 7]), 7), (np.array([], dtype=int), 0)):
+        assert _RowPermuted(sig, pi)[rows, t].tolist() == sig[pi][rows, t].tolist()
+
+
+def test_ctx_vol_is_the_trailing_vol_and_read_only():
+    ctx = synthetic_ctx(0)
+    t = ctx.grid[3]
+    v = ctx.vol(t)
+    np.testing.assert_array_equal(v, trailing_vol(ctx.ret, t))
+    assert ctx.vol(t) is v and not v.flags.writeable
 
 
 def test_permutation_null_uses_the_annualisation_it_is_given():
