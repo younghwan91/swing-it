@@ -664,7 +664,8 @@ def test_ci_has_no_shallow_git_command_in_a_run_step():
 def test_ci_runs_the_pipeline_mutations():
     """verify_merge·mutations.toml 이 없어져도(PR #18) 가드 변이 시험은 CI 에서 돈다."""
     ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "run: python scripts/check_pipeline_mutations.py" in ci
+    assert "run: python scripts/check_pipeline_mutations.py\n" in ci, "기본 핀 변이"
+    assert "run: python scripts/check_pipeline_mutations.py --spec tests/pipeline_mutations_core.toml\n" in ci, "core 를 까는 잡의 변이"
 
 
 # --- (e) 호출 지점 단위 원장 규칙 ------------------------------------------------
