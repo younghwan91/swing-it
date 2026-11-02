@@ -50,7 +50,7 @@ pass·skip 은 앞 단계가 열려 있어야 적힌다. fail 은 언제든 적�
 
 **CI** 는 `scripts/check_guardrails.py` 규칙 (k) 로 두 가지를 본다.
 
-- `research/experiments/*.py`·`research/paper/*.py` 의 선언. 2026-11-02 면제 목록(`PIPELINE_GRANDFATHER`)에 있는 파일만 빠진다. 목록은 줄어들기만 하고 테스트가 고정한다.
+- `research/experiments/*.py`·`research/paper/*.py` 의 선언. 2026-11-02 면제 목록(`PIPELINE_GRANDFATHER`·`PIPELINE_GRANDFATHER_FCS`)에 있는 파일만 빠진다. 목록은 줄어들기만 하고 테스트가 고정한다.
 - 원장의 체인·행 규칙·최신 증거 해시. 되돌아가기로 생긴 stale 은 정상이라 빨강이 아니다.
 
 ## 새 연구를 더하는 법
