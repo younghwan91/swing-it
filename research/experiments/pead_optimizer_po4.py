@@ -126,12 +126,12 @@ def raw_closes_and_events(codes, dates, end: str):
 
 def yoy_signal_strict(codes, dates, end: str) -> tuple[np.ndarray, dict]:
     """PO-2.1-5 — PO-2 러너 ``yoy_signal_strict`` 와 같은 식, 상한 = 인자 END. 구현은 ``features.earnings_asof`` 로 옮겼다."""
-    from swing_it.features.earnings_asof import load_yoy_strict
+    from swing_it.features.earnings_asof import REPRODUCE_B, load_yoy_strict
 
     _check_end(end)
     con, _ = P2._db()
     try:
-        wide, info = load_yoy_strict(con, codes, dates, end, tie_col=None)
+        wide, info = load_yoy_strict(con, codes, dates, end, **REPRODUCE_B)
     finally:
         con.close()
     return wide, {"end": end, **info}

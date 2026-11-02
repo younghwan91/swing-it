@@ -98,11 +98,11 @@ def yoy_signal_strict(codes, dates) -> tuple[np.ndarray, dict]:
 
     구현은 ``features.earnings_asof`` 로 옮겼다. ``tie_col=None`` 은 단계 B 재현에 묶인 옛 동작이다.
     """
-    from swing_it.features.earnings_asof import load_yoy_strict
+    from swing_it.features.earnings_asof import REPRODUCE_B, load_yoy_strict
 
     con, _ = _db()
     try:
-        return load_yoy_strict(con, codes, dates, END, tie_col=None)
+        return load_yoy_strict(con, codes, dates, END, **REPRODUCE_B)
     finally:
         con.close()
 

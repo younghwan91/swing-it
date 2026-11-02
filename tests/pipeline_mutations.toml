@@ -579,3 +579,19 @@ guards = ["tests/test_check_guardrails.py::test_rule_k_requires_end_on_read_pric
 file = "scripts/check_guardrails.py"
 find = "    if any(names.name(n) == \"read_prices\" and not any(k.arg == \"end\" for k in n.keywords)"
 replace = "    if False and any(names.name(n) == \"read_prices\" and not any(k.arg == \"end\" for k in n.keywords)"
+
+[[mutation]]
+id = "periodic-required-from-back-to-2019q1"
+why = "새 연구 기본이 옛 값이면 end 2019-04~05 로 잘랐을 때 2018Q4 값이 더 일찍 보인다 — 과거가 end 에 달린다"
+guards = ["tests/test_book_units.py::test_truncation_identity_holds_at_the_2018q4_seam_only_with_the_new_default"]
+file = "src/swing_it/features/earnings_asof.py"
+find = "PERIODIC_REQUIRED_FROM = \"2018Q4\""
+replace = "PERIODIC_REQUIRED_FROM = \"2019Q1\""
+
+[[mutation]]
+id = "restatement-used-the-same-day"
+why = "정정본을 당일 쓰면 첫 공시와 다른 규칙이고, 장 마감 뒤 알게 된 값을 그날 종가 결정에 쓴다"
+guards = ["tests/test_book_units.py::test_restatement_is_used_the_trading_day_after_it_was_known"]
+file = "src/swing_it/features/earnings_asof.py"
+find = "    if knowledge_next_day:\n"
+replace = "    if False:\n"

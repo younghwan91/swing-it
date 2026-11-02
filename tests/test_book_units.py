@@ -20,7 +20,7 @@ from swing_it.book.optimized import capped_rescale, clean_dust, rank_z  # noqa: 
 from swing_it.book.rank import tranche_names  # noqa: E402
 from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Flags  # noqa: E402
 from swing_it.engine.panels import ffill_axis1  # noqa: E402
-from swing_it.features.earnings_asof import load_yoy_strict, yoy_strict_wide  # noqa: E402
+from swing_it.features.earnings_asof import REPRODUCE_B, load_yoy_strict, yoy_strict_wide  # noqa: E402
 from swing_it.features.universe import m0_mask, rank_band_eligible, u_exclusion, u_exclusion_causes  # noqa: E402
 from swing_it.storage import connect, read_periodic_filings  # noqa: E402
 from swing_it.validation.ic import fold_ic  # noqa: E402
@@ -104,11 +104,80 @@ def test_quarter_without_a_filing_is_dropped_from_2019q1_on_but_falls_back_befor
     assert info["dropped_2019Q1plus_no_periodic_le_end"] == 1
 
 
-def test_restatement_is_used_only_after_it_was_known():
+def test_restatement_is_used_the_trading_day_after_it_was_known():
+    """새 경로 기본 — 정정본도 알게 된 다음 거래일부터다(첫 공시와 같은 규칙). 재현 경로는 옛 당일 사용을 유지한다."""
     ea = _earnings([("A", "2020Q1", "2020-03-04", "2020-03-04", 120.0, 100.0), ("A", "2020Q1", "2020-03-04", "2020-03-20", 180.0, 100.0)])
     per = pd.DataFrame([("A", "2020Q1", "2020-03-04")], columns=["code", "period", "per"])
     sig, _ = yoy_strict_wide(ea, per, ["A"], DAYS, END)
-    assert _at(sig, "2020-03-19") == pytest.approx(0.2) and _at(sig, "2020-03-20") == pytest.approx(0.8)
+    assert _at(sig, "2020-03-20") == pytest.approx(0.2) and _at(sig, "2020-03-23") == pytest.approx(0.8)
+    old, _ = yoy_strict_wide(ea, per, ["A"], DAYS, END, **REPRODUCE_B)
+    assert _at(old, "2020-03-19") == pytest.approx(0.2) and _at(old, "2020-03-20") == pytest.approx(0.8)
+
+
+def _truncated_same(ea, per, days, cut, **kw):
+    t = days[cut]
+    e2 = ea[(pd.to_datetime(ea["avail_date"]) <= t) & (pd.to_datetime(ea["knowledge_date"]) <= t)]
+    p2 = per[pd.to_datetime(per["per"]) <= t]
+    full, _ = yoy_strict_wide(ea, per, ["A"], days, str(days[-1].date()), **kw)
+    short, _ = yoy_strict_wide(e2, p2, ["A"], days[:cut + 1], str(t.date()), **kw)
+    return np.array_equal(short, full[:, :cut + 1], equal_nan=True)
+
+
+def test_truncation_identity_holds_at_the_2018q4_seam_only_with_the_new_default():
+    """2018Q4 사업보고서는 2019-04 까지 나온다. end 2019-04~05 로 자르면 옛 기본(2019Q1)은 정기보고서를 몰라 avail_date 로 돌아가
+    값이 더 일찍 보인다. 긴 패널에서는 늦은 날에 보이니 과거가 end 에 따라 바뀐다(검증 3단계)."""
+    days = pd.bdate_range("2019-03-01", periods=80)
+    ea = _earnings([("A", "2018Q4", "2019-03-29", "2019-03-29", 130.0, 100.0)])
+    per = pd.DataFrame([("A", "2018Q4", "2019-05-10")], columns=["code", "period", "per"])
+    cut = list(days).index(pd.Timestamp("2019-04-15"))
+    assert _truncated_same(ea, per, days, cut)
+    assert not _truncated_same(ea, per, days, cut, periodic_required_from="2019Q1")
+
+
+def test_truncation_fuzz_on_the_new_default_is_identical():
+    """2018Q3 이전 분기는 정기보고서 날짜가 없다(실데이터). 그 전제 위에서 어느 end 로 잘라도 과거 칸이 같다."""
+    rng = np.random.default_rng(3)
+    days = pd.bdate_range("2019-01-01", periods=260)
+    periods = [f"{y}Q{q}" for y in (2018, 2019) for q in (1, 2, 3, 4)]
+    for _ in range(25):
+        rows, filed = [], []
+        for p in periods:
+            a = pd.Timestamp("2019-01-01") + pd.Timedelta(days=int(rng.integers(-60, 340)))
+            k = a + pd.Timedelta(days=int(rng.integers(0, 40)))
+            rows.append(("A", p, str(a.date()), str(k.date()), float(rng.normal(100, 50)), 100.0))
+            if p >= "2018Q4" and rng.random() < 0.85:
+                filed.append(("A", p, str((a + pd.Timedelta(days=int(rng.integers(-30, 60)))).date())))
+        ea, per = _earnings(rows), pd.DataFrame(filed, columns=["code", "period", "per"])
+        ea = ea[ea["avail_date"] <= str(days[-1].date())]
+        ea = ea[ea["knowledge_date"] <= str(days[-1].date())]
+        per = per[per["per"] <= str(days[-1].date())]
+        for cut in (70, 137, 200):
+            t = days[cut]
+            if not ((pd.to_datetime(ea["avail_date"]) <= t) & (pd.to_datetime(ea["knowledge_date"]) <= t)).any():
+                continue
+            assert _truncated_same(ea, per, days, cut)
+
+
+def test_max_age_days_stops_a_value_from_living_for_years():
+    """새 분기가 안 오면 값이 몇 년이고 그대로다(폐지·미제출). 나이 상한을 주면 그 뒤 칸은 NaN 이다."""
+    ea = _earnings([("A", "2018Q3", "2020-03-04", "2020-03-04", 150.0, 100.0)])
+    per = pd.DataFrame(columns=["code", "period", "per"])
+    sig, _ = yoy_strict_wide(ea, per, ["A"], DAYS, END, max_age_days=7)
+    assert _at(sig, "2020-03-05") == pytest.approx(0.5) and _at(sig, "2020-03-12") == pytest.approx(0.5)
+    assert np.isnan(_at(sig, "2020-03-13"))
+    assert np.isfinite(yoy_strict_wide(ea, per, ["A"], DAYS, END)[0][0, -1])
+
+
+@pytest.mark.parametrize("call,exc,match", [
+    (lambda: yoy_strict_wide(_earnings([]), pd.DataFrame(columns=["code", "period", "per"]), ["A"], DAYS, END), ValueError, "실적"),
+    (lambda: yoy_strict_wide(_earnings([("A", "2018Q1", "2020-03-04", "2020-03-04", 1.0, 1.0)]), pd.DataFrame(columns=["code", "period", "per"]),
+                             ["A"], pd.DatetimeIndex([]), END), ValueError, "dates"),
+    (lambda: yoy_strict_wide(_earnings([("A", "2018Q1", "2020-03-04", "2020-03-04", 1.0, 1.0)]), pd.DataFrame(columns=["code", "period", "per"]),
+                             ["A"], DAYS[::-1], END), ValueError, "단조"),
+])
+def test_bad_inputs_say_what_is_wrong(call, exc, match):
+    with pytest.raises(exc, match=match):
+        call()
 
 
 def test_two_quarters_known_the_same_day_use_the_later_one_by_default():
