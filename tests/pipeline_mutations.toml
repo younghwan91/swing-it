@@ -619,3 +619,19 @@ guards = ["tests/test_pipeline_checks.py::test_forecast_overlap_counts_trading_d
 file = "src/swing_it/pipeline/checks.py"
 find = "    if (at_date - at_end < horizon).any():"
 replace = "    if (np.busday_count(train_end.to_numpy(\"datetime64[D]\"), date.to_numpy(\"datetime64[D]\")) < horizon).any():"
+
+[[mutation]]
+id = "risk-negative-variance-clipped"
+why = "F 가 양반정치가 아닌데 0 으로 자르면 최적화가 공짜 위험을 본다"
+guards = ["tests/test_book_units.py::test_active_risk_refuses_a_really_negative_variance_but_tolerates_rounding"]
+file = "src/swing_it/book/risk.py"
+find = "    if var < -VAR_TOL:"
+replace = "    if False:"
+
+[[mutation]]
+id = "model-cache-ignores-settings"
+why = "캐시가 설정을 안 보면 다른 shrink 로 불러도 옛 모델이 나온다(PO-3 구현이 그랬다)"
+guards = ["tests/test_book_units.py::test_model_key_changes_with_every_input"]
+file = "src/swing_it/book/riskmodel.py"
+find = "    h.update(json.dumps({\"need\": sorted(int(t) for t in need), \"vra\": vra, \"shrink\": shrink}).encode())\n"
+replace = ""

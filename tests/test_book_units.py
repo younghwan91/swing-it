@@ -18,6 +18,7 @@ from swing_it.book.costs import COMMISSION_BP, linear_bp, trailing_vol  # noqa: 
 from swing_it.book.metrics import holding_intervals, ir, oos, payoff_ratio, step_returns  # noqa: E402
 from swing_it.book.optimized import capped_rescale, clean_dust, rank_z  # noqa: E402
 from swing_it.book.rank import tranche_names  # noqa: E402
+from swing_it.book.risk import Sub, active_risk, sub_model  # noqa: E402
 from swing_it.book.spec import DEFAULT_SPEC, BookSpec, Flags  # noqa: E402
 from swing_it.engine.panels import ffill_axis1  # noqa: E402
 from swing_it.features.earnings_asof import REPRODUCE_B, load_yoy_strict, yoy_strict_wide  # noqa: E402
@@ -408,3 +409,67 @@ def test_boot_refuses_inputs_it_would_silently_misread(a, b, match):
 
     with pytest.raises(ValueError, match=match):
         stationary_boot_dir(a, b, n=5)
+
+
+# --- 6 위험모델 도우미 ---
+
+def _model():
+    X = np.array([[1.0, 0.5], [1.0, -0.5], [1.0, 0.0]])
+    F = np.array([[1e-4, 0.0], [0.0, 2e-4]])
+    D = np.array([1e-4, 2e-4, 3e-4])
+    return (np.array([3, 7, 9]), X, F, D, ["market", "size"])
+
+
+def test_sub_model_maps_rows_and_scales_by_horizon():
+    sub = sub_model(_model(), np.array([9, 3]), 20)
+    np.testing.assert_array_equal(sub.X, _model()[1][[2, 0]])
+    np.testing.assert_array_equal(sub.D, 20 * _model()[3][[2, 0]])
+    np.testing.assert_array_equal(sub.F, 20 * _model()[2])
+
+
+@pytest.mark.parametrize("h", [0, -1])
+def test_sub_model_refuses_a_non_positive_horizon(h):
+    with pytest.raises(ValueError, match="지평"):
+        sub_model(_model(), np.array([3]), h)
+
+
+def test_sub_model_refuses_code_strings_where_row_numbers_belong():
+    """``int("005930")`` 은 조용히 5930 이 되어 다른 행의 노출을 준다. 모델 좌표는 행 번호다."""
+    idx, X, F, D, names = _model()
+    with pytest.raises(ValueError, match="행 번호"):
+        sub_model((np.array(["000003", "000007", "000009"]), X, F, D, names), np.array([3]), 20)
+    with pytest.raises(ValueError, match="행 번호"):
+        sub_model(_model(), np.array(["000003"]), 20)
+
+
+def test_sub_model_says_which_row_is_missing():
+    with pytest.raises(KeyError, match="4"):
+        sub_model(_model(), np.array([4]), 20)
+
+
+def test_active_risk_refuses_a_really_negative_variance_but_tolerates_rounding():
+    """F 가 양반정치가 아니면 위험이 0 으로 찍혀 최적화가 공짜 위험을 본다."""
+    bad = Sub(X=np.array([[1.0]]), F=np.array([[-1.0]]), D=np.array([0.0]), names=["m"])
+    with pytest.raises(ValueError, match="음의 분산"):
+        active_risk(bad, np.array([0.5]))
+    tiny = Sub(X=np.array([[1.0]]), F=np.array([[-1e-13]]), D=np.array([0.0]), names=["m"])
+    assert active_risk(tiny, np.array([1.0])) == 0.0
+
+
+def test_model_key_changes_with_every_input():
+    """기본 핀에서도 도는 캐시 키 시험. 빌드 자체는 ``test_pead_optimizer_riskmodel.py``."""
+    from swing_it.book.riskmodel import model_key
+
+    rng = np.random.default_rng(0)
+    c = {"R": rng.normal(size=(5, 8)), "cap": rng.normal(size=(5, 8)), "msk": np.ones((5, 8), bool),
+         "lab": np.array([["a"] * 8] * 5, dtype=object), "Xs": {"size": rng.normal(size=(5, 8))}}
+    base = model_key(c, [6], shrink=0.1)
+    assert base == model_key({**c, "dates": [1]}, [6], shrink=0.1)
+    assert base != model_key(c, [6], shrink=0.2)
+    assert base != model_key(c, [6], shrink=0.1, vra=21)
+    assert base != model_key(c, [7], shrink=0.1)
+    for key in ("R", "cap", "msk", "lab"):
+        v = c[key].copy()
+        v[0, 0] = {"R": 9.0, "cap": 9.0, "msk": False, "lab": "b"}[key]
+        assert base != model_key({**c, key: v}, [6], shrink=0.1), key
+    assert base != model_key({**c, "Xs": {"size": c["Xs"]["size"] + 1}}, [6], shrink=0.1)

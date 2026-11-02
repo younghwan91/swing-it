@@ -23,7 +23,6 @@ as-of 목록과 END 는 **인자**다. ``pead_optimizer_c0.END`` 를 쓰지 않�
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import math
 import multiprocessing as mp
@@ -38,7 +37,7 @@ import pead_optimizer_po2 as P2
 import pead_optimizer_po3 as P3
 from krx_quant_core.backtest.crosssectional import _trailing_adv
 from krx_quant_core.data.daily import AFTERMARKET_START, _fingerprint
-from krx_quant_core.data.risk_inputs import STYLE_NAMES, load_risk_inputs, style_panels
+from krx_quant_core.data.risk_inputs import STYLE_NAMES, load_risk_inputs
 from krx_quant_core.risk.factor_model import factor_returns
 from pead_optimizer_c0 import (
     HORIZON,
@@ -53,12 +52,13 @@ from pead_optimizer_c0 import (
     STEP,
     Sub,
     bias_rows,
-    exposures,
     keyed_rng,
     month_ends,
     nu_from,
 )
-from pead_optimizer_seam import seam_guard
+
+from swing_it.book.riskmodel import build_panels, load_guarded
+from swing_it.storage import read_seam_sources
 
 OLD_END = "2023-12-28"
 OLD_ASOF = ("2019-07-01", "2023-10-31", 52)
@@ -98,30 +98,13 @@ def load_inputs(end: str):
 
 
 def raw_closes_and_events(codes, dates, end: str):
-    """PO-2 러너 ``raw_closes_and_events`` 와 같은 식, 상한 = 인자 END."""
+    """PO-2 러너 ``raw_closes_and_events`` 와 같은 식, 상한 = 인자 END. 구현은 :func:`swing_it.storage.read_seam_sources`."""
     _check_end(end)
-    con, cur = P2._db()
-    lo = str(dates[0].date())
-    cidx = pd.Index([str(c) for c in codes])
-    didx = pd.DatetimeIndex(dates)
-    out = []
-    for sql in ("SELECT code, date, close FROM daily_bars_raw WHERE date BETWEEN %s AND %s AND close > 0",
-                "SELECT code, date, abs(close) FROM supply_demand WHERE date BETWEEN %s AND %s "
-                "AND close IS NOT NULL AND close <> 0"):
-        cur.execute(sql, (lo, end))
-        df = pd.DataFrame(cur.fetchall(), columns=["code", "date", "close"])
-        assert df.empty or pd.to_datetime(df["date"]).max() <= _ts(end)
-        a = np.full((len(codes), len(dates)), np.nan)
-        i = cidx.get_indexer(df["code"].astype(str))
-        t = didx.get_indexer(pd.to_datetime(df["date"]))
-        ok = (i >= 0) & (t >= 0)
-        a[i[ok], t[ok]] = df["close"].to_numpy(float)[ok]
-        out.append(a)
-    cur.execute("SELECT code, date FROM corporate_actions WHERE date BETWEEN %s AND %s", (lo, end))
-    ev = pd.DataFrame(cur.fetchall(), columns=["code", "date"])
-    assert ev.empty or pd.to_datetime(ev["date"]).max() <= _ts(end)
-    con.close()
-    return out, ev
+    con, _ = P2._db()
+    try:
+        return read_seam_sources(con, codes, dates, end)
+    finally:
+        con.close()
 
 
 def yoy_signal_strict(codes, dates, end: str) -> tuple[np.ndarray, dict]:
@@ -168,16 +151,8 @@ def fingerprint(table: str, hi: str) -> list:
 
 
 def prep(x, asof_from: str, asof_to: str, n_asof: int, end: str):
-    """PO-2 러너 ``prep`` 와 같은 식. asof = [asof_from, asof_to] 의 월말 중 앞 21거래일이 END 안인 것."""
-    sector = x.sector
-    has_sec = np.vectorize(lambda s: s is not None, otypes=[bool])(sector)
-    mask = has_sec & np.isfinite(x.cap) & (x.cap > 0) & np.isfinite(x.close)
-    raw = style_panels(x)
-    Xall = exposures(x, raw, mask)
-    first = int(np.argmax(has_sec.any(axis=0)))
-    sl = slice(first, None)
-    c = {"R": x.ret[:, sl], "cap": x.cap[:, sl], "msk": mask[:, sl], "lab": sector[:, sl],
-         "Xs": {k: v[:, sl] for k, v in Xall.items()}, "dates": x.dates[sl], "first": first, "raw": raw}
+    """PO-2 러너 ``prep`` 와 같은 식(:func:`swing_it.book.riskmodel.build_panels`). asof = [asof_from, asof_to] 의 월말 중 앞 21거래일이 END 안인 것."""
+    c = build_panels(x)
     nD = c["R"].shape[1]
     c["asofs"] = [a for a in month_ends(c["dates"], asof_from, nD - 1) if c["dates"][a] <= _ts(asof_to)]
     assert len(c["asofs"]) == n_asof, f"asof {len(c['asofs'])}개 ≠ {n_asof}"
@@ -187,10 +162,12 @@ def prep(x, asof_from: str, asof_to: str, n_asof: int, end: str):
 
 
 def guarded(x0, end: str):
-    raw_src, events = raw_closes_and_events(x0.codes, x0.dates, end)
-    rf, cf, seam, info = seam_guard(x0.codes, x0.dates, x0.ret, x0.close, raw_src, events,
-                                    secondary_min_abs_ret=SEC_MIN_ABS_RET)
-    return dataclasses.replace(x0, ret=rf, close=cf), seam, info
+    _check_end(end)
+    con, _ = P2._db()
+    try:
+        return load_guarded(con, x0, end, secondary_min_abs_ret=SEC_MIN_ABS_RET)
+    finally:
+        con.close()
 
 
 # ── OB(α 난수 키 인자 — 식은 PO-2 러너 ``_ob_task`` 그대로) ─────────────────────

@@ -1,6 +1,6 @@
 # 파이프라인 11단계
 
-연구는 아래 순서로만 흐른다. 순서는 게이트와 CI 가 막는다. 부를 함수는 대부분 `src/` 에 있다. 예외는 5단계(연구 코드에만 있다)·6단계 모델 빌드·10단계(없다)·11단계 보고서다. 지금 상태는 `python -m swing_it.pipeline status` 로 본다.
+연구는 아래 순서로만 흐른다. 순서는 게이트와 CI 가 막는다. 부를 함수는 대부분 `src/` 에 있다. 예외는 5단계(연구 코드에만 있다)·10단계(없다)·11단계 보고서다. 지금 상태는 `python -m swing_it.pipeline status` 로 본다.
 
 ## 단계와 실제 함수
 
@@ -13,7 +13,7 @@
 | 3 | 알파 발굴 | `yoy_strict_wide`·`load_yoy_strict` | `swing_it.features.earnings_asof` |
 | 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`daily_mean_ic`·`quintile_excess`·`ic_summary`·`ic_permutation_null`·`fold_ic` | `swing_it.validation.ic` |
 | 5 | ML 수익률 예측 | `research/experiments/ml_forecast_models.py` | **`src` 에 없다.** 연구 코드에 남았다. `check_forecast` 는 있지만 부르는 러너가 아직 없다 |
-| 6 | 팩터 위험모델 | `sub_model`·`active_risk`, 모델은 `build_models` | `swing_it.book.risk`, `research/experiments/pead_optimizer_po3.py`(core `build_risk_model` 호출) |
+| 6 | 팩터 위험모델 | `sub_model`·`active_risk`, 빌드는 `load_guarded`·`seam_guard`·`build_panels`·`build_models` | `swing_it.book.risk`, `swing_it.book.riskmodel`·`seam`(core `build_risk_model` 호출) |
 | 7 | 포트폴리오 | 순위 북 `tranche_names`·`r_target`, 최적화 북 `o_target`·`match_lambda` | `swing_it.book.rank`, `swing_it.book.optimized` |
 | 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` | `swing_it.book.costs` |
 | 9 | 백테스트 | `simulate`·`check_invariants`·`book_summary`, `full_parity`, `permutation_nulls`, `ols_hac` | `swing_it.book.accounting`·`metrics`·`parity`·`nulls`, `swing_it.diagnostics.hac` |

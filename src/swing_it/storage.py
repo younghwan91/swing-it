@@ -501,6 +501,40 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
     return df
 
 
+def read_seam_sources(con: Any, codes, dates, end: str):
+    """이음매 가드 재료 — ``([daily_bars_raw 종가, supply_demand 종가(절댓값)], corporate_actions 사건)``. 모두 [dates[0], end], 패널 좌표(code × date).
+
+    원주가는 대조에만 쓴다. 폐지 백필이 없는 표라 유니버스로 쓰지 않는다(:func:`read_prices` 의 가드).
+    """
+    import numpy as np
+    import pandas as pd
+
+    ph = "%s" if _is_pg(con) else "?"
+    lo = str(dates[0].date())
+    cidx = pd.Index([str(c) for c in codes])
+    didx = pd.DatetimeIndex(dates)
+    cur = con.cursor()
+    out = []
+    for sql in (f"SELECT code, date, close FROM daily_bars_raw WHERE date BETWEEN {ph} AND {ph} AND close > 0",  # noqa: S608 — 자리표시자만 다르다
+                f"SELECT code, date, abs(close) FROM supply_demand WHERE date BETWEEN {ph} AND {ph} "  # noqa: S608
+                "AND close IS NOT NULL AND close <> 0"):
+        cur.execute(sql, (lo, end))
+        df = pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "date", "close"])
+        if len(df) and pd.to_datetime(df["date"]).max() > pd.Timestamp(end):
+            raise AssertionError(f"이음매 재료에 end({end}) 뒤 날짜가 있다")
+        a = np.full((len(codes), len(dates)), np.nan)
+        i = cidx.get_indexer(df["code"].astype(str))
+        t = didx.get_indexer(pd.to_datetime(df["date"]))
+        ok = (i >= 0) & (t >= 0)
+        a[i[ok], t[ok]] = df["close"].to_numpy(float)[ok]
+        out.append(a)
+    cur.execute(f"SELECT code, date FROM corporate_actions WHERE date BETWEEN {ph} AND {ph}", (lo, end))  # noqa: S608
+    ev = pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "date"])
+    if len(ev) and pd.to_datetime(ev["date"]).max() > pd.Timestamp(end):
+        raise AssertionError(f"사건에 end({end}) 뒤 날짜가 있다")
+    return out, ev
+
+
 SUPPLY_TABLE = "supply_demand"
 _SUPPLY_READ_COLS = ("code", "date", "individual", "foreign_", "institution")
 #: 기관 세부 8종. 키움 소스에만 있고 네이버 폐지 백필에는 없다.

@@ -33,12 +33,12 @@ from krx_quant_core.risk.factor_model import (
     bias_statistic,
     build_risk_model,
     factor_returns,
-    standardize,
 )
 from scipy import stats
 
 from swing_it.book.risk import Sub
 from swing_it.features.universe import rank_band_eligible
+from swing_it.book.riskmodel import exposures as _exposures
 from swing_it.validation.keys import SEED, keyed_rng
 
 __all__ = ["SEED", "Sub", "keyed_rng"]  # 옮긴 구현을 이 이름으로 부르는 러너가 있다
@@ -75,19 +75,8 @@ OUT = Path(__file__).resolve().parents[1] / "logs" / "pead_optimizer"
 # ── 입력 ──────────────────────────────────────────────────────────────────────
 
 
-def exposures(x, raw, mask):  # validate_risk_model.py 와 같은 규칙
-    out = {}
-    for k, v in raw.items():
-        e = np.full_like(v, np.nan)
-        for t in range(v.shape[1]):
-            m = mask[:, t]
-            if m.sum() < 30:
-                continue
-            col = standardize(v[:, t], x.cap[:, t], m)
-            col[m & ~np.isfinite(col)] = 0.0
-            e[:, t] = col
-        out[k] = e
-    return out
+def exposures(x, raw, mask):  # validate_risk_model.py 와 같은 규칙. 구현은 src 로 옮겼다
+    return _exposures(x, raw, mask)
 
 
 def month_ends(dates, lo, last_index):  # validate_risk_model.py 그대로

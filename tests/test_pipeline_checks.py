@@ -205,7 +205,7 @@ def test_price_adjust_does_not_depend_on_the_new_packages():
     assert not [m for m in mods if "pipeline" in m or "book" in m]
 
 
-@pytest.mark.parametrize("name", ["accounting", "context", "costs", "metrics", "nulls", "optimized", "parity", "rank", "risk", "spec"])
+@pytest.mark.parametrize("name", ["accounting", "context", "costs", "metrics", "nulls", "optimized", "parity", "rank", "risk", "riskmodel", "seam", "spec"])
 def test_book_modules_import_on_the_default_pin(name):
     """기본 핀 0.7.0 에서도 import 된다 — 충격비용·최적화기는 부를 때 import 한다."""
     importlib.import_module(f"swing_it.book.{name}")
