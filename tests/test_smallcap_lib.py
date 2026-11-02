@@ -222,13 +222,14 @@ def test_tv_is_excluded_from_its_own_adv_and_nan_leaves_universe():
     tv = np.full(100, 1000.0)
     tv[50] = 9000.0
     tv[70] = np.nan
-    p = mk(flat_then(), TV=tv)
+    raw = np.full(100, 100.0)
+    p = mk(flat_then(), TV=tv, RAW=raw)
     assert p.ADV[0, 50] == pytest.approx(1000.0)
     assert p.ADV[0, 51] == pytest.approx((19 * 1000.0 + 9000.0) / 20)
     u = p.universe((300.0, 2000.0))
     assert u[0, 60] and not u[0, 70]
     assert not p.universe((3000.0, 4000.0))[0, 60]
-    assert not mk(flat_then(), TV=tv, excluded=[True]).universe((300.0, 2000.0))[0, 60]
+    assert not mk(flat_then(), TV=tv, RAW=raw, excluded=[True]).universe((300.0, 2000.0))[0, 60]
 
 
 def test_hvnm_event_needs_new_max_small_move_and_no_action():
@@ -240,17 +241,17 @@ def test_hvnm_event_needs_new_max_small_move_and_no_action():
     tv[t_ev] = 5000.0
     c[t_ev] = c[t_ev - 1] * 1.0005
     c[t_ev + 1:] = c[t_ev] * np.cumprod(1 + rng.normal(0, 0.01, n - t_ev - 1))
-    p = mk(c, TV=tv, RAW=c * 100)
+    p = mk(c, TV=tv, RAW=c.copy())
     ev = L.hvnm_events(p, p.universe((300.0, 2000.0)))
     assert list(ev.t) == [t_ev]
     assert ev["rank"][0] == pytest.approx(5.0)
     # 같은 거래대금이라도 3σ 움직인 날은 사건이 아니다
     c2 = c.copy()
     c2[t_ev:] = c2[t_ev:] * 1.05
-    p2 = mk(c2, TV=tv, RAW=c2 * 100)
+    p2 = mk(c2, TV=tv, RAW=c2.copy())
     assert t_ev not in set(L.hvnm_events(p2, p2.universe((300.0, 2000.0))).t)
     # 수정 사건 칸(수정가/원가 계단 > 1%)도 아니다
-    raw = c * 100
+    raw = c.copy()
     raw[t_ev:] = raw[t_ev:] * 0.5
     p3 = mk(c, TV=tv, RAW=raw)
     assert p3.action[0, t_ev]
