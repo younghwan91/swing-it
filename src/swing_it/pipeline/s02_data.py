@@ -1,6 +1,7 @@
-"""2단계 데이터 — 정문(``storage.read_prices``·``read_earnings``)으로 읽고 지식 시점 보증을 붙인다.
+"""2단계 데이터 — 정문(``storage.read_prices``·``read_earnings``)으로 읽고 ``end`` 뒤 값을 거부한다.
 
-유니버스로 SQL 을 좁히지 않는다. 좁히면 ``read_prices`` 의 폐지 종목 검사가 우회된다. 마스크는 3단계에서 신호에 건다.
+유니버스로 SQL 을 좁히지 않는다. 좁히면 ``read_prices`` 의 폐지 종목 검사가 우회된다. 애프터마켓 오염 구간은 받지 않는다.
+알게 된 날 규칙은 여기서 보증하지 않는다(:class:`~swing_it.pipeline.contracts.DataPanels`).
 """
 
 from __future__ import annotations
@@ -30,13 +31,12 @@ def _fingerprint(prices: Any) -> str:
                        None if vol is None else int(vol)])
 
 
-def run(study: str, con: Any, universe: UniverseMask, *, end: str, aftermarket_handled: bool = False) -> DataPanels:
-    """``end`` 까지의 가격과 실적 전 버전을 읽는다. 실적은 접지 않는다 — 버전 선택은 날짜별로 3단계가 한다."""
+def run(study: str, con: Any, universe: UniverseMask, *, end: str) -> DataPanels:
+    """``end`` 까지의 가격과 실적 전 버전을 읽는다. 실적은 접지 않는다 — 버전 선택은 날짜별로 해야 한다."""
     require_stage(study, STAGE)
     expect(universe, UniverseMask, "universe")
     prices = read_prices(con)
     prices = prices.assign(date=prices["date"].astype(str))
     prices = prices[prices["date"] <= end].reset_index(drop=True)
     earnings = read_earnings(con, cols=(*_EARNINGS_READ_COLS, "knowledge_date"), all_versions=True, until=end)
-    return DataPanels(prices=prices, earnings=earnings, universe=universe, end=end,
-                      fingerprint=_fingerprint(prices), aftermarket_handled=aftermarket_handled)
+    return DataPanels(prices=prices, earnings=earnings, universe=universe, end=end, fingerprint=_fingerprint(prices))

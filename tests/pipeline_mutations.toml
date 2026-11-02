@@ -1,0 +1,419 @@
+# 파이프라인 가드(docs/PIPELINE.md)의 변이. scripts/check_pipeline_mutations.py 가 CI 에서 하나씩 넣어 본다.
+# 새 가드를 만들면 "이 가드가 없으면 무슨 일이 생기나"를 여기 적는다. 앵커가 사라지면 CI 가 실패한다.
+
+[[mutation]]
+id = "gate-ignores-earlier-stages"
+why = "require_stage 가 앞 단계를 안 보면 러너는 증거 없이 돈다 — 게이트 전체가 무력해진다"
+guards = ["tests/test_pipeline_gate.py::test_no_ledger_blocks_every_later_stage",
+          "tests/test_pipeline_gate.py::test_runner_does_not_touch_data_when_earlier_evidence_is_not_good"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    blockers = _blockers(states, target)"
+replace = "    blockers = []"
+
+[[mutation]]
+id = "fail-opens-later-stages"
+why = "fail 이 뒤를 안 막으면 실패한 신호 위에서 다음 단계를 돈다"
+guards = ["tests/test_pipeline_gate.py::test_fail_blocks_everything_after_it"]
+file = "src/swing_it/pipeline/gate.py"
+find = "OPEN_STATUSES = (\"pass\", \"skip\")"
+replace = "OPEN_STATUSES = (\"pass\", \"skip\", \"fail\")"
+
+[[mutation]]
+id = "fail-covered-by-skip-or-same-evidence"
+why = "실패한 단계를 skip 으로 다시 적거나 같은 산출물을 pass 로 적으면 fail 이 아무것도 막지 못한다"
+guards = ["tests/test_pipeline_gate.py::test_a_skip_cannot_cover_a_fail",
+          "tests/test_pipeline_gate.py::test_a_fail_cannot_be_flipped_on_the_same_evidence",
+          "tests/test_pipeline_gate.py::test_forged_skip_over_a_fail_is_rejected"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if not fails:\n        return None\n"
+replace = "    return None\n"
+
+[[mutation]]
+id = "reason-optional"
+why = "사유 없는 기록은 왜 그렇게 적었는지 지운다 — 일부러 안 쓴 것과 잊은 것이 구별되지 않는다"
+guards = ["tests/test_pipeline_gate.py::test_skip_needs_a_non_empty_reason",
+          "tests/test_pipeline_gate.py::test_pass_needs_a_reason"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if not has_reason:"
+replace = "    if False:"
+
+[[mutation]]
+id = "core-stages-skippable"
+why = "비용·백테스트를 건너뛸 수 있으면 비용 없는 판정이 게이트를 지난다"
+guards = ["tests/test_pipeline_gate.py::test_core_stages_cannot_be_skipped"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if status == \"skip\" and stage in NOT_SKIPPABLE:"
+replace = "    if False:"
+
+[[mutation]]
+id = "alpha-validation-skip-without-evidence"
+why = "신호 검증을 사유 한 줄로 건너뛴다"
+guards = ["tests/test_pipeline_gate.py::test_skipping_alpha_validation_needs_evidence"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if status == \"skip\" and stage is Stage.ALPHA_VALIDATION and not ev.get(\"evidence\"):"
+replace = "    if False:"
+
+[[mutation]]
+id = "alpha-validation-skip-survives-new-signal"
+why = "신호를 바꿔도 옛 신호로 내린 '검증 건너뛰기'가 살아 있다"
+guards = ["tests/test_pipeline_gate.py::test_redoing_the_signal_makes_a_skip_of_its_validation_stale"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if status == \"pass\" or (status == \"skip\" and stage is Stage.ALPHA_VALIDATION):"
+replace = "        if status == \"pass\":"
+
+[[mutation]]
+id = "monitoring-blocked-by-pending-verdict"
+why = "전진 판정은 1년 뒤다. 그동안의 모니터링을 막으면 전진을 볼 수 없다"
+guards = ["tests/test_pipeline_gate.py::test_monitoring_a_paper_book_is_not_blocked_by_a_pending_verdict"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if target is Stage.ATTRIBUTION and st.stage in MONITORING_MAY_PRECEDE and st.status == \"pending\":"
+replace = "        if False:"
+
+[[mutation]]
+id = "monitoring-exception-covers-fail"
+why = "모니터링 예외가 fail 까지 덮으면 닫힌 연구가 뒤로 간다"
+guards = ["tests/test_pipeline_gate.py::test_a_real_fail_blocks_monitoring"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if target is Stage.ATTRIBUTION and st.stage in MONITORING_MAY_PRECEDE and st.status == \"pending\":"
+replace = "        if target is Stage.ATTRIBUTION and st.stage in MONITORING_MAY_PRECEDE:"
+
+[[mutation]]
+id = "monitoring-exception-covers-early-stages"
+why = "모니터링 예외가 1~8 까지 덮으면 증거 없는 연구도 11단계를 돈다"
+guards = ["tests/test_pipeline_gate.py::test_a_pending_early_stage_still_blocks_monitoring"]
+file = "src/swing_it/pipeline/gate.py"
+find = "MONITORING_MAY_PRECEDE = frozenset({Stage.BACKTEST, Stage.EXECUTION})"
+replace = "MONITORING_MAY_PRECEDE = frozenset(Stage)"
+
+[[mutation]]
+id = "monitoring-exception-opens-execution"
+why = "예외가 10단계까지 번지면 판정 없이 주문 경로가 열린다"
+guards = ["tests/test_pipeline_gate.py::test_pending_verdict_still_shuts_execution"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if target is Stage.ATTRIBUTION and st.stage in MONITORING_MAY_PRECEDE and st.status == \"pending\":"
+replace = "        if target >= Stage.EXECUTION and st.stage in MONITORING_MAY_PRECEDE and st.status == \"pending\":"
+
+[[mutation]]
+id = "results-pass-without-reviewer"
+why = "검증 전 결과로 4·5·9 를 통과시킨다 — '검증 전' 숫자가 다음 단계의 근거가 된다"
+guards = ["tests/test_pipeline_gate.py::test_results_stage_pass_without_reviewer_is_rejected",
+          "tests/test_pipeline_gate.py::test_forged_line_without_reviewer_is_rejected"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if stage in RESULT_STAGES and not _is_verified_name((ev.get(\"reviewer\") or {}).get(\"path\")):"
+replace = "        if False:"
+
+[[mutation]]
+id = "execution-pass-without-approval"
+why = "사용자 승인·전진 증거 없이 10단계가 pass 된다"
+guards = ["tests/test_pipeline_gate.py::test_execution_pass_needs_a_real_approval_record",
+          "tests/test_pipeline_gate.py::test_execution_pass_needs_forward_evidence"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if status == \"pass\" and stage is Stage.EXECUTION:"
+replace = "    if False:"
+
+[[mutation]]
+id = "execution-gate-trusts-earlier-stages"
+why = "require_stage(10) 은 1~9 만 본다. 주문 정문이 10단계 자체를 안 보면 승인 없이 주문이 나간다"
+guards = ["tests/test_pipeline_gate.py::test_require_stage_10_alone_is_not_approval",
+          "tests/test_pipeline_gate.py::test_skipping_execution_is_not_approval"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if state.status != \"pass\":"
+replace = "    if False:"
+
+[[mutation]]
+id = "going-back-does-not-invalidate"
+why = "앞 단계를 다시 적어도 뒤 단계 pass 가 살아 있으면 옛 신호로 잰 위험·비용이 새 신호의 증거로 쓰인다"
+guards = ["tests/test_pipeline_gate.py::test_going_back_makes_later_passes_stale",
+          "tests/test_pipeline_gate.py::test_stale_stage_blocks_and_must_be_re_evidenced"]
+file = "src/swing_it/pipeline/gate.py"
+find = "            why += [f\"{s.label} 이 더 나중에 다시 기록됐다\" for s in redone]"
+replace = "            pass"
+
+[[mutation]]
+id = "evidence-not-rechecked"
+why = "증거를 고치거나 지워도 게이트가 모르면 원장이 거짓이 된다"
+guards = ["tests/test_pipeline_gate.py::test_tampered_evidence_goes_stale_and_blocks",
+          "tests/test_pipeline_gate.py::test_missing_evidence_goes_stale_and_blocks"]
+file = "src/swing_it/pipeline/gate.py"
+find = "            why += _file_problems(ev, root)"
+replace = "            pass"
+
+[[mutation]]
+id = "hash-mismatch-ignored"
+why = "파일이 있기만 하면 통과 — 고쳐 쓴 증거가 안 잡힌다"
+guards = ["tests/test_pipeline_gate.py::test_tampered_evidence_goes_stale_and_blocks",
+          "tests/test_pipeline_gate.py::test_tampered_reviewer_doc_goes_stale"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        elif sha256_file(path) != ref[\"sha256\"]:"
+replace = "        elif False:"
+
+[[mutation]]
+id = "line-hash-not-checked"
+why = "fail 한 줄을 손으로 pass 로 바꿔도 게이트가 열린다"
+guards = ["tests/test_pipeline_gate.py::test_hand_edited_ledger_is_rejected_not_ignored"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if ev.get(\"sha\") != event_sha(ev):"
+replace = "        if False:"
+
+[[mutation]]
+id = "chain-not-checked"
+why = "중간 줄(fail)을 지워도 게이트가 열린다"
+guards = ["tests/test_pipeline_gate.py::test_removing_a_middle_line_is_rejected"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        if ev.get(\"prev\") != prev:"
+replace = "        if False:"
+
+[[mutation]]
+id = "record-ignores-order"
+why = "앞 단계가 안 열렸는데 뒤 단계 pass 를 적을 수 있으면 원장이 순서를 말해 주지 못한다"
+guards = ["tests/test_pipeline_gate.py::test_pass_needs_earlier_stages_open"]
+file = "src/swing_it/pipeline/gate.py"
+find = "        shut = _blockers(_states(events, base), target)"
+replace = "        shut = []"
+
+[[mutation]]
+id = "read-ignores-order"
+why = "체인을 맞춰 덧붙인 순서 어긋난 줄을 읽을 때 못 잡는다"
+guards = ["tests/test_pipeline_gate.py::test_forged_line_out_of_order_is_rejected"]
+file = "src/swing_it/pipeline/gate.py"
+find = "            shut = _blockers(_states(events, None), stage)"
+replace = "            shut = []"
+
+[[mutation]]
+id = "backfill-has-no-cutoff"
+why = "소급 기록이 언제나 되면 순서 검사를 끄는 스위치가 된다"
+guards = ["tests/test_pipeline_gate.py::test_backfill_only_covers_work_before_the_gate_existed"]
+file = "src/swing_it/pipeline/gate.py"
+find = "    if day > date.fromisoformat(BACKFILL_CUTOFF):"
+replace = "    if False:"
+
+[[mutation]]
+id = "cli-writes-to-another-repo"
+why = "편집 설치가 다른 워크트리의 원장에 조용히 적는다"
+guards = ["tests/test_pipeline_gate.py::test_cli_record_refuses_when_cwd_is_another_repo"]
+file = "src/swing_it/pipeline/__main__.py"
+find = "    if r.returncode == 0 and top and Path(top).resolve() != root:"
+replace = "    if False:"
+
+[[mutation]]
+id = "stage-module-skips-gate"
+why = "단계 모듈을 러너 밖에서 부르면 순서를 건너뛴다"
+guards = ["tests/test_pipeline_stages.py::test_run_opens_with_the_gate",
+          "tests/test_pipeline_stages.py::test_run_is_blocked_before_it_touches_anything"]
+file = "src/swing_it/pipeline/s06_risk_model.py"
+find = "    require_stage(study, STAGE)\n"
+replace = ""
+
+[[mutation]]
+id = "execution-module-skips-gate"
+why = "10단계 모듈이 게이트 없이 불리면 안 된다 — 구현이 붙는 순간 주문 경로가 된다"
+guards = ["tests/test_pipeline_stages.py::test_run_opens_with_the_gate",
+          "tests/test_pipeline_stages.py::test_run_is_blocked_before_it_touches_anything"]
+file = "src/swing_it/pipeline/s10_execution.py"
+find = "    require_stage(study, STAGE)\n"
+replace = ""
+
+[[mutation]]
+id = "contract-allows-unknown-at-the-time"
+why = "end 뒤에 안 값이 패널에 들어와도 통과한다"
+guards = ["tests/test_pipeline_stages.py::test_contract_violation_is_refused"]
+file = "src/swing_it/pipeline/contracts.py"
+find = "            if _day(self.earnings[col], f\"earnings.{col}\").max() > end:"
+replace = "            if False:"
+
+[[mutation]]
+id = "contract-accepts-aftermarket-window"
+why = "main 의 read_prices 는 정규장 값을 못 만든다. 오염 구간이 조용히 들어온다"
+guards = ["tests/test_pipeline_stages.py::test_aftermarket_window_has_no_way_around",
+          "tests/test_pipeline_stages.py::test_data_stage_refuses_the_aftermarket_window"]
+file = "src/swing_it/pipeline/contracts.py"
+find = "        if end >= pd.Timestamp(AFTERMARKET_FROM):"
+replace = "        if False:"
+
+[[mutation]]
+id = "forecast-ignores-label-overlap"
+why = "학습 라벨이 예측일을 넘어 겹치면 미래가 샌다"
+guards = ["tests/test_pipeline_stages.py::test_contract_violation_is_refused"]
+file = "src/swing_it/pipeline/contracts.py"
+find = "        if (np.busday_count(train_end, date) < self.horizon).any():"
+replace = "        if False:"
+
+[[mutation]]
+id = "contract-allows-live-order-plan"
+why = "실주문 경로는 없다. dry_run 이 아닌 계획이 만들어지면 안 된다"
+guards = ["tests/test_pipeline_stages.py::test_contract_violation_is_refused"]
+file = "src/swing_it/pipeline/contracts.py"
+find = "        if self.dry_run is not True:"
+replace = "        if False:"
+
+[[mutation]]
+id = "lint-declared-not-in-main"
+why = "규칙 함수가 살아 있어도 main() 이 안 부르면 CI 는 초록이다"
+guards = ["tests/test_check_guardrails.py::test_main_is_wired_to_the_pipeline_rules"]
+file = "scripts/check_guardrails.py"
+find = "    violations += check_pipeline_declared()\n"
+replace = ""
+
+[[mutation]]
+id = "lint-ledgers-not-in-main"
+why = "증거를 고쳐도 CI 가 모른다"
+guards = ["tests/test_check_guardrails.py::test_main_is_wired_to_the_pipeline_rules"]
+file = "scripts/check_guardrails.py"
+find = "    violations += check_pipeline_ledgers()\n"
+replace = ""
+
+[[mutation]]
+id = "lint-append-only-not-in-main"
+why = "끝 줄 fail 을 지워도 CI 가 모른다"
+guards = ["tests/test_check_guardrails.py::test_main_is_wired_to_the_pipeline_rules"]
+file = "scripts/check_guardrails.py"
+find = "    violations += check_pipeline_ledgers_append_only()\n"
+replace = ""
+
+[[mutation]]
+id = "lint-scope-only-runner-folders"
+why = "위치로 보면 research/signals·scripts 의 데이터 호출이 규칙 밖이다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_data_calls_outside_the_runner_folders"]
+file = "scripts/check_guardrails.py"
+find = "            if not always and not _touches_data(tree) and _module_constant(tree, \"PIPELINE\") is None:"
+replace = "            if not always:"
+
+[[mutation]]
+id = "lint-aliases-not-resolved"
+why = "from x import read_prices as rp 로 규칙을 피한다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_data_calls_outside_the_runner_folders",
+          "tests/test_check_guardrails.py::test_rule_k_catches_a_backtest_declared_as_an_early_stage"]
+file = "scripts/check_guardrails.py"
+find = "            return self.imported.get(local, (\"\", local))[1]"
+replace = "            return local"
+
+[[mutation]]
+id = "lint-import-time-unchecked"
+why = "모듈 수준·기본 인자·데코레이터에서 데이터를 읽으면 게이트보다 먼저 돈다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_data_before_the_gate"]
+file = "scripts/check_guardrails.py"
+find = "    problem = _import_time_problem(tree, names)\n"
+replace = "    problem = None\n"
+
+[[mutation]]
+id = "lint-gate-position-unchecked"
+why = "데이터를 먼저 읽고 게이트를 불러도, 조건문·try 안에서 불러도 통과한다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_each_way_of_dodging_the_gate",
+          "tests/test_check_guardrails.py::test_rule_k_catches_data_before_the_gate"]
+file = "scripts/check_guardrails.py"
+find = "            elif not _before_gate_ok(call, name):\n                return False\n"
+replace = ""
+
+[[mutation]]
+id = "lint-fake-gate-accepted"
+why = "같은 이름의 지역 함수를 게이트로 친다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_a_fake_or_swallowed_gate"]
+file = "scripts/check_guardrails.py"
+find = "            return original == \"require_stage\" and module.startswith(\"swing_it.pipeline\")"
+replace = "            return original == \"require_stage\""
+
+[[mutation]]
+id = "lint-backtest-as-early-stage"
+why = "1단계로 선언하면 앞 단계가 없어 게이트가 비어 버린다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_a_backtest_declared_as_an_early_stage"]
+file = "scripts/check_guardrails.py"
+find = "    if parsed < gate.Stage.BACKTEST and backtests:"
+replace = "    if False:"
+
+[[mutation]]
+id = "lint-library-may-have-entry"
+why = "라이브러리라고 선언한 러너가 게이트 없이 돈다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_catches_a_false_library_declaration"]
+file = "scripts/check_guardrails.py"
+find = "        if _has_main_guard(tree) or _library_runs_at_import(tree, names):"
+replace = "        if False:"
+
+[[mutation]]
+id = "lint-grandfather-grows"
+why = "면제 목록이 늘어나면 새 러너가 규칙을 피한다"
+guards = ["tests/test_check_guardrails.py::test_grandfather_lists_never_grow"]
+file = "scripts/check_guardrails.py"
+find = "PIPELINE_GRANDFATHER = frozenset({\n"
+replace = "PIPELINE_GRANDFATHER = frozenset({\n    \"research/experiments/new_runner.py\",\n"
+
+[[mutation]]
+id = "lint-logs-grandfather-grows"
+why = "로그 폴더 면제가 늘어나면 원장 없는 연구가 생긴다"
+guards = ["tests/test_check_guardrails.py::test_grandfather_lists_never_grow"]
+file = "scripts/check_guardrails.py"
+find = "PIPELINE_LOGS_GRANDFATHER = frozenset({\n"
+replace = "PIPELINE_LOGS_GRANDFATHER = frozenset({\n    \"ml_forecast\",\n"
+
+[[mutation]]
+id = "lint-new-logs-folder-free"
+why = "새 연구 폴더가 원장 없이 생긴다"
+guards = ["tests/test_check_guardrails.py::test_new_logs_folder_requires_a_ledger"]
+file = "scripts/check_guardrails.py"
+find = "            if d.name not in PIPELINE_LOGS_GRANDFATHER and not (d / gate.LEDGER_NAME).exists():"
+replace = "            if False:"
+
+[[mutation]]
+id = "lint-truncation-unchecked"
+why = "끝 줄 fail 을 지우면 체인은 멀쩡하고 게이트가 열린다"
+guards = ["tests/test_check_guardrails.py::test_truncated_ledger_is_caught",
+          "tests/test_check_guardrails.py::test_rewritten_then_appended_ledger_is_caught"]
+file = "scripts/check_guardrails.py"
+find = "        elif not path.read_text(encoding=\"utf-8\").startswith(_git(\"show\", f\"{base}:{rel}\").stdout):"
+replace = "        elif False:"
+
+[[mutation]]
+id = "lint-missing-base-passes-in-ci"
+why = "기준을 안 받으면 잘라내기 검사가 조용히 꺼진다"
+guards = ["tests/test_check_guardrails.py::test_missing_base_fails_in_ci_but_not_locally"]
+file = "scripts/check_guardrails.py"
+find = "        if os.environ.get(\"CI\"):\n"
+replace = "        if False:\n"
+
+[[mutation]]
+id = "ci-drops-guardrail-lint"
+why = "CI 에서 린트를 빼면 위 규칙은 전부 부탁이 된다"
+guards = ["tests/test_check_guardrails.py::test_ci_runs_the_guardrail_lint_on_pull_requests"]
+file = ".github/workflows/ci.yml"
+find = "        run: python scripts/check_guardrails.py"
+replace = "        run: \"true\""
+
+[[mutation]]
+id = "ci-drops-base-fetch"
+why = "기준이 없으면 잘라내기 검사가 CI 에서 실패한다"
+guards = ["tests/test_check_guardrails.py::test_ci_fetches_the_base_before_the_lint"]
+file = ".github/workflows/ci.yml"
+find = "        run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main\n      - name: Guardrails"
+replace = "        run: \"true\"\n      - name: Guardrails"
+
+[[mutation]]
+id = "ci-drops-mutations"
+why = "변이 단계를 빼면 가드가 죽어도 아무도 모른다"
+guards = ["tests/test_check_guardrails.py::test_ci_runs_the_pipeline_mutations"]
+file = ".github/workflows/ci.yml"
+find = "        run: python scripts/check_pipeline_mutations.py"
+replace = "        run: \"true\""
+
+[[mutation]]
+id = "ledger-evidence-rewritten"
+why = "판정문을 '통과'로 고쳐도 원장이 모르면 안 된다"
+guards = ["tests/test_pipeline_ledgers.py::test_real_ledgers_verify",
+          "tests/test_check_guardrails.py::test_repo_is_currently_clean"]
+file = "research/logs/pead_optimizer/B_verified.md"
+find = "## 판정: 판단 불가(신호 약함) — 전진 B 는 열지 않는다"
+replace = "## 판정: 통과"
+
+[[mutation]]
+id = "ledger-reason-rewritten"
+why = "원장 줄을 손으로 고치면 체인과 고정 해시가 잡는다"
+guards = ["tests/test_pipeline_ledgers.py::test_real_ledgers_verify"]
+file = "research/logs/pead_optimizer/PIPELINE.jsonl"
+find = "단계 B 닫음: 판단 불가"
+replace = "단계 B 열림: 판단 불가"
+
+[[mutation]]
+id = "ledger-pin-removed"
+why = "소급 줄이 지워져도 고정 해시 검사가 돌아야 한다"
+guards = ["tests/test_pipeline_ledgers.py::test_backfilled_lines_are_pinned"]
+file = "tests/test_pipeline_ledgers.py"
+find = "    \"pead_optimizer\": (9, "
+replace = "    \"pead_optimizer\": (10, "

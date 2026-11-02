@@ -28,6 +28,7 @@ from swing_it.pipeline.stages import Stage
 __all__ = [
     "BACKFILL_CUTOFF",
     "LEDGER_NAME",
+    "MONITORING_MAY_PRECEDE",
     "NOT_SKIPPABLE",
     "RESULT_STAGES",
     "LedgerCorrupt",
@@ -54,6 +55,8 @@ OPEN_STATUSES = ("pass", "skip")
 RESULT_STAGES = frozenset({Stage.ALPHA_VALIDATION, Stage.FORECAST, Stage.BACKTEST})
 #: 일부러 안 써도 되는 단계와 달리, 없으면 판정 자체가 거짓이 되는 단계.
 NOT_SKIPPABLE = frozenset({Stage.UNIVERSE, Stage.DATA, Stage.ALPHA, Stage.COSTS, Stage.BACKTEST})
+#: 페이퍼 북 모니터링은 판정을 기다리지 않는다 — 11단계는 이 두 단계가 pending 이어도 열린다. fail·stale 은 막는다.
+MONITORING_MAY_PRECEDE = frozenset({Stage.BACKTEST, Stage.EXECUTION})
 #: 소급 기록(``backfill``)은 게이트가 생기기 전 작업에만 쓴다.
 BACKFILL_CUTOFF = "2026-11-02"
 
@@ -201,10 +204,12 @@ def _event_problems(ev: dict[str, Any]) -> list[str]:
     out: list[str] = []
     reason = ev.get("reason")
     has_reason = isinstance(reason, str) and bool(reason.strip())
-    if status in ("skip", "fail") and not has_reason:
+    if not has_reason:
         out.append(f"{status} 에는 사유가 필요하다")
     if status == "skip" and stage in NOT_SKIPPABLE:
         out.append(f"{stage.label} 은 건너뛸 수 없다 — 없으면 판정 자체가 거짓이 된다")
+    if status == "skip" and stage is Stage.ALPHA_VALIDATION and not ev.get("evidence"):
+        out.append("4단계 skip 에는 왜 건너뛰는지를 적은 증거 파일이 필요하다 — 신호 검증을 사유 한 줄로 건너뛰지 않는다")
     if status == "pass":
         if not ev.get("evidence"):
             out.append("pass 에는 증거 파일이 필요하다")
@@ -249,6 +254,18 @@ def _flip_problem(ev: dict[str, Any], events: list[dict[str, Any]]) -> "str | No
     return None
 
 
+def _blockers(states: "list[StageState]", target: Stage) -> "list[StageState]":
+    """``target`` 앞에서 막고 있는 단계들. 11단계 모니터링만 9·10 의 pending 을 기다리지 않는다."""
+    out = []
+    for st in states:
+        if st.stage >= target or st.open:
+            continue
+        if target is Stage.ATTRIBUTION and st.stage in MONITORING_MAY_PRECEDE and st.status == "pending":
+            continue
+        out.append(st)
+    return out
+
+
 def _is_verified_name(path: Any) -> bool:
     return isinstance(path, str) and bool(_VERIFIED_DOC.match(PurePosixPath(path).name))
 
@@ -288,7 +305,8 @@ def _states(events: list[dict[str, Any]], root: "Path | None") -> list[StageStat
             continue
         i, ev = latest[stage]
         status, why = ev["status"], []
-        if status == "pass":
+        # 4단계 skip 도 신호에 묶인 결정이다. 신호를 다시 적으면 건너뛸지부터 다시 정한다.
+        if status == "pass" or (status == "skip" and stage is Stage.ALPHA_VALIDATION):
             redone = sorted({Stage(e["stage"]) for e in events[i + 1:] if e["stage"] < stage})
             why += [f"{s.label} 이 더 나중에 다시 기록됐다" for s in redone]
         if root is not None:
@@ -329,7 +347,7 @@ def read_events(study: str, *, root: "Path | str | None" = None) -> list[dict[st
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: {problem}")
         stage = Stage(ev["stage"])
         if ev["status"] in OPEN_STATUSES and ev.get("backfill") is None:
-            shut = [st for st in _states(events, None) if st.stage < stage and not st.open]
+            shut = _blockers(_states(events, None), stage)
             if shut:
                 names = ", ".join(st.stage.label for st in shut)
                 raise LedgerCorrupt(f"{study} 원장 손상 {where}: 앞 단계({names})가 안 열렸는데 {ev['status']} 이 적혔다")
@@ -350,12 +368,12 @@ def require_stage(study: str, stage: "Stage | int | str", *, root: "Path | str |
     """``stage`` 를 돌려도 되는지 본다. 앞 단계 중 하나라도 pass·skip 이 아니면 :class:`StageGateError`.
 
     러너는 데이터를 읽기 전에 ``require_stage(*PIPELINE)`` 을 부른다. 자기 단계의 fail 은 막지 않는다 — 다시 돌려야
-    새 pass 를 얻는다.
+    새 pass 를 얻는다. 11단계만 예외다: 9·10 이 pending 이어도 열린다(전진 중인 페이퍼 북 모니터링).
     """
     _check_study(study)
     target = _parse_stage(stage)
     states = study_states(study, root=root)
-    blockers = [st for st in states if st.stage < target and not st.open]
+    blockers = _blockers(states, target)
     if blockers:
         lines = "\n".join("  - " + st.describe() for st in blockers)
         raise StageGateError(
@@ -434,7 +452,7 @@ def record_stage(
         raise RecordRejected(f"{study} {target.label} {status} 거부: " + "; ".join(problems))
 
     if status in OPEN_STATUSES and backfill is None:
-        shut = [st for st in _states(events, base) if st.stage < target and not st.open]
+        shut = _blockers(_states(events, base), target)
         if shut:
             lines = ", ".join(st.describe() for st in shut)
             raise RecordRejected(f"{study} {target.label} {status} 거부: 앞 단계가 안 열렸다 — {lines}")

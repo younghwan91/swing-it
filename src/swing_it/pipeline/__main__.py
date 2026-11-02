@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
 from swing_it.pipeline import gate
-from swing_it.pipeline.gate import StageGateError
+from swing_it.pipeline.gate import RecordRejected, StageGateError
 from swing_it.pipeline.stages import Stage
 
 
 def _print_status(study: str, root: "Path | None") -> None:
     states = gate.study_states(study, root=root)
     print(f"{study}  ({gate.ledger_path(study, root=root).relative_to(gate._root(root))})")
-    first_shut = next((st for st in states if not st.open), None)
     for st in states:
         ev = st.event or {}
         day = (ev.get("ts") or "")[:10]
         note = "; ".join(st.why) or ev.get("reason") or ""
-        blocked = first_shut is not None and st.stage > first_shut.stage
-        mark = f"[{int(first_shut.stage)}단계에서 막힘] " if blocked else ""
+        shut = gate._blockers(states, st.stage)
+        mark = f"[{int(shut[0].stage)}단계에서 막힘] " if shut else ""
         print(f"  {int(st.stage):>2} {st.stage.ko:<14} {st.status:<8} {day:<10} {mark}{note}".rstrip())
 
 
@@ -35,7 +35,23 @@ def _status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _refuse_other_repo(args: argparse.Namespace) -> None:
+    """지금 폴더가 다른 레포면 거부한다. 편집 설치는 다른 워크트리의 원장에 조용히 적는다."""
+    if args.root is not None:
+        return
+    root = gate._root(None).resolve()
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return
+    top = r.stdout.strip()
+    if r.returncode == 0 and top and Path(top).resolve() != root:
+        raise RecordRejected(f"지금 폴더의 레포({top})와 원장이 적힐 레포({root})가 다르다. "
+                             "그 레포의 환경으로 돌리거나 --root 로 명시한다.")
+
+
 def _record(args: argparse.Namespace) -> int:
+    _refuse_other_repo(args)
     approval = None
     if args.approval_date is not None or args.approval_quote is not None:
         approval = {"date": args.approval_date, "quote": args.approval_quote}
@@ -45,7 +61,8 @@ def _record(args: argparse.Namespace) -> int:
         data_fingerprint=args.data_fingerprint, approval=approval,
         forward_evidence=args.forward_evidence, backfill=args.backfill, root=args.root,
     )
-    print(f"기록: {ev['study']} {Stage(ev['stage']).label} {ev['status']}")
+    path = gate.ledger_path(ev["study"], root=args.root)
+    print(f"기록: {ev['study']} {Stage(ev['stage']).label} {ev['status']} → {path}")
     return 0
 
 

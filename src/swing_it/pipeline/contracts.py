@@ -17,6 +17,7 @@ import pandas as pd
 from swing_it.pipeline.stages import Stage
 
 #: 2026-09-14~ 일봉 고가·저가·종가·거래량에 애프터마켓 체결이 섞였다(레포 CLAUDE.md "데이터 함정").
+#: main 의 ``read_prices`` 에는 정규장 경로가 없어 이 구간을 받지 않는다. 받으려면 fcs 의 session 경로부터 main 에 들어와야 한다.
 AFTERMARKET_FROM = "2026-09-14"
 
 
@@ -105,11 +106,14 @@ class UniverseMask:
 
 @dataclass(frozen=True)
 class DataPanels:
-    """2단계. 지식 시점(knowledge date) 보증이 붙은 패널.
+    """2단계. 정문으로 읽은 패널. 여기서 검사하는 것은 **이것뿐이다**:
 
-    - ``earnings`` 는 접지 않은 전 버전이고, 모든 행이 ``knowledge_col``·``avail_date`` 를 가지며 ``end`` 이하다.
     - ``prices`` 는 ``end`` 이하이고 (code, date) 하나씩이다.
-    - ``end`` 가 애프터마켓 오염 구간이면 ``aftermarket_handled`` 를 명시해야 한다.
+    - ``earnings`` 는 접지 않은 전 버전이고, 모든 행의 ``knowledge_col``·``avail_date`` 가 ``end`` 이하다.
+    - ``end`` 는 애프터마켓 오염 구간(2026-09-14~) 전이다.
+
+    **알게 된 날 규칙은 보증하지 않는다.** 실적이 쓰일 수 있는 첫날은 max(avail_date, 정기보고서 첫 접수일) 다음 거래일인데
+    (레포 CLAUDE.md "실적 as-of"), 이 계약은 그 날짜를 모른다. ``research/experiments/pead_optimizer_po4.py::yoy_signal_strict``.
     """
 
     prices: pd.DataFrame
@@ -118,7 +122,6 @@ class DataPanels:
     end: str
     fingerprint: str
     knowledge_col: str = "knowledge_date"
-    aftermarket_handled: bool = False
 
     def __post_init__(self) -> None:
         expect(self.universe, UniverseMask, "universe")
@@ -132,9 +135,9 @@ class DataPanels:
         for col in ("avail_date", self.knowledge_col):
             if _day(self.earnings[col], f"earnings.{col}").max() > end:
                 raise ContractError(f"earnings.{col} 에 end({self.end}) 뒤 날짜가 있다 — 그때 몰랐던 값")
-        if self.end >= AFTERMARKET_FROM and not self.aftermarket_handled:
+        if end >= pd.Timestamp(AFTERMARKET_FROM):
             raise ContractError(f"end {self.end} 는 애프터마켓 오염 구간({AFTERMARKET_FROM}~)이다. "
-                                "정규장 값으로 고쳤다면 aftermarket_handled=True 로 명시한다")
+                                "main 의 read_prices 는 정규장 값을 만들지 못한다 — 이 구간은 받지 않는다")
 
     def trading_dates(self) -> list[str]:
         return sorted(self.prices["date"].astype(str).unique())
@@ -181,7 +184,11 @@ class ICReport:
 
 @dataclass(frozen=True)
 class Forecast:
-    """5단계. ``frame``: 긴 형식 code·date·forecast·train_end. 모든 행이 ``date > train_end`` — 표본 안 예측은 안 받는다."""
+    """5단계. ``frame``: 긴 형식 code·date·forecast·train_end. ``train_end`` = 그 예측을 만든 모델의 마지막 학습 행 날짜.
+
+    학습 라벨은 ``horizon`` 거래일 앞을 본다. 그래서 ``date`` 는 ``train_end`` 에서 평일 ``horizon`` 일 이상 떨어져야 한다.
+    KRX 달력을 모르니 평일로 센다 — 휴장일이 끼면 놓칠 수 있다(겹침을 잘못 막지는 않는다).
+    """
 
     frame: pd.DataFrame
     model: str
@@ -190,9 +197,15 @@ class Forecast:
     def __post_init__(self) -> None:
         _long_frame(self.frame, ("code", "date", "forecast", "train_end"), "Forecast.frame")
         _text(self.model, "model")
+        if self.horizon <= 0:
+            raise ContractError(f"horizon 은 양수여야 한다: {self.horizon}")
         _finite(self.frame["forecast"], "forecast")
-        if (_day(self.frame["date"], "date") <= _day(self.frame["train_end"], "train_end")).any():
+        date = _day(self.frame["date"], "date").to_numpy("datetime64[D]")
+        train_end = _day(self.frame["train_end"], "train_end").to_numpy("datetime64[D]")
+        if (date <= train_end).any():
             raise ContractError("학습 구간 안 예측이 있다 — 누출")
+        if (np.busday_count(train_end, date) < self.horizon).any():
+            raise ContractError(f"학습 라벨이 예측일과 겹친다 — train_end 뒤 평일 {self.horizon}일 안의 예측이 있다")
 
 
 @dataclass(frozen=True)

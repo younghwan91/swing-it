@@ -99,6 +99,7 @@ def test_forward_arm_is_open_at_backtest_and_shut_after_it():
     if len(_events("pead_forward")) > n:
         pytest.skip("소급 기록 뒤 새 줄이 있다 — 그 상태는 원장이 말한다")
     require_stage("pead_forward", Stage.BACKTEST, root=REPO)
+    require_stage("pead_forward", Stage.ATTRIBUTION, root=REPO)     # 전진 모니터링은 판정을 기다리지 않는다
     with pytest.raises(StageGateError):
         require_stage("pead_forward", Stage.EXECUTION, root=REPO)
 

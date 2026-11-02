@@ -177,10 +177,11 @@ def _open_upto(root: Path, stage: Stage) -> None:
         if s >= stage:
             break
         kw = {"reviewer": "e_verified.md"} if s in gate.RESULT_STAGES else {}
-        record_stage(STUDY, s, "pass", evidence=["e.md"], root=root, **kw)
+        record_stage(STUDY, s, "pass", evidence=["e.md"], reason="왜", root=root, **kw)
 
 
-@pytest.mark.parametrize("stage,hint", [(Stage.FORECAST, "ml-forecast-prereg"), (Stage.EXECUTION, "docs/execution/DESIGN.md")])
+@pytest.mark.parametrize("stage,hint", [(Stage.ALPHA, "yoy_signal_strict"), (Stage.FORECAST, "ml-forecast-prereg"),
+                                        (Stage.EXECUTION, "docs/execution/DESIGN.md")])
 def test_unimplemented_stage_points_to_where_it_lives(stage, hint, tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "_repo_root", lambda: tmp_path)
     _open_upto(tmp_path, stage)
@@ -271,8 +272,12 @@ def test_valid_contracts_construct():
     (lambda: ICReport("n", 0, 0.1, 2.0, 10, 0.5), "horizon"),
     (lambda: Forecast(pd.DataFrame({"code": ["A"], "date": ["2020-01-02"], "forecast": [0.1],
                                     "train_end": ["2020-01-02"]}), "m", 20), "누출"),
-    (lambda: Forecast(pd.DataFrame({"code": ["A"], "date": ["2020-01-03"], "forecast": [np.nan],
+    (lambda: Forecast(pd.DataFrame({"code": ["A"], "date": ["2020-03-03"], "forecast": [np.nan],
                                     "train_end": ["2020-01-02"]}), "m", 20), "NaN"),
+    (lambda: Forecast(pd.DataFrame({"code": ["A"], "date": ["2020-01-03"], "forecast": [0.1],
+                                    "train_end": ["2020-01-02"]}), "m", 20), "겹친다"),
+    (lambda: Forecast(pd.DataFrame({"code": ["A"], "date": ["2020-03-03"], "forecast": [0.1],
+                                    "train_end": ["2020-01-02"]}), "m", 0), "horizon"),
     (lambda: RiskModelOutput("2020-01-02", object(), "v4"), "없다"),
     (lambda: TargetWeights("d", np.array(["A"]), np.array([-0.1]), "m"), "음수"),
     (lambda: TargetWeights("d", np.array(["A", "B"]), np.array([0.8, 0.8]), "m"), "합"),
@@ -293,9 +298,22 @@ def test_contract_violation_is_refused(build, match):
         build()
 
 
-def test_aftermarket_must_be_acknowledged_not_ignored():
-    p = _panels(end="2026-09-14", prices=_prices("2026-09-14"), aftermarket_handled=True)
-    assert p.aftermarket_handled
+def test_aftermarket_window_has_no_way_around():
+    """"처리했다"고 말하는 인자는 없다 — main 의 read_prices 는 정규장 값을 만들지 못한다."""
+    assert "aftermarket_handled" not in DataPanels.__dataclass_fields__
+    with pytest.raises(ContractError, match="애프터마켓"):
+        _panels(end="2026-09-14", prices=_prices("2026-09-14"))
+
+
+def test_forecast_clear_of_its_label_window_constructs():
+    frame = pd.DataFrame({"code": ["A"], "date": ["2020-03-03"], "forecast": [0.1], "train_end": ["2020-01-02"]})
+    assert Forecast(frame, "m", 20).horizon == 20
+
+
+def test_no_module_claims_a_knowledge_date_guarantee():
+    """보증하지 않는 것을 보증한다고 적지 않는다(리뷰 M4·M5)."""
+    for p in PKG.glob("*.py"):
+        assert "지식 시점 보증" not in p.read_text(encoding="utf-8"), p.name
 
 
 def test_no_contract_carries_a_verdict_field():
@@ -308,12 +326,12 @@ def test_no_contract_carries_a_verdict_field():
 def test_stage_expects_contract_objects_not_raw_frames(tmp_path, monkeypatch):
     """앞 단계 산출물 대신 날것을 넘기면 안 받는다."""
     monkeypatch.setattr(gate, "_repo_root", lambda: tmp_path)
-    _open_upto(tmp_path, Stage.ALPHA)
-    with pytest.raises(ContractError, match="DataPanels"):
-        _module(Stage.ALPHA).run(STUDY, pd.DataFrame())
+    _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
+    with pytest.raises(ContractError, match="Signal"):
+        _module(Stage.ALPHA_VALIDATION).run(STUDY, pd.DataFrame(), pd.DataFrame())
 
 
-# --- 실제 위임: 합성 데이터로 1→2→3→4→9 를 끝까지 흘린다 --------------------------------
+# --- 실제 위임: 합성 데이터로 1→2→4→9 를 끝까지 흘린다 (3단계 신호는 러너가 만든다) ---------
 
 N, T = 40, 240
 
@@ -358,11 +376,11 @@ def _advance(root: Path, stage: Stage, *, status="pass") -> None:
     (root / "e.md").write_text("증거\n", encoding="utf-8")
     (root / "e_verified.md").write_text("quant-reviewer 리뷰\n", encoding="utf-8")
     kw = {"reviewer": "e_verified.md"} if stage in gate.RESULT_STAGES else {}
-    record_stage(STUDY, stage, status, evidence=["e.md"], root=root, **kw)
+    record_stage(STUDY, stage, status, evidence=["e.md"], reason="왜", root=root, **kw)
 
 
 def test_flow_through_implemented_stages_on_the_default_pin(flow):
-    from swing_it.pipeline import s01_universe, s02_data, s03_alpha, s04_alpha_validation, s09_backtest
+    from swing_it.pipeline import s01_universe, s02_data, s04_alpha_validation, s09_backtest
 
     root, con, cap, adv, days = flow
     universe = s01_universe.run(STUDY, cap, adv, cap_rank=(0, 30), adv_floor=20000.0,
@@ -376,15 +394,14 @@ def test_flow_through_implemented_stages_on_the_default_pin(flow):
     assert json.loads(panels.fingerprint)[:2] == [N * T, days[-1].strftime("%Y-%m-%d")]
     _advance(root, Stage.DATA)
 
-    signal = s03_alpha.run(STUDY, panels)
-    wide = signal.frame.set_index(["code", "date"])["signal"]
-    assert wide[("000000", "2020-01-02")] == pytest.approx((100 - 80) / 80), "정정 전 값"
-    assert wide[("000000", days[-1].strftime("%Y-%m-%d"))] == pytest.approx((999 - 80) / 80), "정정 후 값"
-    assert np.isnan(wide[(f"{N - 1:06d}", "2020-01-02")]), "유니버스 밖은 신호 없음"
+    # 3단계 공용 구현은 없다 — 러너가 신호를 만들어 계약으로 넘긴다.
+    frame = panels.universe.frame.assign(signal=lambda d: d["code"].str[-2:].astype(float))
+    signal = Signal(frame=frame[["code", "date", "signal"]].where(frame["eligible"]).dropna(subset=["code"]),
+                    name="toy", known_at="합성 — 날짜 무관")
     _advance(root, Stage.ALPHA)
 
     ic = s04_alpha_validation.run(STUDY, signal, panels, horizon=5, adv_floor=0.0, start_index=5)
-    assert ic.n_days > 0 and ic.signal_name == "pead_yoy"
+    assert ic.n_days > 0 and ic.signal_name == "toy"
     _advance(root, Stage.ALPHA_VALIDATION)
 
     for s in (Stage.FORECAST, Stage.RISK_MODEL, Stage.PORTFOLIO):
@@ -403,6 +420,16 @@ def test_universe_stage_runs_with_no_ledger(flow):
 
     _, _, cap, adv, _ = flow
     assert s01_universe.run(STUDY, cap, adv, cap_rank=(0, 30), adv_floor=20000.0, definition="d", survivorship="s")
+
+
+def test_data_stage_refuses_the_aftermarket_window(flow):
+    from swing_it.pipeline import s01_universe, s02_data
+
+    root, con, cap, adv, _ = flow
+    universe = s01_universe.run(STUDY, cap, adv, cap_rank=(0, 30), adv_floor=20000.0, definition="d", survivorship="s")
+    _advance(root, Stage.UNIVERSE)
+    with pytest.raises(ContractError, match="애프터마켓"):
+        s02_data.run(STUDY, con, universe, end="2026-09-14")
 
 
 def test_data_stage_cuts_at_end_and_keeps_the_fingerprint_honest(flow):
@@ -439,21 +466,21 @@ def test_risk_portfolio_cost_attribution_delegate_to_core(tmp_path, monkeypatch)
                               codes=np.array([f"{i:06d}" for i in range(n)]))
     assert isinstance(risk.model, fm.RiskModel)
 
-    record_stage(STUDY, Stage.RISK_MODEL, "pass", evidence=["e.md"], root=tmp_path)
+    record_stage(STUDY, Stage.RISK_MODEL, "pass", evidence=["e.md"], reason="왜", root=tmp_path)
     w0 = np.zeros(len(risk.model.codes))
     target = s07_portfolio.run(STUDY, rng.normal(0, 0.01, len(w0)), risk, w0, risk_aversion=10.0)
     assert target.status == "optimal" and target.weights.sum() == pytest.approx(1.0, abs=1e-6)
 
-    record_stage(STUDY, Stage.PORTFOLIO, "pass", evidence=["e.md"], root=tmp_path)
+    record_stage(STUDY, Stage.PORTFOLIO, "pass", evidence=["e.md"], reason="왜", root=tmp_path)
     cost = s08_costs.run(STUDY, target, w0, aum=3e8, adv_value=np.full(len(w0), 2e10), daily_vol=np.full(len(w0), 0.02),
                          market="KOSPI", trade_date=date(2023, 6, 1), half_spread_bp=5.0)
     double = s08_costs.run(STUDY, target, w0, aum=3e8, adv_value=np.full(len(w0), 2e10), daily_vol=np.full(len(w0), 0.02),
                            market="KOSPI", trade_date=date(2023, 6, 1), half_spread_bp=5.0, multiplier=2.0)
     assert cost.nav_cost > 0 and double.nav_cost == pytest.approx(2 * cost.nav_cost)
 
-    record_stage(STUDY, Stage.COSTS, "pass", evidence=["e.md"], root=tmp_path)
+    record_stage(STUDY, Stage.COSTS, "pass", evidence=["e.md"], reason="왜", root=tmp_path)
     (tmp_path / "e_verified.md").write_text("quant-reviewer 리뷰\n", encoding="utf-8")
-    record_stage(STUDY, Stage.BACKTEST, "pass", evidence=["e.md"], reviewer="e_verified.md", root=tmp_path)
+    record_stage(STUDY, Stage.BACKTEST, "pass", evidence=["e.md"], reason="왜", reviewer="e_verified.md", root=tmp_path)
     (tmp_path / "fwd.md").write_text("전진\n", encoding="utf-8")
     record_stage(STUDY, Stage.EXECUTION, "skip", reason="페이퍼", root=tmp_path)
     T_, N_, K_ = 3, 2, 2
