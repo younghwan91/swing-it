@@ -347,3 +347,64 @@ def test_costs_cannot_be_silently_absent(monkeypatch):
     monkeypatch.setattr(costs, "core_layer", lambda m: (_ for _ in ()).throw(CoreLayerMissing(m)))
     with pytest.raises(CoreLayerMissing):
         simulate(synthetic_ctx(0), "R")
+
+
+# --- 4단계 널의 인자 ---
+
+def test_permutation_null_checks_invariants_with_the_books_own_rules():
+    """비용 끈 널에 비용 불변식을 걸면 위반으로 나왔다. 상한도 러너의 ``spec`` 값을 봐야 한다."""
+    from swing_it.book.nulls import permutation_nulls
+
+    ctx = synthetic_ctx(0)
+    out = permutation_nulls(ctx, None, None, None, 1, 2, window=("2019-01-01", "2030-01-01"), kinds=("R",), flags=NO_COSTS)
+    assert out["violations"] == []
+
+
+def test_permutation_null_passes_spec_max_weight_to_the_invariant(monkeypatch):
+    from swing_it.book import nulls
+
+    seen = {}
+
+    def spy(recs, kind, cell, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(nulls, "check_invariants", spy)
+    spec = BookSpec(max_weight=0.03)
+    ctx = synthetic_ctx(0)
+    nulls._G.update({"ctx": ctx, "cell": None, "ic": None, "sr": None, "window": ("2019-01-01", "2030-01-01"), "spec": spec, "flags": NO_COSTS, "ann": 1.0})
+    try:
+        nulls._perm_task((0, "R"))
+    finally:
+        nulls._G.clear()
+    assert seen["max_weight"] == 0.03 and seen["costs"] is False and seen["spec"] is spec
+
+
+def test_permutation_null_uses_the_annualisation_it_is_given():
+    from swing_it.book.metrics import ANN_20
+    from swing_it.book.nulls import permutation_nulls
+
+    ctx = synthetic_ctx(0)
+    win = ("2019-01-01", "2030-01-01")
+    a = permutation_nulls(ctx, None, None, None, 1, 2, window=win, kinds=("R",), flags=NO_COSTS)
+    b = permutation_nulls(ctx, None, None, None, 1, 2, window=win, kinds=("R",), flags=NO_COSTS, ann=1.0)
+    np.testing.assert_allclose(a["R"], b["R"] * ANN_20)
+
+
+def test_permutation_null_on_an_empty_window_is_an_error_not_nans():
+    from swing_it.book.nulls import permutation_nulls
+
+    with pytest.raises(ValueError, match="창"):
+        permutation_nulls(synthetic_ctx(0), None, None, None, 1, 2, window=("2040-01-01", "2041-01-01"), kinds=("R",), flags=NO_COSTS)
+
+
+@pytest.mark.parametrize("a,b,match", [
+    (np.zeros(5), np.zeros(6), "길이"),
+    (np.array([0.1, np.nan, 0.2]), np.zeros(3), "NaN"),
+    (np.array([]), np.array([]), "비었다"),
+])
+def test_boot_refuses_inputs_it_would_silently_misread(a, b, match):
+    from swing_it.book.nulls import stationary_boot_dir
+
+    with pytest.raises(ValueError, match=match):
+        stationary_boot_dir(a, b, n=5)

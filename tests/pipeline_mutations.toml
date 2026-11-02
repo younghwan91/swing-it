@@ -595,3 +595,19 @@ guards = ["tests/test_book_units.py::test_restatement_is_used_the_trading_day_af
 file = "src/swing_it/features/earnings_asof.py"
 find = "    if knowledge_next_day:\n"
 replace = "    if False:\n"
+
+[[mutation]]
+id = "mean-ic-uses-ranked-returns"
+why = "평균 IC 가 순위 수익을 쓰면 순위 IC 와 같아져 과대 표시를 못 본다(ML S2 .041 대 .014)"
+guards = ["tests/test_ic_validation.py::test_one_outlier_lifts_mean_ic_but_not_rank_ic_or_its_winsorized_twin"]
+file = "src/swing_it/validation/ic.py"
+find = "        ic = _corr(a, ret)\n"
+replace = "        ic = _corr(a, stats.rankdata(ret))\n"
+
+[[mutation]]
+id = "null-checks-the-wrong-rules"
+why = "비용 끈 널에 비용 불변식을, 다른 상한의 북에 기본 상한을 걸면 위반이 거짓이거나 안 보인다"
+guards = ["tests/test_book_units.py::test_permutation_null_passes_spec_max_weight_to_the_invariant"]
+file = "src/swing_it/book/nulls.py"
+find = "max_weight=spec.max_weight, spec=spec, costs=flags.costs)"
+replace = "spec=spec)"

@@ -11,12 +11,12 @@
 | 1 | 유니버스 | `rank_band_eligible`·`u_exclusion_causes` | `swing_it.features.universe` |
 | 2 | 데이터 | `read_prices`·`read_earnings`·`read_periodic_filings` | `swing_it.storage`. PEAD 러너의 가격은 이 정문이 아니라 `pead_optimizer_po4.load_inputs` → core `load_risk_inputs`(`load_daily_bars`) 다 |
 | 3 | 알파 발굴 | `yoy_strict_wide`·`load_yoy_strict` | `swing_it.features.earnings_asof` |
-| 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`fold_ic`, `permutation_nulls` | `swing_it.validation.ic`, `swing_it.book.nulls` |
+| 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`daily_mean_ic`·`quintile_excess`·`ic_summary`·`ic_permutation_null`·`fold_ic` | `swing_it.validation.ic` |
 | 5 | ML 수익률 예측 | `research/experiments/ml_forecast_models.py` | 연구 코드에 남았다. 예측은 `check_forecast` 로 검사한다 |
 | 6 | 팩터 위험모델 | `sub_model`·`active_risk`, 모델은 `build_models` | `swing_it.book.risk`, `research/experiments/pead_optimizer_po3.py`(core `build_risk_model` 호출) |
 | 7 | 포트폴리오 | 순위 북 `tranche_names`·`r_target`, 최적화 북 `o_target`·`match_lambda` | `swing_it.book.rank`, `swing_it.book.optimized` |
 | 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` | `swing_it.book.costs` |
-| 9 | 백테스트 | `simulate`·`check_invariants`·`book_summary`, `full_parity`, `ols_hac` | `swing_it.book.accounting`·`metrics`·`parity`, `swing_it.diagnostics.hac` |
+| 9 | 백테스트 | `simulate`·`check_invariants`·`book_summary`, `full_parity`, `permutation_nulls`, `ols_hac` | `swing_it.book.accounting`·`metrics`·`parity`·`nulls`, `swing_it.diagnostics.hac` |
 | 10 | 주문 실행 | 없음 — `docs/execution/DESIGN.md` | 먼저 dry-run. 실주문 경로의 첫 문장은 `require_execution_approval` 이다 |
 | 11 | 성과 기여·모니터링 | `attribution_report`, core `factor_attribution` | `research/experiments/pead_optimizer_b_report.py` |
 
@@ -29,6 +29,8 @@
 **2단계 가격 정문.** `read_prices(end=None)` 은 옛 호출 그대로 표 전체를 읽는다. 옛 러너의 숫자를 바꾸지 않으려는 기본값이다. `end` 를 주면 그날까지 (code, date) 순서로 읽고, 2026-09-14 이상이면 `CheckError` 다. 파이프라인을 선언한 새 러너는 린트 (k) 가 `end=` 를 요구한다. **`volume` 은 수정주가 표에서도 조정되지 않는다.** ADV 는 `trade_value`(백만원)만 쓴다. 실적 정정 이력은 2026-08 전에 없다. 코드는 버전을 처리하지만 그 전 값에 정정치가 섞인 정도는 측정하지 않았다(GUARDRAILS §4-3).
 
 **3단계 신호의 기본과 재현.** `yoy_strict_wide` 의 기본값은 새 연구용이다. 정기보고서 요구는 2018Q4 부터(옛 2019Q1 은 end 2019-04~05 에서 절단 동일성이 깨진다), 정정본은 알게 된 다음 거래일부터, 같은 날 알려진 분기는 늦은 분기다. 단계 B·P4 재현 러너만 `REPRODUCE_B` 를 넘긴다. 옛 분기가 새 분기보다 늦게 알려진 역전(실측 3건)은 `tie_col` 로 풀리지 않는다. 값은 새 분기가 올 때까지 이어지고 나이 제한은 `max_age_days` 로 건다.
+
+**4단계에서 보고할 것.** 순위 IC 는 평균 정보량을 과대 표시한다(ML S2: 순위 .041 대 평균 .014). 롱온리는 평균만 수확하므로 `daily_mean_ic`·`quintile_excess` 의 Q5−U 와 2배 왕복 비용을 함께 적는다. 요약은 `ic_summary`(NW lag = h, 비겹침 ICIR), 널은 `ic_permutation_null` 이다. 책 전체를 돌리는 `permutation_nulls` 는 9단계 널이고, 두 널 모두 π 가 신호의 베타·변동성·사이즈 상관을 지운다(기울기 입력에서 기각률 23~28%). 팩터 회귀와 함께 쓴다. 폐지 뒤 수익은 0% 로 잰다.
 
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
