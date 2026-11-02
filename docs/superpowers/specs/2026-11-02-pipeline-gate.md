@@ -90,6 +90,6 @@
 | 28 | **`scipy` 를 직접 의존성에 넣었다.** | 러너가 이미 쓰던 것을 `src` 로 옮겼다. |
 | 29 | **위험모델 없는 순위 북을 허용한다(`models_from_mask`).** 사전 위험 칸은 NaN 이다. | 6단계를 건너뛴 연구도 같은 회계를 탄다. 단계 B 경로에는 영향이 없다. |
 
-**재현 증거.** 합성 데이터 골든(`tests/golden/`)은 옮기기 전 코드가 만들었고 CI 에서 대조한다(산술 1e-9, 솔버 1e-5). 실데이터 `B.json` 전체(709개 숫자)와 ML S2-0 은 `research/logs/pead_optimizer/B_modules_parity.json` 에 남겼다.
+**재현 증거.** 합성 데이터 골든(`tests/golden/`)은 옮기기 전 코드가 만들었고 CI 에서 1e-9 로 대조한다(O 는 `03fee83` 에서 녹화한 솔버 응답을 재생한다). 실데이터 `B.json` 전체(709개 숫자)와 ML S2-0 은 `research/logs/pead_optimizer/B_modules_parity.json` 에 남겼다.
 
 **연구 코드에 남긴 것.** 위험모델 입력(`pead_optimizer_po3`·`po4` 의 `load_inputs`·`guarded`·`prep`·`build_models`), 기여 보고(`pead_optimizer_b_report`), ML 예측 전체(`ml_forecast_*`). 다음 연구가 필요로 할 때 옮긴다. 끝난 ML 러너는 고치지 않았다.

@@ -61,8 +61,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev,ml]"
-          pip install "krx-quant-core[portfolio] @ git+https://github.com/younghwan91/krx-quant-core@8286e3e"
+          pip install "krx-quant-core[portfolio] @ git+https://github.com/younghwan91/krx-quant-core@8286e3e" "cvxpy==1.9.3" "clarabel==0.11.1"
       - name: Research tests (no skips)
         run: |
           python -m pytest -q -rs --junitxml=research-tests.xml tests/test_ml_forecast_*.py tests/test_pead_optimizer_*.py tests/test_book_units.py tests/test_pipeline_example_study.py
           python -c "import xml.etree.ElementTree as E; n = int(E.parse('research-tests.xml').getroot()[0].get('skipped')); raise SystemExit(f'건너뛴 테스트 {n}개 — 이 작업은 건너뛰면 실패다' if n else 0)"
+      # 재생 시험이 O 코드 변화를 정말 잡는가. 최적화기가 있어야 도니 pipeline-mutations 잡이 아니라 여기다.
+      - name: Solver replay mutations
+        run: python scripts/check_pipeline_mutations.py --spec tests/pipeline_mutations_core.toml
