@@ -39,14 +39,22 @@ q ≠ 1(계단)은 둘 중 하나다:
 - 앞 20거래일 거래가 극히 얇다가(평균이 그날의 1% 미만) 기준가가 재설정된 날은 코넥스 → 코스닥·코스피 이전상장
   첫날이다 — 기준가가 공모가라 m 이 주주 수익률이 아니므로 미반영 기업행동으로 보지 않는다(``THIN_*``).
 - **알려진 한계**: 키움 수정주가가 배당락(`dividend`)까지 반영한 계단에서 KRX 기준가는 그대로면(심판이 원주가 편) 그
-  수정을 이음매로 되돌린다(036220 등 연말 계단 12칸, 2~12%). 심판 없는 큰 병합 중 정리매매가 바로 이어지는 것은
-  옛 규칙의 3일 유지 검사에서 빠진다(052670 2026-02-09 ×300 — ``UP_NOREF`` 주석).
+  수정을 이음매로 되돌린다(036220 등 연말 계단 12칸, 2~12%).
 - 심판이 없는 날(`supply_demand` 키움 행이 2017-01-02 부터 — 2016-09-09~ 행은 네이버 폐지 백필뿐이고 flu_rt 가 없다):
   원주가가 제한폭 밖이고 수정주가가 안이면 기업행동, 반대면 이음매. 둘 다 제한폭 안인 계단은 **같은 날
   ``CLUSTER_MIN`` 종목 이상**에서 나올 때만 이음매로 본다. 아니면 그대로 둔다. 이 전제는 2016-12-28 에서 틀린다 —
   그날은 연말 주식배당 배당락일이라 몰린 계단 일부(48칸 중 10칸이 v2 와 1% 넘게 다름)가 실제 기업행동이다.
   영향은 심판이 없는 2016-09~12 뿐이다. 심판 없이 원주가·수정주가가 같이 ×2 넘게 뛴 날(병합 — 139050
   2023-06-28 네이버 백필)은 옛 규칙으로 넘긴다. 아래로 뛴 날은 정리매매라 그대로 둔다.
+- **심판 없는 병합의 심판은 상장주식수**(``shares_outstanding_history``, ``SHARES_*`` 주석): 거래정지 중 병합하고 재개 첫날
+  원주가·수정주가가 같이 ×2 넘게 뛰면(052670 2026-02-09 2,080 → 625,000) 옛 규칙의 3일 유지 검사는 뒤이은 정리매매에서
+  떨어진다. 정지 구간 원주가·수정주가가 평평하고(기준가 재설정이 원주가에 안 찍혔다) 그 구간에 주식수가 ×2 넘게 줄었으며
+  그 비가 점프를 설명하면(그날 수익률 = 원주가 비 / 주식수 비 가 원주가 비보다 덜 극단) 앞 이력에 주식수 비를 곱한다 —
+  시가총액이 이어진다는 가정이다. 주식수는 **기준일**(date)로 as-of 하고 정정 이력은 가장 늦은 knowledge_date 를 쓴다.
+  기준일 스냅숏이 공시된 날(knowledge_date)이 점프 날보다 늦어도 쓴다: 이 표는 매일 전 이력을 다시 만드는 백조정
+  계열이라 어느 날의 배수든 그 뒤 사건으로 과거를 고친다 — 조정주가는 원래 point-in-time 이 아니다(시점 데이터가
+  필요하면 원주가 × 그때 주식수). 주식수를 모르거나 위 조건이 안 맞으면 곱하지 않고 진단에만 ``noref_jump`` 로 남긴다
+  (``diagnose(flagged=True)``) — 추측해서 곱하지 않는다.
 - 애프터마켓 뒤(아래)에는 심판의 기준가(전일 정규장 종가)와 원 종가(통합가)의 기준이 달라 **작은 계단은 판정 신뢰도가
   낮다** — 계단 짝(``PAIR_*``)으로 가르고, 짝이 없는 |log q| < ``AM_SMALL`` 계단은 이력을 다시 곱하지 않는다.
 - **원주가가 없는 날**(`daily_bars_raw`·`supply_demand` 둘 다 없는 행): 옛 규칙(±30% 초과 + 3일 유지)으로
@@ -109,11 +117,20 @@ PAIR_TOL = 0.003
 AM_SMALL = 0.10
 # 심판 없이 같이 뛴 날을 병합으로 볼 문턱. 거래정지 뒤 변경상장·스팩 합병 재상장 첫날은 평가가격의 50~200% 에서 시가가
 # 정해져 +45~59% 가 진짜로 나온다(366330 2023-06-02, 404950 2023-09-22, 405350 2023-07-14, 065560 2024-07-23 — 상장주식수
-# 그대로라 병합이 아니다). 그보다 큰 ×2 초과만 병합(139050 2023-06-28 12.77:1)으로 옛 규칙에 넘긴다.
-# **남은 구멍**: 옛 규칙은 3일 유지를 요구해 병합 직후 정리매매가 이어지면 놓친다(052670 2026-02-09 ×300, 상장주식수
-# 29,129,064 → 19,419 = 1500:1). 상장주식수가 줄어든 ×2 초과 점프가 20여 건 더 있다(024810·035480·050320 … 미확인;
-# 060910·090970 은 진짜 움직임). 후속: shares_outstanding_history 비율을 심판으로.
+# 그대로라 병합이 아니다). 그보다 큰 ×2 초과만 병합(139050 2023-06-28 12.77:1)으로 옛 규칙에 넘긴다 — 아래 상장주식수 심판이 먼저다.
 UP_NOREF = 2.0
+# 상장주식수 심판(3c): 옛 규칙은 3일 유지를 요구해 병합 직후 정리매매가 이어지면 놓쳤다(052670 2026-02-09 ×300,
+# 29,129,064 → 19,419 = 1500:1, 그날 주주 수익률 0.2003). 2026-11 운영 표 전수(심판 또는 원주가가 없고 corporate_actions
+# 없는 ×2·×0.5 초과 231칸): 상장주식수가 줄어든 칸 대부분은 그날의 병합이 아니다 —
+#   · 정리매매·폐지 **뒤** 회생 감자(024810·050320·093230 — 줄어든 기준일이 점프 날 뒤) → 기준일 as-of(뒤 스냅숏 안 씀)
+#   · 정리매매 중 거래가 이어진 날(035480 2019-12-04 ×3.7) → 병합은 주권 교환 동안 거래가 멈춘다 — 정지 뒤 재개 첫날만
+#   · 정지 중 원주가에 기준가 재설정 계단이 이미 찍혀 수정주가가 반영한 것(141020·054630·003560 — 주식수 비에 증자·출자전환이
+#     섞여 원주가 계단과 다르다) → 정지 구간 원주가·수정주가가 평평할 때만
+#   · 주식수 비가 점프보다 커서 곱하면 그날 수익률이 더 극단 → 그 감자는 다른 시점이다
+# 조건을 모두 넘는 것은 052670 하나다. 정지 중 감자와 출자전환이 섞이면 주식수 비가 병합비보다 작다(알려진 한계).
+SHARES_MIN = UP_NOREF  # 정지 구간 주식수 감소 비 문턱(그만큼 줄어드는 건 병합·감자뿐 — 자사주 소각은 그렇게 크지 않다)
+SHARES_FLAT_TOL = STEP_TOL  # 정지 구간 가격이 '평평'한 폭
+FLAG_KINDS = ("noref_jump",)  # diagnose(flagged=True) 가 배수 1 이어도 내보내는 미해결 라벨
 BOTH_OFF_MIN = float(np.log(2))  # both_off 는 두 후보가 모두 ×2 넘게 뛴 날만(이음매와 큰 감자·병합이 겹친 날)
 THIN_DAYS, THIN_RATIO = 20, 0.01  # 미반영 기업행동 판정 제외: 앞 20거래일 평균 거래량이 그날의 1% 미만(이전상장)
 
@@ -170,8 +187,10 @@ def _thin_before(volume: np.ndarray | None) -> np.ndarray:
 
 def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
               aftermarket: np.ndarray | None = None,
-              volume: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+              volume: np.ndarray | None = None,
+              shares: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """한 종목(시간순)의 날마다 조정 배수를 고른다. ``aftermarket[t]`` = 전일(t−1)이 AFTERMARKET_FROM 이후.
+    ``shares[t]`` = 그날 기준 as-of 상장주식수(모르면 NaN) — 심판 없는 병합 판정(3c)에만 쓴다.
 
     반환 (factor, kind, amb_q):
       factor[t] — 그날 **앞** 이력에 곱할 배수(1 = 그대로). kind[t] — 진단 라벨(빈 문자열 = 해당 없음).
@@ -276,6 +295,27 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     #     옛 규칙(+3일 유지)으로 넘긴다. 아래로의 급락은 정리매매라 그대로 둔다(99칸 중 98칸 v2 일치).
     with np.errstate(invalid="ignore"):
         up_noref = flat_jump & ~has_ref & (r_raw > UP_NOREF)
+    # 3c) 그중 거래정지 뒤 재개 첫날이고 정지 구간에 상장주식수가 ×SHARES_MIN 넘게 줄었으면 병합이다(SHARES_* 주석) —
+    #     그날 수익률 = 원주가 비 / 주식수 비(시가총액이 이어진다). 옛 규칙보다 먼저 본다.
+    if shares is not None and len(shares) == n and up_noref.any():
+        traded = np.isfinite(volume) & (volume > 0)
+        last = np.maximum.accumulate(np.where(traded, np.arange(n), -1))
+        for k in np.flatnonzero(up_noref):  # 날 t = k+1, 앞 마지막 거래일 j = last[k]
+            j = int(last[k])
+            if j < 0 or j >= k:  # 정지 구간이 없다(전날도 거래) — 정리매매 중 움직임
+                continue
+            with np.errstate(invalid="ignore", divide="ignore"):
+                flat = all(np.isfinite(w).all() and w.min() > 0 and w.max() / w.min() - 1 <= SHARES_FLAT_TOL
+                           for w in (raw[j:k + 1], close[j:k + 1]))
+                s_ratio = shares[j] / shares[k + 1]
+            if not (flat and np.isfinite(s_ratio) and s_ratio > SHARES_MIN):
+                continue
+            res = r_raw[k] / s_ratio  # 병합을 뺀 그날 주주 수익률
+            if abs(np.log(res)) >= abs(np.log(r_raw[k])):  # 주식수 비가 점프를 설명하지 못한다 — 다른 시점의 감자
+                continue
+            f1[k] = r_db[k] / res
+            k1[k] = "shares_consolidation"
+            up_noref[k] = False
 
     factor[1:], kind[1:], amb_q[1:] = f1, k1, a1
 
@@ -285,6 +325,8 @@ def _classify(close: np.ndarray, raw: np.ndarray, ref: np.ndarray,
     for t, r in _legacy_events(close, allowed):
         factor[t] = r
         kind[t] = "legacy_split"
+    # 심판 없이 ×2 넘게 같이 뛰었는데 주식수로도 옛 규칙으로도 못 가린 날 — 곱하지 않고 진단에만 남긴다
+    kind[1:][up_noref & (factor[1:] == 1)] = "noref_jump"
     return factor, kind, amb_q
 
 
@@ -307,8 +349,33 @@ def _segments(codes: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(np.r_[0, bounds].tolist(), np.r_[bounds, len(codes)].tolist()))
 
 
-def _plan(df: pd.DataFrame) -> pd.DataFrame:
-    """종목·날짜순 작업표: 날마다 ``_factor``(그날 앞 이력에 곱할 배수)·``_kind``, 원래 행 위치 ``_row``."""
+def _shares_asof(codes: np.ndarray, dates: np.ndarray, shares: pd.DataFrame | None) -> np.ndarray:
+    """종목·날짜순 행마다 기준일(date) ≤ 그날인 마지막 상장주식수(없으면 NaN). 같은 기준일이 여럿이면 마지막 행."""
+    out = np.full(len(codes), np.nan)
+    if shares is None or shares.empty:
+        return out
+    sh = pd.DataFrame({
+        "code": shares["code"].astype(str).to_numpy(),
+        "date": shares["date"].astype(str).to_numpy(),
+        "n": pd.to_numeric(shares["shares_outstanding"], errors="coerce").to_numpy(float),
+    })
+    sh = sh[np.isfinite(sh["n"]) & (sh["n"] > 0)]
+    sh = sh.sort_values(["code", "date"], kind="stable").drop_duplicates(["code", "date"], keep="last")
+    groups = {c: (g["date"].to_numpy(), g["n"].to_numpy()) for c, g in sh.groupby("code", sort=False)}
+    for s, e in _segments(codes):
+        hit = groups.get(codes[s])
+        if hit is None:
+            continue
+        sd, sn = hit
+        pos = np.searchsorted(sd, dates[s:e], side="right") - 1  # ISO 날짜 문자열은 사전순 = 시간순
+        out[s:e] = np.where(pos >= 0, sn[np.maximum(pos, 0)], np.nan)
+    return out
+
+
+def _plan(df: pd.DataFrame, shares: pd.DataFrame | None = None) -> pd.DataFrame:
+    """종목·날짜순 작업표: 날마다 ``_factor``(그날 앞 이력에 곱할 배수)·``_kind``, 원래 행 위치 ``_row``.
+
+    ``shares``(code, date, shares_outstanding — ``read_shares``)가 있으면 심판 없는 병합 판정에 쓴다."""
     n = len(df)
 
     def col(name: str) -> np.ndarray:
@@ -328,11 +395,13 @@ def _plan(df: pd.DataFrame) -> pd.DataFrame:
     close, raw, ref, vol = (work[c].to_numpy(float) for c in ("close", "raw", "ref", "volume"))
     am = work["date"].to_numpy() >= AFTERMARKET_FROM  # 행 t 의 날짜 — _classify 는 [1:] 와 짝지은 전일로 본다
     am_prev = np.r_[False, am[:-1]]
+    codes = work["code"].to_numpy()
+    sh = _shares_asof(codes, work["date"].to_numpy(), shares)
     fac = np.ones(n)
     kind = np.full(n, "", dtype=object)
     amb = np.full(n, np.nan)
-    for s, e in _segments(work["code"].to_numpy()):
-        fac[s:e], kind[s:e], amb[s:e] = _classify(close[s:e], raw[s:e], ref[s:e], am_prev[s:e], vol[s:e])
+    for s, e in _segments(codes):
+        fac[s:e], kind[s:e], amb[s:e] = _classify(close[s:e], raw[s:e], ref[s:e], am_prev[s:e], vol[s:e], sh[s:e])
     # 심판 없는 제한폭 안 계단: 같은 날 CLUSTER_MIN 종목 이상이면 수집 이음매 날
     is_amb = np.isfinite(amb)
     if is_amb.any():
@@ -358,11 +427,12 @@ def _back_factors(work: pd.DataFrame) -> np.ndarray:
 
 
 def adjust_prices(df: pd.DataFrame, *, cols=("open", "high", "low", "close"),
-                  adjust_volume: bool = False) -> pd.DataFrame:
+                  adjust_volume: bool = False, shares: pd.DataFrame | None = None) -> pd.DataFrame:
     """long-format(code,date,OHLC[,volume][,raw_close][,flu_rt]) 가격을 종목별로 백조정해 반환.
 
     ``raw_close``(그날 원 종가)·``flu_rt``(키움 등락률 ×100) 열이 있으면 원주가 대조로 이음매를 찾고
-    (모듈 docstring), 없으면 옛 ±30% 규칙만 쓴다. 입력을 변경하지 않고 조정된 사본을 돌려준다.
+    (모듈 docstring), 없으면 옛 ±30% 규칙만 쓴다. ``shares``(code, date, shares_outstanding)는 심판 없는
+    병합의 심판이다(없으면 그 판정을 건너뛴다). 입력을 변경하지 않고 조정된 사본을 돌려준다.
     `date` 오름차순 정렬을 가정하지 않는다.
     """
     out = df.copy()
@@ -374,7 +444,7 @@ def adjust_prices(df: pd.DataFrame, *, cols=("open", "high", "low", "close"),
         out["volume"] = out["volume"].astype(float)
     if out.empty:
         return out
-    work = _plan(out)
+    work = _plan(out, shares)
     fac = np.empty(len(out))
     fac[work["_row"].to_numpy()] = _back_factors(work)
     for c in present:
@@ -384,16 +454,20 @@ def adjust_prices(df: pd.DataFrame, *, cols=("open", "high", "low", "close"),
     return out
 
 
-def diagnose(df: pd.DataFrame) -> pd.DataFrame:
+def diagnose(df: pd.DataFrame, *, shares: pd.DataFrame | None = None, flagged: bool = False) -> pd.DataFrame:
     """조정이 들어간 날(code,date,ratio,kind) — 진단용. ratio = 그날 앞 이력에 곱한 배수.
 
-    kind: seam·seam_cluster(수집 이음매), unreflected(수정주가가 아직 반영 못 한 기업행동),
-    legacy_split(원주가 없는 날의 옛 ±30% 규칙).
+    kind: seam·seam_cluster(수집 이음매), unreflected(수정주가가 아직 반영 못 한 기업행동), both_off,
+    shares_consolidation(심판 없는 병합 — 상장주식수 비), legacy_split(원주가 없는 날의 옛 ±30% 규칙).
+    ``flagged=True`` 면 곱하지 않은 미해결 날(``FLAG_KINDS`` — noref_jump: 심판 없이 ×2 넘게 같이 뛰었는데 못 가림)도 낸다.
     """
     if df.empty:
         return pd.DataFrame(columns=["code", "date", "ratio", "kind"])
-    work = _plan(df)
-    hit = work[work["_factor"] != 1]
+    work = _plan(df, shares)
+    sel = work["_factor"] != 1
+    if flagged:
+        sel |= work["_kind"].isin(FLAG_KINDS)
+    hit = work[sel]
     return pd.DataFrame({
         "code": hit["code"].to_numpy(),
         "date": hit["date"].to_numpy(),
@@ -475,6 +549,28 @@ def read_inputs_by_year(con: Any, *, cols: str = INPUT_COLS) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
+def read_shares(con: Any) -> pd.DataFrame | None:
+    """``shares_outstanding_history`` → (code, date, shares_outstanding). 같은 기준일의 정정 이력은 knowledge_date 순이라
+    마지막이 가장 늦은 판이다(``_shares_asof`` 가 마지막 행을 쓴다). 표가 없으면 None. 약 7만 행."""
+    from .storage import _is_pg
+
+    if not _has_table(con, "shares_outstanding_history"):
+        return None
+    if _is_pg(con):
+        cur = con.cursor()
+        cur.execute("SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'shares_outstanding_history' AND column_name = 'knowledge_date'")
+        has_kd = cur.fetchone() is not None
+    else:
+        has_kd = any(r[1] == "knowledge_date" for r in con.execute("PRAGMA table_info(shares_outstanding_history)"))
+    # NULL knowledge_date(키움 일별 스냅숏)는 Postgres ASC 에서 마지막이라 같은 기준일이면 그쪽이 이긴다(같은 날 값)
+    order = "code, date, knowledge_date" if has_kd else "code, date"
+    df = pd.read_sql(f"SELECT code, date, shares_outstanding FROM shares_outstanding_history "
+                     f"WHERE shares_outstanding > 0 ORDER BY {order}", con)
+    df["date"] = df["date"].astype(str)
+    return df
+
+
 def rebuild_adjusted_table(con: Any, *, adjust_volume: bool = False) -> int:
     """Recompute back-adjusted OHLC for ALL of ``daily_bars`` and upsert into
     ``daily_bars_adjusted``.
@@ -491,7 +587,7 @@ def rebuild_adjusted_table(con: Any, *, adjust_volume: bool = False) -> int:
     # "이 행의 trade_value 는 close*volume 근사치(폐지 종목 백필)"라는 사실이 여기
     # 없으면 ADV 문턱을 다루는 코드가 그걸 알 방법이 없다.
     df = read_inputs_by_year(con)
-    adjusted = adjust_prices(df, adjust_volume=adjust_volume)
+    adjusted = adjust_prices(df, adjust_volume=adjust_volume, shares=read_shares(con))
     records = list(adjusted[ADJUSTED_BAR_COLUMNS].itertuples(index=False, name=None))
     return upsert_daily_bars_adjusted(con, records)
 
@@ -512,13 +608,18 @@ def main() -> int:
         con.close()
         return 0
 
-    df = read_inputs(con, cols="d.code,d.date,d.close")
+    df = read_inputs(con, cols="d.code,d.date,d.close,d.volume")
+    shares = read_shares(con)
     con.close()
-    ev = diagnose(df)
+    ev = diagnose(df, shares=shares, flagged=True)
+    flag = ev[ev["kind"].isin(FLAG_KINDS)]
+    ev = ev[~ev["kind"].isin(FLAG_KINDS)]
     print(f"조정 지점 {len(ev)}건, 고유종목 {ev['code'].nunique() if len(ev) else 0}개")
     if len(ev):
         print("종류별:\n" + ev["kind"].value_counts().to_string())
         print("상위 날짜:\n" + ev["date"].value_counts().head(5).to_string())
+    if len(flag):
+        print(f"미해결(곱하지 않음) {len(flag)}건:\n" + flag[["code", "date", "kind"]].to_string(index=False))
     return 0
 
 
