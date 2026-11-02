@@ -5,8 +5,8 @@
 ∧ U_t(WICS 업종·시총·종가 있음) 안 시총 21~100위, t 종가 결정 → t+1 종가 체결, 폐지 = 마지막 종가 현금화, 비용 = core 정가 모델(1배 기록, 판정 2배).
 B 와 다른 곳(데이터 경로만, 사전등록 §2 표)은 정규장 가격(2026-09-14~ 애프터마켓 보정)·U_t 재구성·시총 정문이다.
 
-매 실행은 ``SIM_FROM`` 격자일부터 DB 마지막 날(또는 ``--asof``)까지 같은 규칙을 다시 시뮬레이션한다(결정적·인과적 — 모든 입력을
-asof 이하로 자른다). 마지막 날 행 하나를 **덧붙이기 전용 장부**(``LEDGER``)에 남긴다. (date, arm) 이 이미 있으면 쓰지 않고,
+매 실행은 ``SIM_FROM`` 격자일부터 DB 마지막 날(또는 ``--asof``)까지 같은 규칙을 다시 시뮬레이션한다(결정적·인과적 — 입력을
+asof 이하로 자른다; 정규장 종가 항등식의 마지막 날 예외는 :func:`load_panel`). 마지막 날 행 하나를 **덧붙이기 전용 장부**(``LEDGER``)에 남긴다. (date, arm) 이 이미 있으면 쓰지 않고,
 ``ARM_START`` 전 날짜는 쓰지 않는다. 판정 통계는 행의 ``step_closed``(스텝이 끝난 다음 거래일 행에 한 번 적힌다)의 ``a_2x`` 다.
 
 사용: ``set -a; . ~/git/quant-airflow/.env; set +a; uv run --extra pg python research/paper/pead_paper.py [--asof YYYY-MM-DD,...] [--ledger PATH]``
@@ -53,6 +53,8 @@ CAP_MAX = 2e15                    # 시총 2,000조원 초과 = 오류(leader21 
 HALF_SPREAD_BP = {"KOSPI": float(DEFAULT_KOSPI_SLIPPAGE_PCT) * 1e4, "KOSDAQ": float(DEFAULT_KOSDAQ_SLIPPAGE_PCT) * 1e4}
 COMMISSION_BP = float(DEFAULT_COMMISSION_RATE) * 1e4
 WON_PER_MIL = 1e6
+WICS_STALE_DAYS = 21
+STATEMENT_TIMEOUT_S = 600   # 정정 F1-1 M3: 패널이 날마다 길어진다(실측 ~0.39초/거래일 × 2 조회) — 300초면 2029-09 께 닿는다
 PRICE = {"session": "regular", "unpatched": "nan", "aftermarket_fix": True}   # 정문 인자(사전등록 §2)
 RULES = {"step": STEP, "horizon": HORIZON, "top_n": TOP_N, "min_names": MIN_NAMES, "cap_rank": list(CAP_RANK),
          "adv_floor_mil": ADV_FLOOR, "aum": AUM, "fill": "t+1 close", "costs": "core trade_cost_bp y=1 (1x), judged at 2x",
@@ -393,7 +395,7 @@ def simulate(p: Panel, grid: list[int]) -> SimOut:
 LOOKS = (12, 24, 36)
 OBF_SHAPE = (2.36, 1.67, 1.36)    # c·√(36/K), c = 1.36 — PO-1.3 모양
 NW_LAG = 2
-BOUNDARIES = (2.808, 1.987, 1.618)   # OBF 모양 × max(1.19, f_boot=1.08) — pead_forward_calib.json(사전등록 §3, 올리기만 한다)
+BOUNDARIES = (3.068, 2.171, 1.768)   # OBF 모양 × max(1.30, f_boot) — pead_forward_calib.json(정정 F1-1 m1, 올리기만 한다)
 FUTILITY = {24: 0.0}                 # 비구속 무용 중단: t_24 < 0
 
 
@@ -421,18 +423,23 @@ def payoff_ratio(x) -> float:
 
 
 def holding_intervals(steps: list[dict], m: float = 2.0) -> np.ndarray:
-    """보유 구간(종목별 체결 뒤 비중 > 0 이 이어진 스텝)의 순기여 Σ(비중·종목 스텝 수익 − m·비용) — B ``holding_intervals`` 그대로
-    (판 스텝의 매도 비용까지 넣고 닫는다). ``steps`` = 장부 ``step_closed`` 목록(순서대로)."""
+    """보유 구간(종목별 체결 뒤 비중 > 0 이 이어진 스텝)의 **능동** 순기여 Σ(w·(g − b_k) − m·c).
+
+    b_k = 그 스텝 벤치 수익. 한 스텝의 종목 합은 a_k(m) 와 같다(현금 0·비용 교차항 무시 — 재현 합 0.350 대 Σa_k 0.345).
+    정정 F1-1 M1: B ``holding_intervals`` 의 총액 기준 Σ(w·g − m·c)(재현 합 0.515)를 의도적으로 능동 기준으로 바꿨다 — 판정 통계 a_k 와
+    단위를 맞춘다. 구간 이어짐·판 스텝의 매도 비용 처리는 B 그대로. 스텝 번호는 기록의 ``k``(격자 번호)를 쓴다(정정 F1-1 m7).
+    """
     cur: dict[str, float] = {}
     last: dict[str, int] = {}
     done = []
-    for k, s in enumerate(steps):
+    for s in steps:
+        k, b = int(s["k"]), float(s["bench"])
         seen = set()
         for code, w, g, c in s["contrib"]:
             if w > 0:
                 if code in cur and last.get(code) != k - 1:
                     done.append(cur.pop(code))
-                cur[code] = cur.get(code, 0.0) + w * g - m * c
+                cur[code] = cur.get(code, 0.0) + w * (g - b) - m * c
                 last[code] = k
                 seen.add(code)
             elif code in cur:
@@ -452,6 +459,9 @@ def forward_report(steps: list[dict], boundaries: "tuple[float, ...]", futility:
     """
     a2 = np.array([s["a_2x"] for s in steps], dtype=np.float64)
     a1 = np.array([s["a_1x"] for s in steps], dtype=np.float64)
+    if not np.isfinite(a2).all() or not np.isfinite(a1).all():   # 정정 F1-1 m7: 결측을 조용히 NaN EV 로 두지 않는다
+        bad = [s.get("t") for s, x in zip(steps, a2) if not math.isfinite(x)]
+        return {"n_steps": int(a2.size), "verdict": "판단 불가(결측)", "missing_steps": bad, "looks": []}
     res = {"n_steps": int(a2.size), "EV_2x": float(a2.mean()) if a2.size else float("nan"),
            "EV_1x": float(a1.mean()) if a1.size else float("nan"),
            "step_payoff_2x": payoff_ratio(a2), "looks": [], "verdict": "계속"}
@@ -465,7 +475,7 @@ def forward_report(steps: list[dict], boundaries: "tuple[float, ...]", futility:
         sub = steps[:K]
         tK = nw_t(a2[:K])
         ivK = np.sort(holding_intervals(sub, 2.0))[::-1]
-        # 상위 5 보유 구간 순기여를 뺀 스텝당 능동 EV(재분배 없음) = mean(a_k) − Σ 상위 5 / K (B_verified "086520 기여만 뺀 EV" 와 같은 식)
+        # 상위 5 보유 구간 능동 순기여를 뺀 스텝당 EV(재분배 없음) = mean(a_k) − Σ 상위 5 / K (정정 F1-1 M1: 능동 기준)
         drop5 = float(a2[:K].mean() - ivK[:5].sum() / K) if ivK.size > 5 else float("nan")
         look = {"K": K, "t": tK, "boundary": b, "futility": futility.get(K), "EV_2x": float(a2[:K].mean()), "EV_drop_top5_2x": drop5}
         res["looks"].append(look)
@@ -484,12 +494,12 @@ def forward_report(steps: list[dict], boundaries: "tuple[float, ...]", futility:
     return res
 
 
-# ── DB 읽기(모두 asof 이하로 자른다) ─────────────────────────────────────────────
+# ── DB 읽기(asof 이하로 자른다 — 예외는 load_panel 독스트링) ─────────────────────────────────────────────
 
 
 def _cur(con):
     cur = con.cursor()
-    cur.execute("SET statement_timeout = '300s'")
+    cur.execute(f"SET statement_timeout = '{STATEMENT_TIMEOUT_S}s'")
     return cur
 
 
@@ -578,14 +588,35 @@ def seam_guard(codes, dates: pd.DatetimeIndex, ret: np.ndarray, close: np.ndarra
     return ret_f, close_f, int(seam.sum())
 
 
+def mask_last_day(df: pd.DataFrame, end: str, src_col: str, cols: tuple) -> tuple[pd.DataFrame, int]:
+    """정정 F1-1 m2: end ≥ 2026-09-14 이면 end 날 행 중 원천이 분봉(``"session"``)이 아닌 행의 ``cols`` 를 NaN 으로. 반환 (표, 지운 행 수).
+    원천 열이 없으면(그 날짜 보정이 없었다) 그대로."""
+    from swing_it.krx_session import AFTERMARKET_START
+
+    if end < AFTERMARKET_START or src_col not in df.columns:
+        return df, 0
+    m = (pd.to_datetime(df["date"]) == pd.Timestamp(end)).to_numpy() & (df[src_col] != "session").to_numpy()
+    if m.any():
+        df = df.copy()
+        df.loc[m, list(cols)] = np.nan
+    return df, int(m.sum())
+
+
 def load_panel(con, start: str, end: str) -> tuple[Panel, dict, dict]:
-    """[start, end] 패널. 모든 원천을 end 이하로 자른다. 반환 (패널, 진단, 이름)."""
+    """[start, end] 패널. 반환 (패널, 진단, 이름).
+
+    날짜가 있는 원천(가격·실적·정기보고서·주식수·WICS·사건)은 end 이하로 자른다. **예외 하나(정정 F1-1 m2):** 정규장 종가 항등식
+    (``read_regular_close``)은 날짜 d 의 종가를 d+1 수급 행(end 뒤 31일까지 읽는다)으로 만든다. d < end 이면 d+1 ≤ end 라 문제없고,
+    d = end 만 미래 행을 쓴다. 그래서 2026-09-14 이후 마지막 날은 분봉(정규장) 원천만 남기고 항등식·일봉 대체 값을 지운다(NaN) —
+    아침 실행(그때는 d+1 행이 없다)과 뒤늦은 ``--asof`` 백필·재시뮬레이션이 같은 값을 보게 한다.
+    """
     from swing_it.krx_session import read_raw_close, split_consistent_cap
     from swing_it.storage import read_prices, read_shares
 
     px = read_prices(con, session=PRICE["session"], unpatched=PRICE["unpatched"], cols=("code", "date", "close", "trade_value"),
                      start=start, end=end, parse_dates=True)
     info = {"price_session": px.attrs.get("krx_session", {})}
+    px, info["last_day_non_session_masked"] = mask_last_day(px, end, "krx_src", ("close", "trade_value"))
     cur = _cur(con)
     cur.execute("SELECT code FROM stocks UNION SELECT code FROM delisted_stocks UNION SELECT code FROM kind_delistings")
     equities = {str(r[0]) for r in cur.fetchall()}                     # core _equity_codes
@@ -604,6 +635,7 @@ def load_panel(con, start: str, end: str) -> tuple[Panel, dict, dict]:
     ret0[:, 1:] = C0[:, 1:] / C0[:, :-1] - 1.0
     rc = read_raw_close(con, start=start, end=end, aftermarket_fix=PRICE["aftermarket_fix"])
     rc = rc.assign(code=rc["code"].astype(str))
+    rc, info["last_day_raw_non_session_masked"] = mask_last_day(rc, end, "raw_src", ("close",))   # 원 종가도(일봉 대체는 애프터마켓 오염)
     rcw = wide(rc, "close")
     src = rc.pivot_table(index="date", columns="code", values="raw_src", aggfunc="last").reindex(index=days, columns=cidx)
     cur.execute("SELECT code, date FROM corporate_actions WHERE date BETWEEN %s AND %s", (start, end))
@@ -626,6 +658,9 @@ def load_panel(con, start: str, end: str) -> tuple[Panel, dict, dict]:
     wics = pd.DataFrame(cur.fetchall(), columns=["date", "code", "sector_cd"])
     wics["code"] = wics["code"].astype(str)
     info["wics_last_snapshot"] = str(max(wics["date"])) if len(wics) else None
+    if len(wics):                                    # m3: 스냅샷이 21일 넘게 묵으면 표시(신규 상장이 U_t 에 못 들어온다)
+        info["wics_stale_days"] = int((pd.Timestamp(end) - pd.Timestamp(max(wics["date"]))).days)
+        info["wics_stale"] = info["wics_stale_days"] > WICS_STALE_DAYS
     has_sec = sector_panel(wics, codes, days)
     cur.execute("SELECT code, market, name FROM stocks")
     cur_m = {str(c): (m, n) for c, m, n in cur.fetchall()}
@@ -662,25 +697,41 @@ def load_panel(con, start: str, end: str) -> tuple[Panel, dict, dict]:
 # ── 장부 행 ─────────────────────────────────────────────────────────────────────
 
 
-def step_record(p: Panel, st: Step) -> dict:
-    """끝난 스텝 → 장부 ``step_closed`` 블록. 판정 통계 = ``a_2x``."""
+def plan_mismatch(plan: dict, rec: dict) -> dict:
+    """정정 F1-1 m3: 결정일 행의 계획(``decision``) 대 다시 시뮬레이션한 스텝 기록 — 새 트랜치 차집합 수·비중 L1(보고만).
+
+    비중 차에는 체결일 거래 불가·얼림 조정이 정상으로 섞인다. 트랜치 차가 0 이 아니면 결정일 데이터가 뒤에 바뀐 것이다."""
+    pt = {x["code"] for x in plan.get("tranche_new", [])}
+    rt = set(rec["tranche"])
+    pw = plan.get("target", {})
+    rw = {c: w for c, w, _, _ in rec["contrib"] if w > 0}
+    keys = set(pw) | set(rw)
+    return {"tranche_symdiff": len(pt ^ rt), "weight_l1": float(sum(abs(rw.get(c, 0.0) - pw.get(c, 0.0)) for c in keys))}
+
+
+def step_record(p: Panel, st: Step, plan: "dict | None" = None) -> dict:
+    """끝난 스텝 → 장부 ``step_closed`` 블록. 판정 통계 = ``a_2x``. ``k`` = 이 실행 격자 번호(SIM_FROM 기준이라 실행마다 같다)."""
     D = p.dates
-    return {"t": str(D[st.t].date()), "f": str(D[st.f].date()), "f_next": str(D[st.f_next].date()),
+    rec = {"k": int(st.k), "t": str(D[st.t].date()), "f": str(D[st.f].date()), "f_next": str(D[st.f_next].date()),
             "gross": st.gross, "cost1": st.cost1, "net_1x": st.net(1.0), "net_2x": st.net(2.0), "bench": st.bench,
             "a_1x": st.active(1.0), "a_2x": st.active(2.0), "turnover": st.turnover, "n_names": st.n_names, "n_tranches": st.n_tranches,
             "n_forced": st.n_forced, "n_delist": st.n_delist, "n_frozen": st.n_frozen, "n_untradeable": st.n_untradeable,
             "n_eligible": st.n_eligible, "u_excl": st.u_excl, "cash": st.cash,
             "tranche": [str(p.codes[i]) for i in st.tranche],
             "contrib": [(str(p.codes[i]), w, r, c) for i, w, r, c in st.contrib]}
+    if plan is not None:
+        rec["plan_mismatch"] = plan_mismatch(plan, rec)
+    return rec
 
 
 def build_row(p: Panel, out: SimOut, names: dict, info: dict, *, arm: str = ARM, live: "dict | None" = None,
               bench_idx: "dict | None" = None, arm_start: str = ARM_START, backfilled: bool = False,
-              written: "set[str] | None" = None) -> dict:
+              written: "set[str] | None" = None, plans: "dict | None" = None) -> dict:
     """마지막 열(asof)의 장부 행. 그날 수익·포지션·결정(오늘이 결정일이면)·전날 끝난 스텝(있으면).
 
     ``written`` = 장부에 이미 있는 스텝(결정일 t). 그 밖의 끝난 전진 스텝이 장부에 없으면(그 다음 날 행이 빠졌다) ``step_closed_catchup`` 에
-    지금 데이터로 계산해 넣는다 — 판정은 스텝마다 장부에 처음 적힌 값(:func:`ledger_steps`)."""
+    지금 데이터로 계산해 넣는다 — 판정은 스텝마다 장부에 처음 적힌 값(:func:`ledger_steps`). ``written`` 에 있는 스텝은 ``step_closed`` 로도
+    다시 내지 않는다(정정 F1-1 M2 — 뒤늦은 ``--asof`` 백필이 덮어쓰지 못하게). ``plans`` = 결정일 → 그날 행의 ``decision``(m3 대조)."""
     T = len(p.dates) - 1
     D = p.dates
     g = out.day_gross.get(T, float("nan"))
@@ -708,14 +759,16 @@ def build_row(p: Panel, out: SimOut, names: dict, info: dict, *, arm: str = ARM,
                            "target": {str(p.codes[i]): round(w, 6) for i, w in sorted(pd_["target"].items(), key=lambda x: -x[1])}}
         if live is not None:
             row["decision"]["live_recommend"] = live
-    fwd = [s for s in out.steps if s.complete and s.f_next < T and str(D[s.t].date()) >= arm_start]
+    written = written or set()
+    plans = plans or {}
+    fwd = [s for s in out.steps if s.complete and s.f_next < T and str(D[s.t].date()) >= arm_start
+           and str(D[s.t].date()) not in written]
     closed = [s for s in fwd if s.f_next == T - 1]
     if closed:
-        row["step_closed"] = step_record(p, closed[-1])
-    if written is not None:
-        late = [step_record(p, s) for s in fwd if s.f_next < T - 1 and str(D[s.t].date()) not in written]
-        if late:
-            row["step_closed_catchup"] = late
+        row["step_closed"] = step_record(p, closed[-1], plans.get(str(D[closed[-1].t].date())))
+    late = [step_record(p, s, plans.get(str(D[s.t].date()))) for s in fwd if s.f_next < T - 1]
+    if late:
+        row["step_closed_catchup"] = late
     if backfilled:
         row["backfilled"] = True
     return row
@@ -748,9 +801,10 @@ def read_ledger(path: str, arm: str = ARM) -> list[dict]:
 
 
 def ledger_steps(rows: list[dict]) -> list[dict]:
-    """장부 → 판정용 스텝 목록(결정일 t 순). 같은 스텝이 여러 번 나오면 **처음 적힌 값**만 쓴다(사전등록 §3)."""
+    """장부 → 판정용 스텝 목록(결정일 t 순). 같은 스텝이 여러 번 나오면 **파일에 먼저 덧붙인 값**만 쓴다(사전등록 §3, 정정 F1-1 M2 —
+    행 날짜 순이 아니다: 늦게 채운 앞 날짜 백필 행이 이미 적힌 값을 이기면 안 된다). ``rows`` 는 :func:`read_ledger` 의 파일 순서 그대로."""
     seen: dict[str, dict] = {}
-    for r in sorted(rows, key=lambda r: r["date"]):
+    for r in rows:
         for s in ([r["step_closed"]] if "step_closed" in r else []) + r.get("step_closed_catchup", []):
             seen.setdefault(s["t"], s)
     return [seen[t] for t in sorted(seen)]
@@ -788,6 +842,14 @@ def live_recommend(p: Panel, names: dict, con, T: int, tranche: list) -> dict:
             "note": "recommend_holdings: U_t 없음·최신 주식수(as-of 아님) × 수정 종가 시총·ADV 단순 평균 — 보고만"}
 
 
+def live_recommend_safe(p: Panel, names: dict, con, T: int, tranche: list) -> dict:
+    """정정 F1-1 m5: 보고용 대조가 실패해도 결정일 행은 쓴다 — 오류는 행에 문자열로."""
+    try:
+        return live_recommend(p, names, con, T, tranche)
+    except Exception as e:  # noqa: BLE001 — 보고만 하는 항목
+        return {"error": f"{type(e).__name__}: {e}"[:300]}
+
+
 # ── 실행 ───────────────────────────────────────────────────────────────────────
 
 
@@ -813,17 +875,46 @@ def last_price_day(con) -> str:
     return str(pd.Timestamp(d).date())
 
 
+def check_calendar(dates: pd.DatetimeIndex, idx_dates, lo: str) -> dict:
+    """정정 F1-1 m4: 가격 패널 거래일[lo, 끝] 이 KOSPI(001) 지수 거래일과 같은가. 지수의 마지막 날까지만 견준다(지수 적재가 하루 늦을 수 있다).
+    다르면 격자 위상이 B 와 어긋난다 — ``ValueError``."""
+    idx = pd.DatetimeIndex(sorted(set(pd.to_datetime(idx_dates))))
+    idx = idx[idx >= pd.Timestamp(lo)]
+    if not len(idx):
+        raise ValueError("지수 001 거래일이 없다 — 달력을 확인할 수 없다")
+    pan = dates[(dates >= pd.Timestamp(lo)) & (dates <= idx[-1])]
+    miss_p = sorted(set(idx) - set(pan))
+    miss_i = sorted(set(pan) - set(idx))
+    if miss_p or miss_i:
+        raise ValueError(f"달력 불일치(격자 위상) — 가격에 없는 지수 거래일 {[str(d.date()) for d in miss_p][:5]}, "
+                         f"지수에 없는 가격 거래일 {[str(d.date()) for d in miss_i][:5]}")
+    return {"checked_to": str(idx[-1].date()), "n_days": int(len(pan))}
+
+
 def run_day(con, asof: "str | None", ledger: str, backfilled: bool) -> dict:
     end = asof or last_price_day(con)
     p, info, names = load_panel(con, PANEL_START, end)
     if str(p.dates[-1].date()) != end:
         raise SystemExit(f"asof {end} 는 가격 패널의 마지막 거래일이 아니다({p.dates[-1].date()}) — DB 거래일인지 확인")
+    from swing_it.storage import read_index
+
+    ix = read_index(con, "001", cols=("date", "close"), start=SIM_FROM, end=end, with_level=False, order_by_date=True, parse_dates=True)
+    try:
+        info["calendar"] = check_calendar(p.dates, ix["date"], SIM_FROM)
+    except ValueError as e:
+        raise SystemExit(f"멈춤: {e}") from e
     grid = make_grid(p.dates, GRID_ANCHOR, SIM_FROM)
     out = simulate(p, grid)
     T = len(p.dates) - 1
-    live = live_recommend(p, names, con, T, out.pending["tranche"]) if out.pending is not None else None
-    written = {s["t"] for s in ledger_steps(read_ledger(ledger))}
-    row = build_row(p, out, names, info, live=live, bench_idx=index_returns(con, p.dates[-1]), backfilled=backfilled, written=written)
+    live = live_recommend_safe(p, names, con, T, out.pending["tranche"]) if out.pending is not None else None
+    rows = read_ledger(ledger)
+    written = {s["t"] for s in ledger_steps(rows)}
+    plans: dict = {}
+    for r in rows:                                   # 결정일 계획 — 파일에 먼저 적힌 것
+        if "decision" in r:
+            plans.setdefault(r["decision"]["t"], r["decision"])
+    row = build_row(p, out, names, info, live=live, bench_idx=index_returns(con, p.dates[-1]), backfilled=backfilled, written=written,
+                    plans=plans)
     print(append_row(ledger, row))
     print(json.dumps(row, ensure_ascii=False, indent=1, default=_json_default))
     return row
@@ -850,6 +941,12 @@ def replicate(con, span: str, out_path: str) -> dict:
            "nw_t_2x": nw_t(a2), "step_payoff_2x": payoff_ratio(a2), "interval_payoff_2x": payoff_ratio(holding_intervals(oos, 2.0)),
            "cost1_mean": float(np.mean([r["cost1"] for r in oos])), "turnover_mean": float(np.mean([r["turnover"] for r in oos])),
            "u_excl_mean": float(np.mean([r["u_excl"] for r in oos])), "names_mean": float(np.mean([r["n_names"] for r in oos])),
+           "IR_2x_by_year": {y: float(np.mean(v) / np.std(v, ddof=1) * math.sqrt(252 / STEP))
+                             for y, v in pd.Series(a2).groupby([r["t"][:4] for r in oos]).agg(list).items()},
+           "fragility_2x": {str(K): {"EV": float(a2[:K].mean()),
+                                     "EV_drop_top5": float(a2[:K].mean() - np.sort(holding_intervals(oos[:K], 2.0))[::-1][:5].sum() / K)}
+                            for K in (12, 24, 36, len(oos))},
+           "interval_active_sum_2x": float(holding_intervals(oos, 2.0).sum()), "a_2x_sum": float(a2.sum()),
            "a_2x": a2.tolist(), "steps_t": [r["t"] for r in oos], "info": {k: v for k, v in info.items() if k != "price_session"},
            "B_reference": {"IR_2x": 0.549976582984937, "EV_2x": 0.006805529413322349, "IR_1x": 0.6729675242521727,
                            "EV_1x": 0.008355563539048183, "oos_steps": 48, "cost1_mean": 0.001526177066929591,

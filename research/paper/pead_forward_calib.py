@@ -3,8 +3,9 @@
 입력은 과거 재현(``pead_paper.py --replicate``, 2020~23 OOS 48 스텝 a_k(2배) — 단계 B 와 같은 규칙의 재현, 전진 데이터 아님)뿐이다.
 
 1. f_boot(PO-1.3 절차 그대로): 평균 뺀 a_k 를 원형 블록(3) 부트스트랩으로 길이 36 경로 300,000 개, 경로마다 max_K t_K/모양_K.
-   기각 확률 ≤ 0.10 인 0.005 격자 최소 배수. 최종 경계 = OBF 모양(2.36·1.67·1.36) × max(1.19, f_boot).
-2. 그 경계의 귀무 α(한쪽): 부트스트랩·iid 정규·t₄·AR(1) φ=0.3 (각 200,000).
+   기각 확률 ≤ 0.10 인 0.005 격자 최소 배수. 최종 경계 = OBF 모양(2.36·1.67·1.36) × max(1.30, f_boot)(정정 F1-1 m1, 처음 1.19).
+2. 그 경계의 귀무 α(한쪽): 부트스트랩·iid 정규·t₄·AR(1) φ=0.18(재현 1차 자기상관)·0.3 (각 200,000). 배수 1.19 에서의 α 도 같이 적는다.
+   민감도(보고만): 2023 오른쪽 꼬리를 뺀 2020~22(36 스텝)만으로 낸 f_boot.
 3. 무용 중단(비구속) 문턱에서 귀무·대립의 중단 확률과 경계 통과 누적 확률(검정력, 연 IR 0.3·0.59·1.0).
 
 사용: ``uv run python research/paper/pead_forward_calib.py`` → ``research/paper/pead_forward_calib.json``.
@@ -27,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 REPL = HERE / "pead_forward_replication.json"
 OUT = HERE / "pead_forward_calib.json"
 SEED = 20261102
-F_FLOOR, F_GRID, ALPHA = 1.19, 0.005, 0.10
+F_FLOOR, F_GRID, ALPHA = 1.30, 0.005, 0.10   # 정정 F1-1 m1: 1.19 → 1.30(재현 AR(1) φ≈0.18 정규에서 α 0.123 → 0.0995)
 N_FBOOT, BLOCK = 300_000, 3
 N_SIM = 200_000
 FUTILITY = {24: 0.0}                 # 비구속 무용 중단: t_24 < 0 (2년 뒤 EV 점추정 ≤ 0 쪽)
@@ -112,15 +113,19 @@ def main() -> int:
     rng = rng_of("null")
     dgps = {"boot": boot_paths(x, N_SIM, "null-boot"), "iid_normal": rng.normal(size=(N_SIM, 36)),
             "t4": rng.standard_t(4, size=(N_SIM, 36))}
-    e = rng.normal(size=(N_SIM, 36))
-    ar = np.empty_like(e)
-    ar[:, 0] = e[:, 0] / math.sqrt(1 - 0.09)
-    for i in range(1, 36):
-        ar[:, i] = 0.3 * ar[:, i - 1] + e[:, i]
-    dgps["ar1_0.3"] = ar
+    for phi in (0.18, 0.3):
+        e = rng_of(f"ar1-{phi}").normal(size=(N_SIM, 36))
+        ar = np.empty_like(e)
+        ar[:, 0] = e[:, 0] / math.sqrt(1 - phi * phi)
+        for i in range(1, 36):
+            ar[:, i] = phi * ar[:, i - 1] + e[:, i]
+        dgps[f"ar1_{phi}"] = ar
+    b119 = np.array([round(c * max(1.19, fb["f_boot"]), 3) for c in PP.OBF_SHAPE])
     for name, P in dgps.items():
         tl = t_at_looks(P)
-        res["null"][name] = {"no_futility": sequential(tl, b, None), "with_futility": sequential(tl, b, FUTILITY)}
+        res["null"][name] = {"no_futility": sequential(tl, b, None), "with_futility": sequential(tl, b, FUTILITY),
+                             "at_multiplier_1.19_no_futility": sequential(tl, b119, None)}
+    res["f_boot_2020_2022_only"] = f_boot(a[: 36])                   # 보고만 — 경계는 위 값
     # 대립: 평균 뺀 부트스트랩 경로에 δ = 연 IR / √(252/20) × sd 를 더한다(iid 정규도 같이)
     for ir in (0.3, 0.59, 1.0):
         delta = ir / ANN * sd

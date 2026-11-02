@@ -51,7 +51,7 @@ def test_prereg_constants_fixed():
     assert PP.PRICE == {"session": "regular", "unpatched": "nan", "aftermarket_fix": True}
     assert PP.LOOKS == (12, 24, 36) and PP.OBF_SHAPE == (2.36, 1.67, 1.36) and PP.NW_LAG == 2
     assert PP.LEDGER == "research/paper/pead_rank_f1_ledger.jsonl"
-    assert PP.BOUNDARIES == (2.808, 1.987, 1.618) and PP.FUTILITY == {24: 0.0}
+    assert PP.BOUNDARIES == (3.068, 2.171, 1.768) and PP.FUTILITY == {24: 0.0}
 
 
 def test_boundaries_match_calibration_file():
@@ -60,7 +60,7 @@ def test_boundaries_match_calibration_file():
     cal = json.loads((Path(PP.__file__).parent / "pead_forward_calib.json").read_text(encoding="utf-8"))
     assert tuple(cal["boundaries"]) == PP.BOUNDARIES
     assert {int(k): v for k, v in cal["futility"].items()} == PP.FUTILITY
-    assert cal["f_boot"]["multiplier"] == max(1.19, cal["f_boot"]["f_boot"])
+    assert cal["f_boot"]["multiplier"] == max(1.30, cal["f_boot"]["f_boot"])
     assert tuple(cal["obf_shape"]) == PP.OBF_SHAPE and tuple(cal["looks"]) == PP.LOOKS
 
 
@@ -192,6 +192,82 @@ def test_ledger_steps_first_written_wins():
             {"date": "2026-12-10", "arm": PP.ARM, "step_closed_catchup": [{"t": "2026-11-05", "a_2x": 0.99}, {"t": "2026-12-04", "a_2x": 0.02}]}]
     st = PP.ledger_steps(rows)
     assert [(s["t"], s["a_2x"]) for s in st] == [("2026-11-05", 0.01), ("2026-12-04", 0.02)]
+    # 파일 순서가 기준이다: 뒤에 덧붙인 앞 날짜 백필 행은 먼저 적힌 따라잡기 값을 이기지 못한다
+    late_backfill = [{"date": "2026-12-10", "arm": PP.ARM, "step_closed_catchup": [{"t": "2026-11-05", "a_2x": 0.5}]},
+                     {"date": "2026-12-08", "arm": PP.ARM, "backfilled": True, "step_closed": {"t": "2026-11-05", "a_2x": 0.7}}]
+    assert PP.ledger_steps(late_backfill)[0]["a_2x"] == 0.5
+
+
+def test_catchup_then_asof_backfill_cannot_overwrite(tmp_path):
+    """정정 F1-1 M2: 따라잡기로 먼저 적힌 스텝은, 그 뒤 빠진 날을 --asof 로 채워도 step_closed 로 다시 나오지 않는다."""
+    p = synth()
+    g = grid_of(p)
+    start = str(p.dates[g[2]].date())
+    s0 = [s for s in PP.simulate(p, g).steps if s.complete and str(p.dates[s.t].date()) >= start][0]
+    path = str(tmp_path / "l.jsonl")
+    late = s0.f_next + 3
+    q = p.truncate(late)
+    rows = PP.read_ledger(path)
+    r1 = PP.build_row(q, PP.simulate(q, [x for x in g if x <= late]), {}, {}, arm_start=start,
+                      written={s["t"] for s in PP.ledger_steps(rows)})
+    assert "step_closed_catchup" in r1
+    assert PP.append_row(path, r1, arm_start=start).startswith("기록")
+    day = s0.f_next + 1                                  # 빠졌던 날을 백필
+    q2 = p.truncate(day)
+    rows = PP.read_ledger(path)
+    r2 = PP.build_row(q2, PP.simulate(q2, [x for x in g if x <= day]), {}, {}, arm_start=start, backfilled=True,
+                      written={s["t"] for s in PP.ledger_steps(rows)})
+    assert "step_closed" not in r2 and "step_closed_catchup" not in r2
+    PP.append_row(path, r2, arm_start=start)
+    st = PP.ledger_steps(PP.read_ledger(path))
+    assert [x["t"] for x in st] == [str(p.dates[s0.t].date())] and st[0] == json.loads(json.dumps(r1["step_closed_catchup"][0]))
+
+
+def test_holding_intervals_active_and_stored_k():
+    steps = [{"k": 5, "bench": 0.02, "contrib": [("A", 0.5, 0.10, 0.001), ("B", 0.5, -0.02, 0.001)]},
+             {"k": 6, "bench": -0.01, "contrib": [("A", 0.5, 0.03, 0.0), ("B", 0.0, 0.0, 0.002)]},
+             {"k": 8, "bench": 0.0, "contrib": [("A", 1.0, 0.01, 0.0)]}]           # k 7 건너뜀 → A 구간이 끊긴다
+    iv = sorted(PP.holding_intervals(steps, 2.0).round(10))
+    a1 = 0.5 * (0.10 - 0.02) - 0.002 + 0.5 * (0.03 + 0.01)
+    b1 = 0.5 * (-0.02 - 0.02) - 0.002 - 0.004
+    assert iv == sorted(np.round([a1, b1, 0.01], 10))
+
+
+def test_forward_report_missing_is_explicit():
+    st = [{"k": k, "bench": 0.0, "a_2x": x, "a_1x": x, "contrib": []} for k, x in enumerate([0.01, float("nan"), 0.02])]
+    r = PP.forward_report(st, PP.BOUNDARIES, PP.FUTILITY)
+    assert r["verdict"] == "판단 불가(결측)" and len(r["missing_steps"]) == 1
+
+
+def test_check_calendar_guard():
+    d = pd.bdate_range("2026-08-03", periods=30)
+    assert PP.check_calendar(d, d[:-1], str(d[0].date()))["n_days"] == 29     # 지수가 하루 늦은 것은 통과
+    with pytest.raises(ValueError):
+        PP.check_calendar(d.delete(10), d, str(d[0].date()))                     # 가격에 거래일 하나가 빠졌다
+    with pytest.raises(ValueError):
+        PP.check_calendar(d, d.delete(10), str(d[0].date()))
+
+
+def test_plan_mismatch():
+    plan = {"tranche_new": [{"code": "A"}, {"code": "B"}], "target": {"A": 0.5, "B": 0.5}}
+    rec = {"tranche": ["A", "C"], "contrib": [("A", 0.6, 0.0, 0.0), ("C", 0.4, 0.0, 0.0), ("B", 0.0, 0.0, 0.001)]}
+    m = PP.plan_mismatch(plan, rec)
+    assert m["tranche_symdiff"] == 2 and math.isclose(m["weight_l1"], 0.1 + 0.5 + 0.4)
+
+
+def test_mask_last_day_non_session():
+    df = pd.DataFrame({"code": ["A", "B", "C", "A"], "date": pd.to_datetime(["2026-10-30"] * 3 + ["2026-10-29"]),
+                       "close": [1.0, 2.0, 3.0, 4.0], "trade_value": [1.0] * 4, "krx_src": ["session", "identity", "none", "identity"]})
+    out, n = PP.mask_last_day(df, "2026-10-30", "krx_src", ("close", "trade_value"))
+    assert n == 2 and out["close"].tolist()[0] == 1.0 and np.isnan(out["close"].iloc[1]) and out["close"].iloc[3] == 4.0
+    assert PP.mask_last_day(df, "2023-12-28", "krx_src", ("close",))[1] == 0      # 애프터마켓 전 날짜는 건드리지 않는다
+
+
+def test_live_recommend_failure_does_not_block(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(PP, "live_recommend", boom)
+    assert PP.live_recommend_safe(None, {}, None, 0, [])["error"].startswith("RuntimeError")
 
 
 def test_append_row_dedupe_and_arm_start(tmp_path):
@@ -246,7 +322,8 @@ def test_make_grid_phase_guard():
 def test_forward_report_rules():
     def steps(a, codes=None):
         codes = codes or [f"S{k}" for k in range(len(a))]           # 스텝마다 다른 종목 = 보유 구간 하나씩
-        return [{"a_2x": x, "a_1x": x + 0.001, "contrib": [(c, 0.1, x * 10, 0.0)]} for x, c in zip(a, codes)]
+        return [{"k": k, "bench": 0.0, "a_2x": x, "a_1x": x + 0.001, "contrib": [(c, 0.1, x * 10, 0.0)]}
+                for k, (x, c) in enumerate(zip(a, codes))]
     b = (2.8, 2.0, 1.6)
     fut = {24: 0.0}
     rng = np.random.default_rng(1)
