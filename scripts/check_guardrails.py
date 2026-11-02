@@ -16,6 +16,7 @@ GUARDRAILS §5 로드맵 item 5 를 코드로 강제한다. CI 는 특정 연구
   (g) raw 가격 SELECT — 유니버스에서 폐지 종목이 조용히 빠지는 걸 막는다.
   (g2) 생존자 전용 조인 — ``supply_demand JOIN stocks`` 는 WHERE 없이도 폐지분을 떨군다.
   (h) 코드 없는 판정 — (b)의 역방향. VERDICT 에 러너가 등록·실재하거나 재현불가 선언 필요.
+  (j) ML 예측 피처 원천 — ``ml_forecast_*.py`` 가 생존자 전용·원천이 갈린 표를 읽으면 실패.
 
 **이 린트 자체는 tests/test_check_guardrails.py 가 검사한다.** 각 규칙에 위반을 주입해
 실제로 실패하는지 확인한다 — 규칙이 죽어도 초록인 상태를 실제로 겪었기 때문이다((e) 참조).
@@ -944,6 +945,32 @@ def check_verdicts_have_runner() -> list[str]:
     return out
 
 
+# (j) ML 예측(PREREG §3·정정 ML-1 ⑯): 피처는 폐지 종목까지 같은 정의인 원천만 쓴다. ``credit_balance``·
+# ``short_selling``·``program_trading`` 백필은 상장 생존 종목뿐이고, ``supply_demand`` 는 상장=키움·폐지=네이버로 원천이
+# 갈려 정의 차이가 폐지 여부와 상관된다(결측·정의가 미래 폐지와 상관되면 누출이다). 기관 세부 열도 폐지 종목은 NULL 이다.
+_ML_FORBIDDEN = re.compile(
+    r"\b(credit_balance|short_selling|program_trading|supply_demand|read_supply_demand"
+    r"|INSTITUTION_DETAIL_COLS|fnnc_invt|insrnc|invtrt)\b")
+
+
+def check_ml_forecast_sources() -> list[str]:
+    """(j) research/experiments/ml_forecast_*.py 가 금지 원천을 언급하면 위반(주석 줄 제외)."""
+    out = []
+    if not EXPERIMENTS.is_dir():
+        return out
+    for p in sorted(EXPERIMENTS.glob("ml_forecast_*.py")):
+        rel = p.relative_to(REPO).as_posix()
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            m = _ML_FORBIDDEN.search(line)
+            if m:
+                out.append(
+                    f"[ml-source] {rel}:{i} — {m.group(1)} 를 읽었다. ML 예측 피처는 naver_investor_trend·"
+                    f"naver_research_reports 처럼 폐지 종목까지 같은 정의인 원천만 쓴다(PREREG §3).")
+    return out
+
+
 def main() -> int:
     violations: list[str] = []
     violations += check_src_no_research_import()
@@ -959,6 +986,7 @@ def main() -> int:
     violations += check_pipeline_ledgers()
     violations += check_pipeline_ledgers_append_only()
     violations += check_commit_identity()
+    violations += check_ml_forecast_sources()
 
     if violations:
         print("가드레일 린트 실패 — 위반 %d건:\n" % len(violations))

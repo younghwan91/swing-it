@@ -1,0 +1,47 @@
+{
+ "core_ref": "13c56a7",
+ "B_code": {
+  "swing_it_sha": "59ffdc9",
+  "core_ref": "13c56a7",
+  "model_cache": "models_v4_grid_fpe66f309e07de_core13c56a7.pkl"
+ },
+ "fingerprint_same_as_B": true,
+ "core_parity": {
+  "steps_harness": 54,
+  "steps_core": 54,
+  "same_steps": true,
+  "max_abs_diff_book": 0.0,
+  "max_abs_diff_bench": 2.7755575615628914e-17,
+  "nan_mismatch": 0,
+  "n_universe_same": true,
+  "first_date": "2019-08-01",
+  "last_date": "2023-11-17",
+  "pass": true,
+  "adv_bytes_same": true,
+  "eligible_same_all_grid": true
+ },
+ "O": {
+  "compared": 19,
+  "max_tol": 1e-10,
+  "mismatch": [],
+  "n_mismatch": 0,
+  "pass": true
+ },
+ "R": {
+  "compared": 19,
+  "max_tol": 1e-10,
+  "mismatch": [],
+  "n_mismatch": 0,
+  "pass": true
+ },
+ "ic_by_year": {
+  "compared": 10,
+  "max_tol": 1e-10,
+  "mismatch": [],
+  "n_mismatch": 0,
+  "pass": true
+ },
+ "pass": true,
+ "elapsed_s": 62.94561743736267,
+ "note": "B.json 에 스텝 열이 없어 요약값을 1e-10 으로 대조한다(정정 ML-4 ⑧). 숫자는 B 것이고 ML 예측 결과가 아니다."
+}

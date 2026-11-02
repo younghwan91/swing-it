@@ -558,8 +558,11 @@ class StepRec:
 
 
 def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), rank_sig=None, ic_by_year=None,
-             sigma_r=None, solver_opts=None) -> list[StepRec]:
+             sigma_r=None, solver_opts=None, universe=None, max_weight: float | None = None) -> list[StepRec]:
     """한 북의 회계(PREREG §2 회계·PO-6). ``kind`` ∈ {"R", "O"}. ``rank_sig`` 는 순위에 쓰는 신호(널은 순열).
+
+    주입점(ML 예측, 기본 ``None`` 이면 지금 경로와 비트 동일): ``universe(t)`` = 적격·벤치 종목(행 번호),
+    ``max_weight`` = 종목 상한. IC·목표 위험 상수는 ``ic_by_year``·``sigma_r`` 사전으로 이미 넣을 수 있다.
 
     단위: 체결 직후 NAV 를 1 로 두고(총액 경로), 스텝 순수익은 r_k(m) = (1 − m·cost1_k)·(1 + gross_k) − 1 로 낸다.
     비용은 NAV 에 비례해 빠지므로 비중 경로는 비용 배수와 무관하다 — 1·2배가 같은 거래열을 쓴다(최적화기는 1배로 푼다).
@@ -571,6 +574,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
     if not flags.drift:
         raise ValueError("표류 끈 규칙은 parity_book 이다")
     rank_sig = ctx.sig if rank_sig is None else rank_sig
+    mw = MAX_W if max_weight is None else max_weight
     C, Cff = ctx.C, ctx.Cff
     nN, nD = C.shape
     lag = flags.lag
@@ -586,10 +590,11 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             break
         day = ctx.dates[f].date()
         in_u = ctx.in_u(t)
-        el = eligible(t, ctx.sig, ctx.adv, ctx.cap, in_u)
+        el = eligible(t, ctx.sig, ctx.adv, ctx.cap, in_u) if universe is None else np.asarray(universe(t), dtype=int)
         rec = StepRec(k=k, t=t, date=str(ctx.dates[t].date()), gross=float("nan"), cost1=0.0, bench=float("nan"),
                       turnover=0.0, exante_20=float("nan"), factor_share=float("nan"), f=f, f_next=f_next)
-        rec.u_excl = u_exclusion(t, ctx.sig, ctx.adv, in_u)
+        if universe is None:
+            rec.u_excl = u_exclusion(t, ctx.sig, ctx.adv, in_u)
         if kind == "R":
             tranches[k] = tranche_names(t, rank_sig, ctx.sig, ctx.adv, ctx.cap, in_u)
         # 결정일 t 의 표류 비중
@@ -651,7 +656,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             want = np.where(tradeable, want, 0.0)
         else:
             want, info = o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol,
-                                  rank_sig, ic_by_year, sigma_r, built, solver_opts)
+                                  rank_sig, ic_by_year, sigma_r, built, solver_opts, mw)
             for key, v in info.items():
                 setattr(rec, key, v)
             trade = rec.status == "optimal"
@@ -662,7 +667,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             s = want[free].sum()
             new = np.where(frozen, w_f, 0.0)
             if s > 0:  # PO-9: O 는 상한을 지키며 채운다(넘치는 몫은 현금)
-                new[free] = capped_rescale(want[free], room, MAX_W if kind == "O" else None)
+                new[free] = capped_rescale(want[free], room, mw if kind == "O" else None)
                 renorm = abs(room - s)
             new_cash = 1.0 - new.sum()
         else:  # 최적화 실패 → 거래 안 함(강제 매도만, 대금은 현금)
@@ -717,7 +722,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
 
 
 def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol_all, rank_sig, ic_by_year,
-             sigma_r, built, solver_opts):
+             sigma_r, built, solver_opts, max_weight=MAX_W):
     """O 의 목표 비중(§2·PO-6). 문제 종목 P = eligible(t) ∪ (보유 ∩ U_t ∩ 폐지 아님)."""
     from krx_quant_core.portfolio.optimize import Constraints, CostParams, optimize
 
@@ -746,7 +751,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
     no_trade = ~(tradeable[P] & costable[P]) | frozen[P]
     outside_frozen = frozen & ~np.isin(np.arange(nN), P)
     budget = 1.0 - float(w_t[outside_frozen].sum())
-    con = Constraints(budget=budget, long_only=True, max_weight=MAX_W, sector=ctx.lab[P, t], benchmark=b,
+    con = Constraints(budget=budget, long_only=True, max_weight=max_weight, sector=ctx.lab[P, t], benchmark=b,
                       sector_band=cell.band, max_turnover=MAX_TURNOVER if built else None, max_participation=MAX_PART,
                       no_buy=~is_el, no_trade=no_trade)
     adv_won = np.where(costable[P], ctx.adv[P, t] * 1e6, 1e12)
@@ -764,7 +769,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
         info["status"] = "solver_fail"
         return want, info
     w_sol = np.asarray(res.weights, dtype=np.float64)
-    w_clean, n_dust = clean_dust(w_sol, ctx.Cff[P, t], cell.aum, no_trade)  # PO-7 M2
+    w_clean, n_dust = clean_dust(w_sol, ctx.Cff[P, t], cell.aum, no_trade, cap=max_weight)  # PO-7 M2
     want[P] = w_clean
     info.update({"n_dust": n_dust, "dust_mass": float(np.abs(w_clean - w_sol).sum()) / 2.0})
     info["est_cost"] = float(res.est_cost)
@@ -776,7 +781,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
     return want, info
 
 
-def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY) -> list[str]:
+def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_weight: float = MAX_W) -> list[str]:
     """PO-7 M3 — 성과와 무관한 불변식(스텝마다). 위반 문장 목록을 돌려준다(비면 통과). ``--mode run`` 은 하나라도 있으면 결과를 쓰지 않는다.
 
     - Σw + 현금 = 1, w ≥ −ε. O: (거래 가능·안 얼린 종목) max w ≤ 0.10 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례 + 먼지),
@@ -801,8 +806,8 @@ def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY) -> li
             if not (lo_bp - 1e-6 <= bp <= hi_bp):
                 out.append(f"{tag} 비용/회전 {bp:.2f}bp 가 [{lo_bp}, {hi_bp}] 밖")
         if kind == "O" and r.status == "optimal" and r.n_names:
-            if r.max_w > MAX_W + INV_EPS:
-                out.append(f"{tag} max w {r.max_w:.6f} > {MAX_W}")
+            if r.max_w > max_weight + INV_EPS:
+                out.append(f"{tag} max w {r.max_w:.6f} > {max_weight}")
             if np.isfinite(r.sector_dev) and r.sector_dev > r.sector_tol:
                 out.append(f"{tag} 업종 편차 {r.sector_dev:.6f} > 허용 {r.sector_tol:.6f}")
             if np.isfinite(r.turn_bound) and r.turnover > r.turn_bound:
@@ -1113,7 +1118,8 @@ def build_ctx(cache: Path, po3_cache: Path, workers: int, log, end: str = END_B,
     grid = list(range(t_0, nD, STEP))
     mpath = cache / model_cache_name(fp, core_ref)
     models = P3.build_models(c, grid, workers, mpath, log, vra=None, shrink=V4_SHRINK)
-    old = pickle.load(open(po3_cache / "models_vraoff_s0.1.pkl", "rb"))
+    # po3_cache=None: PO-3 캐시와의 비트 대조를 건너뛴다(ML 예측 S2-0 — 옛 캐시가 없어도 패리티를 본다). 숫자에는 영향 없다.
+    old = {} if po3_cache is None else pickle.load(open(po3_cache / "models_vraoff_s0.1.pkl", "rb"))
     common = sorted(set(old) & set(models))
     bit_same = bool(common) and all(
         all(np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(old[t][:4], models[t][:4])) and old[t][4] == models[t][4]

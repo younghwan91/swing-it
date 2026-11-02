@@ -91,6 +91,26 @@ def ledger_n(count_trials=None, extra: int = META_GEN3_TRIALS) -> dict:
     return {"N": int(sum(parts.values())), "parts": parts}
 
 
+# ML 예측 원장 상수(PREREG §9·정정 ML-4). 근거는 그 정정 문단의 커밋에 있다.
+ML_OLD_ML_PEAD_AND_RL = 3  # 옛 ML-PEAD IC·매매 목표 2개 + 32세대 RL-1 LightGBM 1개
+ML_UNRUN_E_SENSITIVITY = 2  # 계획했지만 E 가 진입 실패라 돌리지 않은 민감도(ML-4 ⑧ — N 을 줄이지 않는다)
+ML_EVOLUTION_GENERATIONS = 20  # 진화 세대, 세대당 1로 센 하한
+ML_REVIEW_IC_LOOKS = 31  # S1 리뷰어 추가 IC 관찰(ML-4 ⑥) — 넓은 N 에만
+
+
+def ledger_n_ml(count_trials=None) -> dict:
+    """ML 예측의 좁은·넓은 원장 N(PREREG §9). 라벨 값이고 판정에 쓰지 않는다."""
+    if count_trials is None:
+        from swing_it.diagnostics.trials import count_trials
+    narrow = {lab: int(count_trials(lab)) for lab in ("ml_forecast", "pead_optimizer", "pead_concentrated")}
+    narrow.update({"META_GEN3(상수)": META_GEN3_TRIALS, "옛 ML-PEAD·RL-1(상수)": ML_OLD_ML_PEAD_AND_RL,
+                   "돌리지 않은 E 민감도(상수)": ML_UNRUN_E_SENSITIVITY})
+    wide = {lab: int(count_trials(lab)) for lab in ("inst_flow_accel", "catalyst_flow_swing", "pullback_prop")}
+    wide.update({"진화 세대(상수)": ML_EVOLUTION_GENERATIONS, "S1 리뷰어 관찰(상수)": ML_REVIEW_IC_LOOKS})
+    n = int(sum(narrow.values()))
+    return {"narrow": n, "wide": n + int(sum(wide.values())), "narrow_parts": narrow, "wide_extra_parts": wide}
+
+
 def alpha_hurdle(n_trials: int) -> dict:
     """문턱 = max(2.0, Bonferroni 양측 α=0.05/N 의 z) — core ``t_haircut``."""
     th = t_haircut(n_trials)

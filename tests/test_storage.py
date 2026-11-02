@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from swing_it.storage import connect, market_cap_asof
@@ -217,3 +218,60 @@ def test_market_cap_asof_bulk_date_filter_matches_per_row(tmp_path):
     missing.loc[missing.index[:3], "date"] = None  # 결측 날짜: 예전처럼 merge 에서 예외(종류는 pandas 가 정함)
     with pytest.raises((ValueError, TypeError)):
         market_cap_asof_bulk(con, missing)
+
+
+def _trend_db(tmp_path, delisted=("000002",)):
+    from swing_it.storage import connect
+
+    con = connect(tmp_path / "trend.db")
+    con.executemany("INSERT INTO naver_investor_trend (code, date, foreign_net, institution_net, foreign_hold_ratio) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [("000001", "2021-01-04", 10, 20, 1.5), ("000002", "2021-01-04", -5, 3, 2.5),
+                     ("000002", "2021-06-01", 7, 7, 2.6)])
+    con.executemany("INSERT INTO naver_research_reports (research_id, code, broker, write_date, goal_price) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [(1, "000001", "A", "2021-01-04", 100), (2, "000002", "A", "2021-01-05", 200)])
+    con.executemany("INSERT INTO delisted_stocks (code, last_trade_date) VALUES (?, ?)",
+                    [(c, "2021-07-01") for c in delisted])
+    con.commit()
+    return con
+
+
+def test_read_investor_trend_reads_window_and_keeps_delisted(tmp_path):
+    from swing_it.storage import read_investor_trend
+
+    con = _trend_db(tmp_path)
+    df = read_investor_trend(con, start="2021-01-01", end="2021-03-31")
+    assert sorted(df["code"]) == ["000001", "000002"]
+    assert list(df.columns) == ["code", "date", "foreign_net", "institution_net", "foreign_hold_ratio"]
+    assert df["date"].max() <= "2021-03-31"
+
+
+def test_read_investor_trend_catches_result_without_delisted(tmp_path):
+    from swing_it.storage import _assert_table_has_delisted
+
+    con = _trend_db(tmp_path)
+    survivors = pd.DataFrame({"code": ["000001"]})
+    with pytest.raises(AssertionError, match="폐지"):
+        _assert_table_has_delisted(con, survivors, table="naver_investor_trend", date_col="date", start=None, end=None)
+
+
+def test_read_investor_trend_window_scopes_delisted_expectation(tmp_path):
+    from swing_it.storage import _assert_table_has_delisted
+
+    con = _trend_db(tmp_path)
+    survivors = pd.DataFrame({"code": ["000001"]})
+    # 그 구간에 폐지 종목 행이 없으면 요구하지 않는다
+    _assert_table_has_delisted(con, survivors, table="naver_investor_trend", date_col="date",
+                               start="2020-01-01", end="2020-12-31")
+
+
+def test_read_research_reports_catches_result_without_delisted(tmp_path):
+    from swing_it.storage import _assert_table_has_delisted, read_research_reports
+
+    con = _trend_db(tmp_path)
+    df = read_research_reports(con, end="2021-12-31")
+    assert sorted(df["code"]) == ["000001", "000002"]
+    with pytest.raises(AssertionError, match="폐지"):
+        _assert_table_has_delisted(con, pd.DataFrame({"code": ["000001"]}), table="naver_research_reports",
+                                   date_col="write_date", start=None, end=None)

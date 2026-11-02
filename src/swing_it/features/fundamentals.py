@@ -67,6 +67,7 @@ def earnings_yoy_panel(
     value_col: str = "yoy",
     knowledge_col: str | None = None,
     key_cols: tuple[str, ...] = ("code", "period"),
+    tie_col: str | None = None,
 ) -> pd.DataFrame:
     """Build a lookahead-safe (code × date) panel of the latest available YoY.
 
@@ -91,6 +92,9 @@ def earnings_yoy_panel(
             생략하면 기존 동작 그대로다(입력에 버전이 하나뿐이라고 가정). 발표 수치와
             ``tests/test_parity_pead.py`` 가 그 경로에 고정돼 있다.
         key_cols: 버전을 묶는 키. ``knowledge_col`` 을 줄 때만 쓰인다.
+        tie_col: 같은 종목의 두 행이 같은 날 알려졌을 때 이 열이 큰 행을 쓴다(보통 ``period``). 생략하면 기존 동작 —
+            동률의 승자가 불안정 정렬에 달려 입력 길이·순서에 따라 바뀐다(ML 예측 정정 ML-2). 패리티에 묶인 PEAD 경로를
+            바꾸지 않으려고 기본값을 그대로 뒀다.
 
     Returns:
         Long DataFrame with columns ``code``, ``date`` (from ``trading_dates``),
@@ -110,9 +114,17 @@ def earnings_yoy_panel(
     cols = ["code", avail_col, value_col]
     if knowledge_col is not None:
         cols += [c for c in (*key_cols, knowledge_col) if c not in cols]
+    if tie_col is not None and tie_col not in cols:
+        cols.append(tie_col)
+
+    def by_avail(frame: pd.DataFrame) -> pd.DataFrame:
+        if tie_col is None:
+            return frame.sort_values("_avail")
+        return frame.sort_values(["_avail", tie_col], kind="stable")
+
     ea = earnings[cols].copy()
     ea["_avail"] = pd.to_datetime(ea[avail_col].astype(str).str.replace("-", ""), format="%Y%m%d")
-    ea = ea.dropna(subset=["_avail", value_col]).sort_values("_avail")
+    ea = by_avail(ea.dropna(subset=["_avail", value_col]))
 
     if knowledge_col is None:
         out = _asof_yoy(ea, dates, value_col)
@@ -166,7 +178,7 @@ def earnings_yoy_panel(
                 "yoy": np.nan, "age_days": np.nan,
             }))
             continue
-        frames.append(_asof_yoy(known.sort_values("_avail"), seg, value_col))
+        frames.append(_asof_yoy(by_avail(known), seg, value_col))
 
     if not frames:
         return pd.DataFrame(columns=["code", "date", "yoy", "age_days"])
