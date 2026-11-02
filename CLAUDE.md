@@ -1,6 +1,6 @@
 # swing-it — Claude 작업 지침
 
-한국 주식(KOSPI·KOSDAQ) 리서치 레포. main = kqflow TUI(`sw-flow`·`sw-ledger`) + 알파 심사 프레임워크(공개, MIT).
+한국 주식(KOSPI·KOSDAQ) 리서치 레포. main = 알파 심사 프레임워크(공개, MIT). 섹터 수급 관측 화면·일일 리포트는 2026-11 별도 저장소로 옮겼다(`~/git/sector-flow`).
 사용자의 실제 연구(스윙·미너비니·진화 GA·모의매매)는 대부분 **`feature-combined-strategy`**(이하 **fcs**,
 워크트리 `~/git/swing-it-feature-combined-strategy`)에 있고 main 에 머지되지 않았다. 아래에서 "(fcs)" 표시 경로는 main 에 없다.
 
@@ -9,7 +9,6 @@
 - 린트: `uv run --extra dev ruff check src/ tests/ research/ scripts/ examples/` (CI 와 같은 범위)
 - 가드레일 린트: `uv run python scripts/check_guardrails.py` (CI 단계). 규칙을 고치면 `tests/test_check_guardrails.py` 에
   위반을 주입하는 테스트를 같이 넣는다(통과만 보는 테스트는 규칙이 죽어도 초록이었다 — GUARDRAILS §4.5).
-- TUI 수정 뒤: `uv run python scripts/verify_merge.py <워크트리>` (수 분).
 - DB(TimescaleDB `kr_quant`, **읽기 전용**): `set -a; . ~/git/quant-airflow/.env; set +a` 뒤 `$KR_QUANT_DB`,
   psycopg2 는 `--extra pg`, 연결은 `con.set_session(readonly=True)`. 수집·스키마 변경은 quant-airflow 소관 — 거기에 요청한다.
 - 모의매매 (fcs): `uv run --with numba --extra pg python research/paper/leader_paper.py` — 하루 한 번,
@@ -74,12 +73,6 @@
   `tests/test_pattern_ga_fwm.py`(fcs, 변형별 DIM·GENE_NAMES 해시 회귀)를 돌린다.
 - 큰 캐시는 세션 scratchpad 나 `~/of80/` 에 둔다. /tmp 는 할당량(EDQUOT)에 걸렸다 — 만들기 전에 `du` 로 확인한다.
 - 긴 실행의 남은 시간은 첫 진행 줄을 실측해서 다시 계산한다(추정이 두 번 틀렸다).
-
-## kqflow TUI·리포트 (main, `src/swing_it/tui/`·`scripts/sector_flow.py`)
-- 화면은 수급 사실만 말한다. 리포트에는 구간 수익률 4개뿐이라 경로를 모른다. 그래서 눌림목·반전 **판정**을 점수화하는
-  제안은 하지 않는다(`reversal_flags` 의 ⚠ 는 판정 불가 라벨이다).
-- 비율 열은 분모 게이트를 같이 설계한다. 분모가 작으면 숫자 대신 결측을 낸다. 문턱은 목록 안 몫으로 잡는다.
-  이 결함이 다섯 번 나왔다(`flow_view.py` 최근집중 주석).
 
 ## 사용자 매매 원칙 (규칙·유전자 설계 때)
 - 수급 신뢰 순서: 기관 순매수만으로 충분하고 외국인 동반은 요구하지 않는다. 기관 안에서는 투신·연기금(`INST_DETAIL`)을 우선한다.

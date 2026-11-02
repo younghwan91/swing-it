@@ -1,7 +1,6 @@
 # 알파 심사 프레임워크 — 판정 기록
 
-이 문서는 저장소의 **두 번째 축**이다. 첫 번째 축(일일 섹터 자금흐름 관측, `kqflow`)은
-[README](../README.md) 에 있다.
+이 문서는 알파 심사 축의 판정 기록이다. 일일 섹터 자금흐름 관측(`kqflow`)은 2026-11 별도 저장소로 분리했다.
 
 두 축의 성격은 다르다. **심사는 "이 신호가 미래 수익을 예측하는가"를 묻고, 관측은 "지금
 무슨 일이 일어났는가"만 잰다.**
@@ -269,9 +268,8 @@ src/swing_it/
 ├── diagnostics/         # R-멀티플 분포·취약성·gate_report(리포터)·trials(다중검정 원장)
 ├── features/            # fundamentals(실적 YoY·정정공시 bitemporal) · universe(PIT) ·
 │                        #   volatility(직전 60일 실현변동성)
-├── strategies/          # pead(게이트를 통과한 유일한 알파) · regime(회전 널) ·
+└── strategies/          # pead(게이트를 통과한 유일한 알파) · regime(회전 널) ·
 │                        #   lowvol·combo·hedge 는 정식 배터리로 아직 재심사되지 않은 **후보**
-└── tui/                 # sw-flow·sw-ledger — 렌더(순수함수·단위테스트)와 curses 를 분리한다
 ```
 
 **심사 대상과 판정 기록 (research/)**
