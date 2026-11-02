@@ -10,14 +10,17 @@
 ``SWING_IT_B_OUT`` 을 주면 대조 결과를 그 경로에 JSON 으로 쓴다(성과 숫자 없음, 개수와 최대 차만).
 
 **표 지문을 먼저 본다.** B.json 은 지문 ``e66f309e07de`` 표에서 나왔다. 2026-11-02 16:55 재계산(PR #14, 052670 ×1500 등)으로 지문이 ``400dfcc393ab`` 가 됐다.
-모델이 움직여 R 은 그대로이고 O 만 어긋난다 — :func:`reproduction_verdict` 가 "표 바뀜"과 "코드 회귀"를 가른다.
+모델이 움직여 O 가 어긋난다. 그래서 판정(:func:`reproduction_verdict`)은 둘로 갈린다.
+
+- 지문이 B.json 과 같으면 B.json 과 정확히 대조한다.
+- 다르면 O 밖은 B.json 과 정확히 대조하고, 전체는 ``SWING_IT_B_BASELINE`` 과 정확히 대조한다. 베이스라인이 없으면 "판정 불가"로 실패한다. O 가 B.json 과 얼마나 다른지는 보고만 하고 폭으로 판정하지 않는다.
 
 **IC 절은 기본으로 건너뛴다.** IC 패널은 ``load_risk_inputs(2016-11-01)`` 인데 준비 400일이 붙어 약 2015-09 부터 읽는다. 2009-01~2016-08 잠금 대역 안이다.
 그래서 기본은 B.json 의 ``ic_by_year`` 를 입력으로 쓰고 ``ic`` 절을 대조하지 않는다. ``SWING_IT_B_FULL_IC=1`` 은 잠금 대역을 읽으니 smallcap 판정 전에는 쓰지 않는다.
 
-**솔버 판.** ``uv.lock`` 에 cvxpy·clarabel 이 없어 새 환경에서 O 가 5e-6 안팎 움직인다. 결과 JSON 에 판을 적는다.
+**솔버 판.** ``uv.lock`` 에 cvxpy·clarabel 이 없어 새 환경에서 O 가 5e-6 안팎 움직인다. 결과 JSON 에 판을 적는다. 베이스라인도 같은 판에서 만든다.
 
-**코드 회귀의 진짜 검사.** B.json 대조는 표·솔버 차이를 함께 본다. ``SWING_IT_B_BASELINE=<옛 트리 출력 JSON>`` 을 주면 같은 표·같은 환경에서 옛 코드가 낸 값과 맞대어 하나라도 다르면 실패한다.
+**베이스라인.** ``SWING_IT_B_BASELINE=<옛 트리 출력 JSON>`` 은 같은 표·같은 환경에서 옮기기 전 코드(``03fee83``)가 낸 값이다. 표가 또 바뀌거나 환경이 바뀌면 그 트리를 다시 돌려 만든다.
 옛 출력은 ``SWING_IT_B_GOT`` 으로 만든다. 성과 숫자가 들어 있으니 레포 밖에 둔다.
 """
 
@@ -39,14 +42,8 @@ REPO = Path(__file__).resolve().parents[2]
 TOL = 1e-10
 SECTIONS = ("cells", "ic", "invariants", "mode", "parity", "primary")  # code·fingerprints·elapsed_s 는 실행마다 다르다
 FP_OF_B_JSON = "e66f309e07de"
-#: 지문별 알려진 O 차이 폭(B.json 은 지문 e66f309e07de). R 은 어느 표에서도 그대로다.
-#: 400dfcc393ab 의 IR 차이는 솔버 환경에 달렸다: 한 환경 3.83e-6(검증 9단계 bmodels·docenv), 다른 환경 5.65e-6(cvxpy 1.9.3, clarabel 0.11.1, 둘 다 uv.lock 에 없다).
-#: 5.65e-6 쪽은 옮기기 전 코드(03fee83)도 같은 표·같은 환경에서 830개 값이 전부 같게 냈다 — 코드가 만든 차이가 아니다. 폭은 진짜 회귀 검사가 아니라 안전망이다.
-#: 코드 회귀는 ``SWING_IT_B_BASELINE`` 으로 옛 트리 출력과 맞대어 본다.
-KNOWN_TABLE_BOUNDS = {"400dfcc393ab": {"ir": 6e-6, "count": 5, "other": 5e-4}}
+#: O 값의 경로. 그 밖(R·라벨·패리티·불변식)은 표가 바뀌어도 그대로여야 한다. O 밖은 이 정의 하나로 가른다.
 _O_PATH = re.compile(r"/O/|^/cells/|^/primary/(rho|boot_dIR|report/f_boot|verdict/(dIR_|exante_risk_ratio|null_q95_O|realized_active_risk_ratio))")
-_IR_PATH = re.compile(r"/O/IR_\dx$|/verdict/dIR_\dx$")
-_COUNT_PATH = re.compile(r"/n_[a-z_]+$")
 
 
 def compare(got, want, path: str = "", bad: "list | None" = None, stat: "list | None" = None):
@@ -98,28 +95,30 @@ def fp_short(fp) -> str:
     return hashlib.sha256(json.dumps(fp, default=str).encode()).hexdigest()[:12]
 
 
-def reproduction_verdict(bad: list, *, fp_short: str) -> dict:
-    """어긋난 목록을 판정한다. "같음"·"표 바뀜"(R 그대로, O 는 알려진 폭 안)·"코드 회귀"·"모르는 표". O 차이는 숨기지 않고 개수·최대를 낸다."""
-    nums = [b for b in bad if b[1] == "num"]
-    o = [b for b in nums if _O_PATH.search(b[0])]
+def is_o_number(b: tuple) -> bool:
+    """어긋남 한 줄이 O 의 숫자인가. 라벨·키 어긋남은 O 경로에 있어도 O 차이가 아니다."""
+    return b[1] == "num" and bool(_O_PATH.search(b[0]))
+
+
+def reproduction_verdict(bad: list, *, fp_short: str, baseline_bad: "list | None" = None) -> dict:
+    """판정: "같음"(지문 같고 어긋남 없음)·"표 바뀜"(O 밖 그대로, 베이스라인과 차이 0)·"코드 회귀"·"판정 불가"(표가 다른데 베이스라인 없음).
+
+    ``bad`` 는 B.json 대조, ``baseline_bad`` 는 베이스라인 대조다. O 차이 개수·최대는 보고용이고 판정에 안 쓴다.
+    """
+    o = [b for b in bad if is_o_number(b)]
     diff = lambda b: abs(float(b[2]) - float(b[3]))  # noqa: E731
-    ir = [diff(b) for b in o if _IR_PATH.search(b[0])]
-    out = {"n_bad": len(bad), "n_O": len(o), "max_O": max(map(diff, o), default=0.0), "max_IR": max(ir, default=0.0), "fingerprint": fp_short,
+    non_o = [b[0] for b in bad if not is_o_number(b)]
+    out = {"n_bad": len(bad), "n_O": len(o), "n_non_O": len(non_o), "max_O": max(map(diff, o), default=0.0), "fingerprint": fp_short,
            "worst_O": sorted(((b[0], diff(b)) for b in o), key=lambda x: -x[1])[:5]}
-    if not bad:
-        return {**out, "kind": "같음"}
     if fp_short == FP_OF_B_JSON:
-        return {**out, "kind": "코드 회귀", "why": "표가 B.json 과 같은데 어긋난다"}
-    non_o = [b[0] for b in bad if not (b[1] == "num" and _O_PATH.search(b[0]))]
+        return {**out, "kind": "같음"} if not bad else {**out, "kind": "코드 회귀", "why": "표가 B.json 과 같은데 어긋난다"}
     if non_o:
         return {**out, "kind": "코드 회귀", "why": f"O 밖이 어긋난다: {non_o[:5]}"}
-    if fp_short not in KNOWN_TABLE_BOUNDS:
-        return {**out, "kind": "모르는 표", "why": "이 지문의 O 폭을 잰 적이 없다. 사람이 보고 KNOWN_TABLE_BOUNDS 에 적는다"}
-    lim = KNOWN_TABLE_BOUNDS[fp_short]
-    over = [b[0] for b in o if diff(b) > (lim["ir"] if _IR_PATH.search(b[0]) else lim["count"] if _COUNT_PATH.search(b[0]) else lim["other"])]
-    if over:
-        return {**out, "kind": "코드 회귀", "why": f"표 변화의 알려진 폭을 넘었다: {over[:5]}"}
-    return {**out, "kind": "표 바뀜", "why": f"지문 {FP_OF_B_JSON} → {fp_short}"}
+    if baseline_bad is None:
+        return {**out, "kind": "판정 불가", "why": f"표가 B.json 과 다른데({FP_OF_B_JSON} → {fp_short}) SWING_IT_B_BASELINE 이 없다"}
+    if baseline_bad:
+        return {**out, "kind": "코드 회귀", "why": f"베이스라인과 {len(baseline_bad)}곳 어긋난다: {[b[0] for b in baseline_bad[:5]]}"}
+    return {**out, "kind": "표 바뀜", "why": f"지문 {FP_OF_B_JSON} → {fp_short}, 베이스라인과 차이 0"}
 
 
 def test_compare_sections_catches_a_missing_top_level_section():
@@ -137,17 +136,20 @@ def _bad(path, g=0.0, w=1e-7, kind="num"):
 
 
 def test_verdict_tells_a_changed_table_from_a_code_regression():
-    """표가 그대로인데 어긋나면 코드 회귀다. 표가 바뀌었으면 R 은 그대로여야 하고 O 는 알려진 폭 안이어야 한다."""
+    """같은 표면 B.json 과 정확히. 다른 표면 O 밖은 B.json 과, 전체는 베이스라인과 정확히. O 폭으로 넘기지 않는다."""
     same, fp = "e66f309e07de", "400dfcc393ab"
     assert reproduction_verdict([], fp_short=same)["kind"] == "같음"
     assert reproduction_verdict([_bad("/primary/O/IR_2x")], fp_short=same)["kind"] == "코드 회귀"
-    assert reproduction_verdict([], fp_short=fp)["kind"] == "같음"
-    ok = reproduction_verdict([_bad("/primary/O/IR_2x", 1.0, 1.0 + 1e-6), _bad("/cells/c/O/n_dust", 3, 0), _bad("/primary/verdict/null_q95_O", 1.0, 1.0 + 2e-4)], fp_short=fp)
-    assert ok["kind"] == "표 바뀜" and ok["n_O"] == 3 and ok["max_O"] == pytest.approx(3.0) and ok["max_IR"] == pytest.approx(1e-6)
-    assert reproduction_verdict([_bad("/primary/R/IR_2x", 1.0, 1.0 + 1e-6)], fp_short=fp)["kind"] == "코드 회귀", "R 은 표 변화와 무관하게 그대로다"
-    assert reproduction_verdict([_bad("/primary/O/IR_2x", 1.0, 1.0 + 1e-4)], fp_short=fp)["kind"] == "코드 회귀", "알려진 폭을 넘으면 표로 설명되지 않는다"
-    assert reproduction_verdict([_bad("/primary/verdict/verdict", "a", "b", "value")], fp_short=fp)["kind"] == "코드 회귀", "라벨은 표 변화로 바뀌면 안 된다"
-    assert reproduction_verdict([_bad("/primary/O/IR_2x")], fp_short="000000000000")["kind"] == "모르는 표", "모르는 표의 폭은 아무도 모른다"
+    o_moved = [_bad("/primary/O/IR_2x", 1.0, 1.0 + 1e-6), _bad("/cells/c/O/n_dust", 3, 0), _bad("/primary/verdict/null_q95_O", 1.0, 1.0 + 2e-4)]
+    ok = reproduction_verdict(o_moved, fp_short=fp, baseline_bad=[])
+    assert ok["kind"] == "표 바뀜" and ok["n_O"] == 3 and ok["n_non_O"] == 0 and ok["max_O"] == pytest.approx(3.0)
+    assert reproduction_verdict([], fp_short=fp, baseline_bad=[])["kind"] == "표 바뀜"
+    assert reproduction_verdict([_bad("/primary/O/IR_2x", 1.0, 1.0 + 1e3)], fp_short=fp, baseline_bad=[])["kind"] == "표 바뀜", "O 폭은 판정이 아니다. 베이스라인이 판정한다"
+    assert reproduction_verdict([_bad("/primary/R/IR_2x", 1.0, 1.0 + 1e-6)], fp_short=fp, baseline_bad=[])["kind"] == "코드 회귀", "O 밖은 표가 바뀌어도 그대로다"
+    assert reproduction_verdict([_bad("/primary/verdict/verdict", "a", "b", "value")], fp_short=fp, baseline_bad=[])["kind"] == "코드 회귀", "라벨은 O 차이가 아니다"
+    assert reproduction_verdict(o_moved, fp_short=fp, baseline_bad=[_bad("/primary/O/IR_2x")])["kind"] == "코드 회귀", "베이스라인과 어긋나면 코드다"
+    assert reproduction_verdict(o_moved, fp_short=fp)["kind"] == "판정 불가", "베이스라인 없이 O 차이가 표 탓인지 코드 탓인지 모른다"
+    assert reproduction_verdict([], fp_short=fp)["kind"] == "판정 불가"
 
 
 def test_compare_catches_each_kind_of_difference():
@@ -174,7 +176,7 @@ def test_promoted_code_reproduces_b_json():
     cache.mkdir(parents=True, exist_ok=True)
     full = json.loads((REPO / "research/logs/pead_optimizer/B.json").read_text(encoding="utf-8"))
     fp = fp_short(P4.fingerprint("daily_bars_adjusted", B.END_B))
-    print(f"표 지문 {fp} (B.json {FP_OF_B_JSON}) — {'같은 표' if fp == FP_OF_B_JSON else '표가 바뀌었다. O 는 어긋날 수 있고 R 은 어긋나면 안 된다'}", flush=True)
+    print(f"표 지문 {fp} (B.json {FP_OF_B_JSON}) — {'같은 표' if fp == FP_OF_B_JSON else '표가 바뀌었다. O 밖은 어긋나면 안 되고, 전체는 베이스라인과 맞댄다'}", flush=True)
     assert fp_short(full["fingerprints"]["daily_bars_adjusted_b_range"]) == FP_OF_B_JSON
 
     class Args:
@@ -200,20 +202,19 @@ def test_promoted_code_reproduces_b_json():
     res["invariants"] = {"violations": 0, "steps_checked": steps}
     got = json.loads(json.dumps(res, ensure_ascii=False, default=float))
     bad, (n, worst) = compare_sections(got, full, skip=skip)
-    v = reproduction_verdict(bad, fp_short=fp)
     versions = {p: importlib.metadata.version(p) for p in ("cvxpy", "clarabel", "numpy", "scipy")}
     out = {"compared_numbers": n, "max_abs_diff": worst, "tol": TOL, "n_mismatch": len(bad), "core_ref": Args.core_ref,
            "sections_compared": [s for s in SECTIONS if s not in skip], "sections_skipped": list(skip), "elapsed_s": time.time() - t0,
-           "verdict": v, "R_mismatch": [b[0] for b in bad if "/R/" in b[0]], "versions": versions,
+           "versions": versions,
            "note": "code·fingerprints·elapsed_s 는 실행마다 달라 뺐다. ic 절을 건너뛰면 IC 는 B.json 의 ic_by_year 를 입력으로 쓴 것이다."}
     if os.environ.get("SWING_IT_B_GOT"):            # 코드끼리 대조할 때만 — 성과 숫자가 들어 있으니 레포 밖에 둔다
         Path(os.environ["SWING_IT_B_GOT"]).write_text(json.dumps(got, ensure_ascii=False), encoding="utf-8")
-    base_bad: list = []
+    base_bad = None
     if os.environ.get("SWING_IT_B_BASELINE"):
         base = json.loads(Path(os.environ["SWING_IT_B_BASELINE"]).read_text(encoding="utf-8"))
         base_bad, (base_n, base_worst) = compare_sections(got, base, skip=skip)
         out["vs_baseline"] = {"path": Path(os.environ["SWING_IT_B_BASELINE"]).name, "compared_numbers": base_n, "n_mismatch": len(base_bad), "max_abs_diff": base_worst}
+    v = out["verdict"] = reproduction_verdict(bad, fp_short=fp, baseline_bad=base_bad)
     if os.environ.get("SWING_IT_B_OUT"):
         Path(os.environ["SWING_IT_B_OUT"]).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    assert base_bad == [], base_bad[:20]
-    assert v["kind"] in ("같음", "표 바뀜"), (v, bad[:20])
+    assert v["kind"] in ("같음", "표 바뀜"), (v, bad[:20], base_bad[:20] if base_bad else None)

@@ -24,7 +24,7 @@
 
 `research/experiments/pead_optimizer_b.py` 는 위 함수를 부르는 러너가 됐다. **지문 `e66f309e07de` 표에서** 옮긴 뒤의 코드가 `B.json` 의 숫자를 1e-10 안에서 재현했다(`research/logs/pead_optimizer/B_modules_parity.json`, 재현 방법은 `tests/real_db/test_b_json_reproduction.py`).
 
-**지금 표에서는 O 가 어긋난다.** 2026-11-02 16:55 재계산(052670 ×1500 등)으로 표 지문이 `400dfcc393ab` 가 됐다. R 경로는 그대로이고 O 값 333~334개가 움직인다. 최대 차는 IR 3.83e-6 또는 5.65e-6, 폴드 IR 수 e-5, 널 q95 2.2e-4, `n_dust` 정수 3 이다. IR 이 두 값인 것은 솔버 환경 차이다. cvxpy·clarabel 은 `uv.lock` 에 없고, 5.65e-6 은 cvxpy 1.9.3·clarabel 0.11.1 에서 쟀다. **코드가 만든 차이는 아니다.** 옮기기 전 코드(`03fee83`)를 같은 표·같은 환경에서 돌린 출력과 값 830개가 차이 0 이다(이 대조는 IC 를 `B.json` 입력으로 넣었다). 재현 시험은 지문을 먼저 보고 "표 바뀜"과 "코드 회귀"를 가르고, `SWING_IT_B_BASELINE` 을 주면 옛 트리 출력과 맞댄다.
+**지금 표에서는 O 가 어긋난다.** 2026-11-02 16:55 재계산(052670 ×1500 등)으로 표 지문이 `400dfcc393ab` 가 됐다. R 경로는 그대로이고 O 값 333~334개가 움직인다. 최대 차는 IR 3.83e-6 또는 5.65e-6, 폴드 IR 수 e-5, 널 q95 2.2e-4, `n_dust` 정수 3 이다. IR 이 두 값인 것은 솔버 환경 차이다. cvxpy·clarabel 은 `uv.lock` 에 없고, 5.65e-6 은 cvxpy 1.9.3·clarabel 0.11.1 에서 쟀다. **코드가 만든 차이는 아니다.** 옮기기 전 코드(`03fee83`)를 같은 표·같은 환경에서 돌린 출력과 값 830개가 차이 0 이다(이 대조는 IC 를 `B.json` 입력으로 넣었다). 재현 시험은 지문을 먼저 본다. B.json 과 같은 표면 B.json 과 정확히 대조한다. 다른 표면 O 밖은 B.json 과 정확히, 전체는 `SWING_IT_B_BASELINE`(옛 트리 출력)과 정확히 대조하고, 베이스라인이 없으면 "판정 불가"로 실패한다. O 가 B.json 과 얼마나 다른지는 보고만 한다.
 
 **IC 절은 기본으로 건너뛴다.** IC 패널은 `load_risk_inputs(2016-11-01)` 에 준비 400일이 붙어 약 2015-09 부터 읽는다. 2009~2016-08 잠금 대역에 걸린다. 그래서 기본 재현은 `B.json` 의 `ic_by_year` 를 입력으로 쓰고 `ic` 절을 대조하지 않는다. 그 표에서 IC 자체가 재현되는지는 지금 보지 않은 것이다.
 
@@ -46,7 +46,7 @@
 
 **11단계의 범위.** 전진 모니터링은 구현되지 않았다. 귀속은 백테스트 전용이다. core `load_risk_inputs` 가 `end` ≥ 2026-09-14 를 거부하므로 지금 경로로는 전진 구간을 귀속할 수 없다. 페이퍼 장부 경보는 quant-airflow paper-monitor 쪽 일이다. 11단계가 열려도 볼 것이 없다는 뜻이다. `attribution_report` 의 평균 몫은 귀속 합이 분모다(B: 0.896). 실제 수익 기준(0.806)과 부호 있는 차는 `detail=True` 로 낸다. 기본 끔은 B 재현 때문이다. core `rolling_ic` 의 `date` 는 신호일이고 라벨이 끝나 알게 된 날이 아니다. 모니터링에 쓰면 h+1 거래일을 미뤄 읽는다.
 
-**core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
+**core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e`·cvxpy 1.9.3·clarabel 0.11.1 로 돌리고, 거기서는 건너뛰면 실패다. O 골든은 실제 솔버 값이 아니라 `03fee83` 에서 녹화한 응답을 재생해 솔버 밖만 1e-9 로 잰다(`tests/test_pead_optimizer_book_golden.py`). 실제 솔버는 한 번만 돌려 불변식과 상태를 본다.
 
 ## 경계 검사
 
