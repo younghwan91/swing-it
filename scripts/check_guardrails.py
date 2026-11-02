@@ -244,11 +244,6 @@ _PRICE_READ_EXEMPT = {
     # 규칙 (d)가 테스트 파일을 하나씩 명시하는 것과도 비대칭이었다.
     "tests/test_read_prices_guard.py",  # 정문의 가드 자체를 검사 — 원자료를 봐야 한다
     "tests/test_price_adjust.py",       # 조정 로직 검사 — 조정 전/후를 직접 비교한다
-    # 2026-08-27: 무결성 감사기. 이 규칙이 막으려는 것은 "유니버스를 조용히 좁히는
-    # 로더"인데, 이 파일은 유니버스를 **만들지 않는다** — count(*) 로 중복·OHLC
-    # 불변식·단위 정합만 센다. 수익률 시계열을 만드는 코드가 이 파일에 들어오면
-    # 면제를 거둬야 한다.
-    "scripts/verify_report.py",
 }
 
 # 상장 마스터(stocks)와의 INNER JOIN 은 **WHERE 절 없이도** 폐지 종목을 떨군다.
@@ -265,16 +260,6 @@ _SD_JOIN_STOCKS = re.compile(
 _JOIN_RULE_EXEMPT = {
     "scripts/check_guardrails.py",        # 규칙 자신(위 정규식·주석)
     "tests/test_check_guardrails.py",    # 규칙의 회귀 테스트 — 위반 모양을 픽스처로 담는다
-    # 리포트 **검증기**. 이 규칙은 "심사에 쓰는 유니버스가 조용히 좁아지는 것"을
-    # 막는 것이고, 여기 조인은 그 반대 목적이다 — `scripts/sector_flow.py` 가
-    # 만든 값을 대조하려면 **그것과 같은 유니버스**여야 한다(그쪽은 pandas
-    # `merge(how="inner")` 라 이 정규식에 안 걸린다). 다른 유니버스로 재계산하면
-    # 전 칸이 불일치로 뜨고 검사가 무력해진다.
-    #
-    # 좁아진다는 사실 자체는 숨기지 않는다 — `layer_f` 가 그 폭을 **재서 화면에
-    # 적는다**("네이버 폐지 백필이 유니버스 밖에 남긴 종목 수"). 관측 화면의
-    # 한계이지 심사 성적이 아니므로 실패로 만들지 않고 수치로 남긴다.
-    "scripts/verify_report.py",
 }
 
 
