@@ -19,7 +19,7 @@
   아니라 공용 하버스에 박혀 있고, 그 하버스를 안 쓰는 게이트는 CI 린트가 빌드를 깨뜨린다.
 - **기각이 산출물이다.** 통과든 기각이든 근거 숫자와 함께 `research/logs/*/VERDICT.md` 에 남는다.
 
-섹터 수급 관측 화면과 일일 리포트는 2026-11 별도 저장소로 분리했다.
+섹터 수급 관측 화면과 일일 리포트는 이 저장소에 없다(비공개 별도 저장소 `sector-flow`).
 
 ## Quick start
 
@@ -51,6 +51,7 @@ uv run python research/experiments/prop_gate.py   # 심사 배터리 + 랜덤 �
 |---|---|---|
 | `sw-pead` | 게이트를 통과한 알파의 재현 백테스트 | 읽기 전용 |
 | `research/` + `swing_it.validation`·`diagnostics` | 알파 가설을 개별 트레이드 분포로 심사하는 배터리. 판정문과 시행 원장을 남긴다 | 읽기 전용(배터리 자체는 불요) |
+| `python -m swing_it.pipeline status` | 연구마다 11단계 중 어디까지 왔는지 원장에서 읽어 보여 준다 | 불요 |
 
 ## 2. 왜 이렇게 만들었나 — 알파 심사 프레임워크
 
@@ -78,12 +79,22 @@ uv run python research/experiments/prop_gate.py
 부탁이 아니라 CI 린트([`scripts/check_guardrails.py`](scripts/check_guardrails.py))로 강제된다.
 게이트가 공용 하버스를 안 쓰거나 시행 수를 원장에 안 남기면 빌드가 깨진다.
 
-**심사 결과: 통과한 것은 PEAD 하나, 나머지 알파 가설과 위험 오버레이는 전부 기각.**
+**심사 결과: 게이트를 통과한 것은 PEAD 하나, 나머지 알파 가설과 위험 오버레이는 전부 기각.**
 기각된 가설도 같은 형식의 판정문으로 남아 있어, 같은 가설을 파라미터만 바꿔 다시 돌리는 낚시를 막는다.
+PEAD 를 넘어선 두 후속 연구도 닫혔다. 위험모델·최적화 북은 **판단 불가**(비교할 만큼 신호가 강하지 않았다,
+[`research/logs/pead_optimizer/B_verified.md`](research/logs/pead_optimizer/B_verified.md)), ML 수익률 예측은
+**비용 뒤 이득 없음**([`research/logs/ml_forecast/S2_verified.md`](research/logs/ml_forecast/S2_verified.md)).
 
 > 판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 · 데이터 스키마:
 > [`docs/alpha-research.md`](docs/alpha-research.md). 규칙 원본은 [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md),
 > 통과한 유일한 알파는 [`docs/pead-strategy.md`](docs/pead-strategy.md)(재현 CLI `sw-pead`).
+
+**연구는 11단계를 순서대로만 지난다** — 유니버스 → 데이터 → 알파 발굴 → 알파 검증(IC/ICIR) → ML 예측 →
+위험모델 → 포트폴리오 → 거래비용 → 백테스트 → 주문 실행 → 성과 기여·모니터링. 연구마다
+`research/logs/<연구>/PIPELINE.jsonl` 원장에 단계별 판정과 증거 파일 해시를 적고, 러너는 앞 단계가 열려 있어야
+돌며(`require_stage`), CI 가 그 선언을 검사한다. 실수와 망각을 막는 장치이지 위조를 막는 보안 장치는 아니다.
+10단계(주문)와 11단계의 전진 모니터링은 main 에 구현이 없고, 게이트는 그것을 부른 코드만 막는다 — 자세한 한계는
+[`docs/PIPELINE.md`](docs/PIPELINE.md).
 
 ## 3. 구조
 
@@ -93,13 +104,18 @@ flowchart TD
 
     DB -->|"SELECT 전용"| ST["storage.py\n유일한 DB 접근 정문"]
 
-    ST --> ALPHA["research/ +\nengine·validation·diagnostics·features"]
+    ST --> ALPHA["research/ +\nengine·validation·diagnostics·features·book"]
     ALPHA --> PEAD["sw-pead\n(strategies/pead.py)\n게이트 통과 알파 재현 백테스트"]
+    GATE["pipeline/\n11단계 게이트 + PIPELINE.jsonl"] -. "앞 단계가 열려야 돈다" .-> ALPHA
 ```
 
 ```
 src/swing_it/
 ├── storage.py           # 읽기 전용 DB 접근 — 유일한 정문
+├── pipeline/            # 11단계 게이트 · 원장 · 단계 입력 검사
+├── book/                # 포트폴리오 북 — 순위·최적화 구성, 위험모델 입력, 비용, 회계, 널
+├── price_adjust.py      # 조정주가 생성 (quant-airflow 의 *_price_adjust DAG 가 실행)
+├── news/                # 기사 LLM 판정 (Batch API)
 └── engine/ validation/ diagnostics/ features/ strategies/   # 알파 심사 라이브러리
 scripts/                 # check_guardrails · make_hero
 research/                # 신호 정의 · 실험 러너 · VERDICT/TRIALS 원장
@@ -123,6 +139,8 @@ uv run python scripts/make_hero.py            # 첫 화면 그림 재생성 → 
 |---|---|
 | [`docs/alpha-research.md`](docs/alpha-research.md) | 판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 · 데이터 스키마 |
 | [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md) | 연구 규율 원본 — 사전등록 템플릿·완료 정의 |
+| [`docs/PIPELINE.md`](docs/PIPELINE.md) | 11단계 — 단계별 함수, 게이트 규칙, 새 연구를 더하는 법, 막지 못하는 것 |
+| [`docs/execution/DESIGN.md`](docs/execution/DESIGN.md) | 주문 실행 설계(미구현) |
 | [`docs/pead-strategy.md`](docs/pead-strategy.md) | 게이트를 통과한 유일한 알파 (재현 CLI `sw-pead`) |
 | `research/logs/*/VERDICT.md` | 가설별 판정문 전문. 기각도 통과와 같은 형식으로 남는다 |
 
