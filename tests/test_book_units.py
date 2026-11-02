@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -322,11 +323,20 @@ def test_delisted_holding_goes_to_cash_at_its_last_close():
 def test_spec_changes_reach_the_book():
     """규칙이 정말 인자로 닿는가 — 기본값에 묶여 있으면 새 연구가 못 쓴다."""
     ctx = synthetic_ctx(0)
-    small = simulate(ctx, "R", flags=NO_COSTS, spec=BookSpec(top_n=3))
+    small = simulate(ctx, "R", flags=NO_COSTS, spec=replace(DEFAULT_SPEC, top_n=3))
     base = simulate(ctx, "R", flags=NO_COSTS)
     assert max(r.n_names for r in small) < max(r.n_names for r in base)
-    short = simulate(ctx, "R", flags=NO_COSTS, spec=BookSpec(horizon=20))
-    assert all(r.n_tranches <= 1 for r in short) and check_invariants(short, "R", spec=BookSpec(horizon=20), costs=False) == []
+    one = replace(DEFAULT_SPEC, horizon=20)
+    short = simulate(ctx, "R", flags=NO_COSTS, spec=one)
+    assert all(r.n_tranches <= 1 for r in short) and check_invariants(short, "R", spec=one, costs=False) == []
+
+
+@pytest.mark.parametrize("kw", [{}, {"min_names_after_nan": True}, {"strict_lam_cause": True}])
+def test_a_new_study_must_state_the_reproduction_switches(kw):
+    """끔이 조용한 기본이면 새 연구가 B 의 결함을 물려받는다."""
+    with pytest.raises(TypeError, match="min_names_after_nan|strict_lam_cause"):
+        BookSpec(top_n=5, **kw)
+    assert (DEFAULT_SPEC.min_names_after_nan, DEFAULT_SPEC.strict_lam_cause) == (False, False)
 
 
 def test_rank_book_runs_without_a_risk_model():
@@ -372,14 +382,14 @@ def test_permutation_null_passes_spec_max_weight_to_the_invariant(monkeypatch):
         return []
 
     monkeypatch.setattr(nulls, "check_invariants", spy)
-    spec = BookSpec(max_weight=0.03)
+    spec = replace(DEFAULT_SPEC, max_weight=0.03)
     ctx = synthetic_ctx(0)
     nulls._G.update({"ctx": ctx, "cell": None, "ic": None, "sr": None, "window": ("2019-01-01", "2030-01-01"), "spec": spec, "flags": NO_COSTS, "ann": 1.0})
     try:
         nulls._perm_task((0, "R"))
     finally:
         nulls._G.clear()
-    assert seen["max_weight"] == 0.03 and seen["costs"] is False and seen["spec"] is spec
+    assert seen["spec"].max_weight == 0.03 and seen["costs"] is False and seen["spec"] is spec
 
 
 def test_permutation_null_uses_the_annualisation_it_is_given():
@@ -555,7 +565,7 @@ def test_simulate_passes_the_min_names_option_to_the_rank_book():
     rank = np.full_like(ctx.sig, np.nan)
     rank[-3:] = 1.0
     off = simulate(ctx, "R", flags=NO_COSTS, rank_sig=rank)
-    on = simulate(ctx, "R", flags=NO_COSTS, rank_sig=rank, spec=BookSpec(min_names_after_nan=True))
+    on = simulate(ctx, "R", flags=NO_COSTS, rank_sig=rank, spec=replace(DEFAULT_SPEC, min_names_after_nan=True))
     assert any(r.n_names for r in off) and not any(r.n_names for r in on)
 
 

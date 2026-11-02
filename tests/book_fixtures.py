@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 from krx_quant_core.backtest.crosssectional import _trailing_adv
 
 from swing_it.book.context import Ctx, models_from_mask
-from swing_it.book.spec import BookSpec
+from swing_it.book.spec import DEFAULT_SPEC
 
 SECTORS = ("G10", "G20", "G30")
 NAMES = ["market", *SECTORS, "size", "momentum"]
@@ -112,7 +114,7 @@ def hand_ctx():
     ctx = Ctx(dates=dates, C=C, tv_won=tv, adv=adv, cap=cap, sig=sig, ret=ret, lab=np.full((nN, nD), "G10", dtype=object),
               market=np.array(["KOSPI", "KOSDAQ"] * 3, dtype=object), grid=grid, models=models_from_mask(np.ones((nN, nD), bool), grid),
               delist_after=delist_after)
-    spec = BookSpec(step=5, horizon=5, top_n=2, min_names=2, adv_floor=1.0, cap_rank=(0, 6))
+    spec = replace(DEFAULT_SPEC, step=5, horizon=5, top_n=2, min_names=2, adv_floor=1.0, cap_rank=(0, 6))
 
     def bench(el, f, fn):
         return float(np.mean([ctx.Cff[ix[c], fn] / C[ix[c], f] - 1.0 for c in el if np.isfinite(C[ix[c], f])]))

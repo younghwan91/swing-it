@@ -31,7 +31,7 @@ from swing_it.validation.ic import daily_rank_ic, fold_ic
 
 PIPELINE = ("example_rank_book", Stage.BACKTEST)
 
-SPEC = BookSpec(step=20, horizon=60, top_n=5, min_names=10, adv_floor=1000.0, cap_rank=(0, 40))
+SPEC = BookSpec(step=20, horizon=60, top_n=5, min_names=10, adv_floor=1000.0, cap_rank=(0, 40), min_names_after_nan=True, strict_lam_cause=True)
 WINDOW = ("2020-06-01", "2021-12-31")
 END = "2021-12-30"
 ANN = float(np.sqrt(252.0 / SPEC.step))

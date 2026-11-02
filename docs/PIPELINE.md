@@ -20,7 +20,7 @@
 | 10 | 주문 실행 | main 에 없음 — `docs/execution/DESIGN.md` | 먼저 dry-run. 실주문 경로의 첫 문장은 `require_execution_approval` 이다(린트 (l)). 아래 **게이트가 막지 못하는 주문** 참고 |
 | 11 | 성과 기여·모니터링 | `attribution_report`, core `factor_attribution` | `research/experiments/pead_optimizer_b_report.py`. **백테스트 전용, 전진 모니터링 미구현** |
 
-북의 규칙은 `swing_it.book.spec.BookSpec` 으로 넘긴다. 기본값은 PEAD 단계 B 사전등록 값이다. 판정 바(`verdict`)는 연구마다 사전등록하므로 러너에 남는다.
+북의 규칙은 `swing_it.book.spec.BookSpec` 으로 넘긴다. 필드 기본값은 PEAD 단계 B 사전등록 값이다. 재현 스위치 둘은 기본값이 없어 새 연구가 직접 적는다(`DEFAULT_SPEC` 은 B 재현 전용). 판정 바(`verdict`)는 연구마다 사전등록하므로 러너에 남는다.
 
 `research/experiments/pead_optimizer_b.py` 는 위 함수를 부르는 러너가 됐다. **지문 `e66f309e07de` 표에서** 옮긴 뒤의 코드가 `B.json` 의 숫자를 1e-10 안에서 재현했다(`research/logs/pead_optimizer/B_modules_parity.json`, 재현 방법은 `tests/real_db/test_b_json_reproduction.py`).
 
@@ -40,7 +40,7 @@
 
 **5단계의 한계.** N1(라벨 섞기)은 학습 경로 스모크다. 누출 검사가 아니다. 주입한 누출 6종을 하나도 못 잡았다. 누출은 절단 동일성과 `check_forecast` 로 본다. ML 연구는 닫혔고 `check_forecast` 를 안 부른 채 끝났다. 새 예측 러너는 거래일 달력을 넘겨 부른다.
 
-**7단계 알려진 결함 — 재사용 전에 고칠 것.** 얼린 칸(거래 불가 보유)이 표류로 종목 상한·업종 밴드를 넘으면 문제가 infeasible 이 되어 O 북이 그 스텝을 멈춘다(B 2022-04-06 k=33 `solver_fail`). 얼린 칸을 분리하면 O 숫자가 바뀌어 코드는 고치지 않았다. **사전등록 정정이 필요하다.** 새 연구는 이 수정, `BookSpec(min_names_after_nan=True, strict_lam_cause=True)` 를 함께 켠다. 둘 다 기본 끔은 B 재현 때문이다. `max_turnover` 는 Σ|Δw|(매수 + 매도 합)이고 편도가 아니다. O 재현은 cvxpy·clarabel 판에 달린다. `uv.lock` 에 없어 새 환경에서 5e-6 안팎 움직였다.
+**7단계 알려진 결함 — 재사용 전에 고칠 것.** 얼린 칸(거래 불가 보유)이 표류로 종목 상한·업종 밴드를 넘으면 문제가 infeasible 이 되어 O 북이 그 스텝을 멈춘다(B 2022-04-06 k=33 `solver_fail`). 얼린 칸을 분리하면 O 숫자가 바뀌어 코드는 고치지 않았다. **사전등록 정정이 필요하다.** 새 연구는 이 수정과 `BookSpec(min_names_after_nan=True, strict_lam_cause=True)` 를 함께 쓴다. `simulate` 의 기본 `DEFAULT_SPEC` 이 둘을 끄는 것은 B 재현 때문이다. `max_turnover` 는 Σ|Δw|(매수 + 매도 합)이고 편도가 아니다. O 재현은 cvxpy·clarabel 판에 달린다. `uv.lock` 에 없어 새 환경에서 5e-6 안팎 움직였다.
 
 **8단계 비용의 한계.** KOSPI 반스프레드 5bp 는 2017~22 틱 하한 미만이다. 1배는 그 구간에서 낙관이고 2배가 덮는다(B 영향 상한 4.4bp). 2배는 세금까지 두 배다. ADV 는 core `_trailing_adv` 가 관측 1개로도 평균을 내므로 새 연구는 `trailing_adv(min_obs=ADV_MIN_OBS)` 를 쓴다(B 재현은 그대로). core 쪽 메모(이 PR 범위 밖): `costs/impact.py` 의 ADV 가드는 하한뿐이라 원을 다시 ×1e6 한 값이 통과한다. `costs/tax.py` 의 시행일은 2차 출처다.
 
@@ -110,7 +110,7 @@ from swing_it.book.spec import BookSpec
 from swing_it.pipeline import Stage, require_stage
 
 PIPELINE = ("my_study", Stage.BACKTEST)
-SPEC = BookSpec(top_n=5)
+SPEC = BookSpec(top_n=5, min_names_after_nan=True, strict_lam_cause=True)
 
 def main() -> int:
     args = parse_args()          # argparse 만

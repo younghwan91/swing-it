@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,7 @@ from book_fixtures import hand_ctx  # noqa: E402
 
 from swing_it.book.accounting import check_invariants, simulate  # noqa: E402
 from swing_it.book.context import Ctx, StepRec, models_from_mask  # noqa: E402
-from swing_it.book.spec import BookSpec, Cell, Flags  # noqa: E402
+from swing_it.book.spec import DEFAULT_SPEC, Cell, Flags  # noqa: E402
 
 NO_COSTS = Flags(costs=False)
 
@@ -59,7 +60,7 @@ def _all_cash_ctx():
 
 
 def test_cash_earns_nothing_and_the_book_re_enters_when_it_can():
-    spec = BookSpec(step=5, horizon=5, top_n=2, min_names=2, adv_floor=1.0, cap_rank=(0, 6))
+    spec = replace(DEFAULT_SPEC, step=5, horizon=5, top_n=2, min_names=2, adv_floor=1.0, cap_rank=(0, 6))
     r = simulate(_all_cash_ctx(), "R", flags=NO_COSTS, spec=spec)
     assert [x.gross for x in r] == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0], abs=1e-12)
     assert [x.turnover for x in r] == pytest.approx([1.0, 0.1, 1.0, 1.0, 0.0], abs=1e-12)
@@ -97,6 +98,6 @@ def test_no_steps_is_a_violation_not_a_pass():
 
 
 def test_invariant_cap_comes_from_the_spec():
-    spec = BookSpec(max_weight=0.03)
+    spec = replace(DEFAULT_SPEC, max_weight=0.03)
     assert any("max w" in v for v in check_invariants([_rec(status="optimal", max_w=0.05)], "O", Cell(), spec=spec))
     assert check_invariants([_rec(status="optimal", max_w=0.05)], "O", Cell(), max_weight=0.10, spec=spec) == []
