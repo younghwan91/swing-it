@@ -12,9 +12,11 @@ haircut 이 0 이 됐는데도 CI 는 초록이었다. **막으려던 실패 모
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -44,133 +46,6 @@ def test_repo_is_currently_clean(lint):
 # --- (k) 파이프라인 순서 ------------------------------------------------------------
 #
 # 러너가 study·단계를 선언하고 데이터를 읽기 전에 게이트를 부르는가. 위반을 주입해 실제로 잡는지 본다.
-
-#: 2026-11-02 고정. 린트의 면제 목록은 이 집합의 부분집합이어야 한다 — 줄어들 수는 있어도 늘어날 수 없다.
-_PINNED_GRANDFATHER = frozenset({
-    "research/experiments/catalyst_flow_swing_gate.py",
-    "research/experiments/contrarian_bo.py",
-    "research/experiments/contrarian_distribution.py",
-    "research/experiments/contrarian_selective.py",
-    "research/experiments/contrarian_validate.py",
-    "research/experiments/inst_flow_accel_gate.py",
-    "research/experiments/news_persistence_swing.py",
-    "research/experiments/pead_concentrated_gate.py",
-    "research/experiments/pead_gate.py",
-    "research/experiments/pead_optimizer_b.py",
-    "research/experiments/pead_optimizer_b_feasibility.py",
-    "research/experiments/pead_optimizer_b_report.py",
-    "research/experiments/pead_optimizer_c0.py",
-    "research/experiments/pead_optimizer_po2.py",
-    "research/experiments/pead_optimizer_po3.py",
-    "research/experiments/pead_optimizer_po4.py",
-    "research/experiments/pead_optimizer_repaired.py",
-    "research/experiments/pead_optimizer_seam.py",
-    "research/experiments/pead_refinement.py",
-    "research/experiments/prop_feasibility.py",
-    "research/experiments/prop_gate.py",
-    "research/experiments/prop_swing_common.py",
-    "research/experiments/pullback_prop_gate.py",
-    "research/experiments/regime_switch.py",
-    "research/experiments/slippage_check.py",
-    "research/experiments/survivorship_bias_gate.py",
-    "research/signals/catalyst_flow.py",
-    "research/signals/contrarian_retail.py",
-    "scripts/compare_price_adjust.py",
-    "scripts/make_hero.py",
-})
-_PINNED_GRANDFATHER_ELSEWHERE = frozenset({
-    "research/autoresearch/prepare.py",
-    "research/combined/data.py",
-    "research/combined/prepare.py",
-    "research/experiments/adapt18.py",
-    "research/experiments/ana31.py",
-    "research/experiments/convergence_posthoc.py",
-    "research/experiments/convergence_run.py",
-    "research/experiments/core25.py",
-    "research/experiments/event_families_build.py",
-    "research/experiments/event_sources_build.py",
-    "research/experiments/evo_ablate.py",
-    "research/experiments/evo_consensus.py",
-    "research/experiments/evo_flow_coverage.py",
-    "research/experiments/evo_judge.py",
-    "research/experiments/evo_report.py",
-    "research/experiments/exit_ablate.py",
-    "research/experiments/exits_v2_run.py",
-    "research/experiments/flow_layer.py",
-    "research/experiments/ga2_post.py",
-    "research/experiments/ga2_run.py",
-    "research/experiments/ga_run.py",
-    "research/experiments/indep30.py",
-    "research/experiments/indep30_coverage.py",
-    "research/experiments/index27.py",
-    "research/experiments/index28.py",
-    "research/experiments/leader21.py",
-    "research/experiments/leader22.py",
-    "research/experiments/leader23.py",
-    "research/experiments/leader24.py",
-    "research/experiments/leader26.py",
-    "research/experiments/leaderM_desc.py",
-    "research/experiments/live_portfolio_backtest.py",
-    "research/experiments/market_mood_run.py",
-    "research/experiments/meta20.py",
-    "research/experiments/meta20_post.py",
-    "research/experiments/meta_gen1_run.py",
-    "research/experiments/meta_gen2_run.py",
-    "research/experiments/meta_gen3_run.py",
-    "research/experiments/meta_gen4_run.py",
-    "research/experiments/meta_gen5_run.py",
-    "research/experiments/meta_gen6_run.py",
-    "research/experiments/minervini_exits_run.py",
-    "research/experiments/mood_avail_run.py",
-    "research/experiments/news_veto_posthoc.py",
-    "research/experiments/pattern_ga_run.py",
-    "research/experiments/pattern_ga_view.py",
-    "research/experiments/pead19.py",
-    "research/experiments/rawcap_rerun.py",
-    "research/experiments/recheck29.py",
-    "research/experiments/regime_panel_run.py",
-    "research/experiments/relax_run.py",
-    "research/experiments/rl32.py",
-    "research/experiments/sepa_confluence_gate.py",
-    "research/experiments/sepa_explore.py",
-    "research/experiments/sepa_momentum.py",
-    "research/experiments/source_scan.py",
-    "research/experiments/vcp_retest_run.py",
-    "research/experiments/wedge_d_run.py",
-    "research/experiments/wedge_test_run.py",
-    "research/paper/index_paper.py",
-    "research/paper/leader_paper.py",
-    "research/paper/pead_forward_calib.py",
-    "research/paper/pead_paper.py",
-    "research/signals/sepa.py",
-    "research/experiments/ml_forecast_book.py",
-    "research/experiments/ml_forecast_common.py",
-    "research/experiments/ml_forecast_data.py",
-    "research/experiments/ml_forecast_features.py",
-    "research/experiments/ml_forecast_ic.py",
-    "research/experiments/ml_forecast_models.py",
-    "research/experiments/ml_forecast_nulls.py",
-    "research/experiments/ml_forecast_s1_diag.py",
-    "research/experiments/ml_forecast_stage0.py",
-    "research/experiments/ml_forecast_target.py",
-    "scripts/sector_flow.py",
-})
-_PINNED_LOGS_GRANDFATHER = frozenset({
-    "catalyst_flow_swing",
-    "contrarian_retail",
-    "inst_flow_accel",
-    "live_swing",
-    "minervini_prop",
-    "news_persistence_swing",
-    "pead_concentrated",
-    "prop_feasibility",
-    "prop_swing_search",
-    "pullback_prop",
-    "regime_switch",
-    "sepa_confluence",
-    "sepa_explore",
-    "survivorship_bias",
-})
 
 _HEAD = 'from swing_it.pipeline import Stage, require_stage\nPIPELINE = ("x", Stage.BACKTEST)\n'
 _GATE = "    require_stage(*PIPELINE)\n"
@@ -229,6 +104,18 @@ def test_order_path_needs_the_execution_gate(lint, tmp_path, monkeypatch, src):
     assert len(out) == 1 and "require_execution_approval" in out[0], out
     (tmp_path / "src" / "orders.py").write_text(
         src + "from swing_it.pipeline import require_execution_approval\n\ndef run(s):\n    require_execution_approval(s, amount_krw=1)\n", encoding="utf-8")
+    assert lint.check_order_path_gated() == []
+
+
+def test_order_rule_sees_through_import_aliases(lint, tmp_path, monkeypatch):
+    """별칭을 안 풀면 ``send_order as so`` 가 주문이 아니고, ``require_execution_approval as ok`` 가 게이트가 아니다."""
+    _tree(lint, tmp_path, monkeypatch)
+    (tmp_path / "src").mkdir()
+    orders = tmp_path / "src" / "orders.py"
+    orders.write_text("from broker import send_order as so\n\ndef run():\n    so()\n", encoding="utf-8")
+    assert len(lint.check_order_path_gated()) == 1
+    orders.write_text("from broker import send_order as so\nfrom swing_it.pipeline import require_execution_approval as ok\n\n"
+                      "def run(s):\n    ok(s, amount_krw=1)\n    so()\n", encoding="utf-8")
     assert lint.check_order_path_gated() == []
 
 
@@ -463,14 +350,17 @@ def test_rule_k_skips_init_and_grandfathered_files_only(lint, tmp_path, monkeypa
 
 
 def test_grandfather_lists_never_grow(lint):
-    """면제 목록은 2026-11-02 파일만 담고 줄어들기만 한다."""
-    assert lint.PIPELINE_GRANDFATHER <= _PINNED_GRANDFATHER, lint.PIPELINE_GRANDFATHER - _PINNED_GRANDFATHER
-    assert lint.PIPELINE_GRANDFATHER_ELSEWHERE <= _PINNED_GRANDFATHER_ELSEWHERE, (
-        lint.PIPELINE_GRANDFATHER_ELSEWHERE - _PINNED_GRANDFATHER_ELSEWHERE)
-    assert lint.PIPELINE_LOGS_GRANDFATHER <= _PINNED_LOGS_GRANDFATHER, (
-        lint.PIPELINE_LOGS_GRANDFATHER - _PINNED_LOGS_GRANDFATHER)
-    assert (len(_PINNED_GRANDFATHER), len(_PINNED_GRANDFATHER_ELSEWHERE), len(_PINNED_LOGS_GRANDFATHER)) == (
-        30, 75, 14)
+    """면제 목록은 기준 브랜치 목록의 부분집합이다 — 줄어들 수는 있어도 늘어날 수 없다. 사본을 두지 않고 기준의 린트를 읽는다."""
+    base = os.environ.get("PIPELINE_BASE_REF", "origin/main")
+    shown = subprocess.run(("git", "show", f"{base}:scripts/check_guardrails.py"), cwd=REPO, capture_output=True, text=True, timeout=30)
+    if shown.returncode != 0:
+        if os.environ.get("CI"):
+            pytest.fail(f"기준 {base} 가 없다 — CI 는 fetch-depth: 0 으로 받는다")
+        pytest.skip(f"기준 {base} 가 없다")
+    tree = ast.parse(shown.stdout)
+    for name in ("PIPELINE_GRANDFATHER", "PIPELINE_GRANDFATHER_ELSEWHERE", "PIPELINE_LOGS_GRANDFATHER"):
+        allowed = ast.literal_eval(lint._module_constant(tree, name).args[0])
+        assert getattr(lint, name) <= allowed, (name, getattr(lint, name) - allowed)
 
 
 def test_finished_ml_runners_are_grandfathered_but_their_log_folder_is_not(lint):

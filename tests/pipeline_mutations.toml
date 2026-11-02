@@ -224,7 +224,7 @@ id = "lint-scope-only-runner-folders"
 why = "위치로 보면 research/signals·scripts 의 데이터 호출이 규칙 밖이다"
 guards = ["tests/test_check_guardrails.py::test_rule_k_catches_data_calls_outside_the_runner_folders"]
 file = "scripts/check_guardrails.py"
-find = "            if not always and not _touches_data(tree) and _module_constant(tree, \"PIPELINE\") is None:"
+find = "            if not always and not _touches_data(names, calls) and _module_constant(tree, \"PIPELINE\") is None:"
 replace = "            if not always:"
 
 [[mutation]]

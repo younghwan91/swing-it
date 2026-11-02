@@ -340,7 +340,7 @@ _IRREPRODUCIBLE_MARKER = "재현 불가 고지"
 # require_stage(*PIPELINE) 을 부른다. 러너가 아닌 파일은 PIPELINE_LIBRARY = "<사유>" 를 적는다. "진입점이 없으면 러너가
 # 아니다"로 추정하면 진입점을 빼는 것으로 이 규칙을 피할 수 있어서, 선언을 요구하고 선언과 실제가 맞는지 본다.
 #
-# 면제 목록. **2026-11-02 에 있던 파일만 있고, 줄어들기만 한다** — tests/test_check_guardrails.py 가 고정한다.
+# 면제 목록. **2026-11-02 에 있던 파일만 있고, 줄어들기만 한다** — tests/test_check_guardrails.py 가 기준 브랜치의 목록과 맞댄다.
 # 재현이 바이트 동일해야 하는 옛 러너를 고치지 않으려고 둔다. 새 파일에는 면제가 없다.
 PIPELINE_GRANDFATHER = frozenset({
     "research/experiments/catalyst_flow_swing_gate.py",
@@ -653,12 +653,7 @@ def _import_time_problem(tree: ast.Module, names: _Names) -> "str | None":
 
 
 def _gate_expr(stmt: ast.stmt) -> "ast.Call | None":
-    if isinstance(stmt, ast.Expr):
-        value = stmt.value
-    elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-        value = stmt.value
-    else:
-        return None
+    value = stmt.value if isinstance(stmt, (ast.Expr, ast.Assign, ast.AnnAssign)) else None
     return value if isinstance(value, ast.Call) else None
 
 
@@ -752,9 +747,8 @@ def _library_runs_at_import(tree: ast.Module, names: _Names) -> bool:
                for node in _import_time(tree) for call in _calls_in(node))
 
 
-def _pipeline_problem(tree: ast.Module, gate) -> "str | None":
-    """파일 하나의 선언 위반 사유. 문제 없으면 ``None``."""
-    names = _Names(tree)
+def _pipeline_problem(tree: ast.Module, gate, names: _Names, calls: list[ast.Call]) -> "str | None":
+    """파일 하나의 선언 위반 사유. 문제 없으면 ``None``. ``calls`` 는 파일의 호출 전부(:func:`_call_nodes`)."""
     library = _module_constant(tree, "PIPELINE_LIBRARY")
     declared = _module_constant(tree, "PIPELINE")
     problem = _import_time_problem(tree, names)
@@ -776,15 +770,13 @@ def _pipeline_problem(tree: ast.Module, gate) -> "str | None":
         parsed = gate.Stage.parse(_stage_literal(stage, tree))
     except ValueError:
         return f"PIPELINE 의 단계가 1~11 또는 Stage.<이름> 이 아니다: {ast.unparse(stage)}"
-    called = {names.name(n) for n in ast.walk(tree) if isinstance(n, ast.Call)}
-    backtests = sorted(n for n in called if _is_bt_call(n))
+    backtests = sorted({n for n in map(names.name, calls) if _is_bt_call(n)})
     if parsed < gate.Stage.BACKTEST and backtests:
         return (f"{backtests} 를 부르는데 {parsed.label} 로 선언했다 — 백테스트는 9단계다. "
                 "앞 단계로 적으면 게이트가 비어 버린다.")
     if problem:
         return problem
-    if any(names.name(n) == "read_prices" and not any(k.arg == "end" for k in n.keywords)
-           for n in ast.walk(tree) if isinstance(n, ast.Call)):
+    if any(names.name(n) == "read_prices" and not any(k.arg == "end" for k in n.keywords) for n in calls):
         return "read_prices 에 end= 가 없다 — 2026-09-14~ 애프터마켓 오염 구간까지 읽는다(docs/PIPELINE.md 2단계)."
     entry = next((n.body for n in tree.body if _is_main_guard(n)), None)
     if entry is None:
@@ -795,10 +787,12 @@ def _pipeline_problem(tree: ast.Module, gate) -> "str | None":
     return None
 
 
-def _touches_data(tree: ast.Module) -> bool:
-    names = _Names(tree)
-    return any(n in _DATA_READS or _is_bt_call(n)
-               for n in (names.name(c) for c in ast.walk(tree) if isinstance(c, ast.Call)))
+def _call_nodes(tree: ast.Module) -> list[ast.Call]:
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+
+
+def _touches_data(names: _Names, calls: list[ast.Call]) -> bool:
+    return any(n in _DATA_READS or _is_bt_call(n) for n in map(names.name, calls))
 
 
 def check_pipeline_declared() -> list[str]:
@@ -818,9 +812,10 @@ def check_pipeline_declared() -> list[str]:
             except SyntaxError as exc:                  # 파싱 실패는 침묵시키지 않는다
                 out.append(f"[pipeline] {rel} — 파싱 실패: {exc}")
                 continue
-            if not always and not _touches_data(tree) and _module_constant(tree, "PIPELINE") is None:
+            names, calls = _Names(tree), _call_nodes(tree)
+            if not always and not _touches_data(names, calls) and _module_constant(tree, "PIPELINE") is None:
                 continue
-            problem = _pipeline_problem(tree, gate)
+            problem = _pipeline_problem(tree, gate, names, calls)
             if problem:
                 out.append(f"[pipeline] {rel} — {problem} (docs/PIPELINE.md)")
     return out
@@ -875,10 +870,12 @@ def check_pipeline_ledgers_append_only() -> list[str]:
 _ORDER_MODULES = ("krx_quant_core.execution", "swing_it.live", "swing_it.execution")
 _ORDER_API_ID = re.compile(r"\bkt1000\d\b")
 _ORDER_CALLS = frozenset({"place_order", "submit_order", "send_order", "buy_order", "sell_order", "cancel_order"})
+_ORDER_HINT = re.compile("|".join([*map(re.escape, _ORDER_MODULES), _ORDER_API_ID.pattern, *_ORDER_CALLS]))
 
 
 def _order_use(tree: ast.Module) -> "str | None":
     """파일이 주문 API 를 쓰면 그 근거 하나. 문서 문자열과 주석의 언급은 치지 않는다."""
+    names = _Names(tree)
     docs = {id(n.body[0].value) for n in ast.walk(tree)
             if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
             and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
@@ -889,8 +886,8 @@ def _order_use(tree: ast.Module) -> "str | None":
             hit = n.module if (n.module or "").startswith(_ORDER_MODULES) else None
         elif isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs and _ORDER_API_ID.search(n.value):
             hit = n.value
-        elif isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) in _ORDER_CALLS:
-            hit = getattr(n.func, "attr", getattr(n.func, "id", None))
+        elif isinstance(n, ast.Call) and names.name(n) in _ORDER_CALLS:
+            hit = names.name(n)
         else:
             hit = None
         if hit:
@@ -908,13 +905,16 @@ def check_order_path_gated() -> list[str]:
         for p in _iter_py(root):
             if p.name == "check_guardrails.py":        # 이 규칙의 패턴을 담고 있다
                 continue
+            text = p.read_text(encoding="utf-8")
+            if not _ORDER_HINT.search(text):            # 파싱 전에 거른다. 문자열을 쪼개 적은 API 번호는 동적 호출처럼 못 본다
+                continue
             try:
-                tree = ast.parse(p.read_text(encoding="utf-8"))
+                tree = ast.parse(text)
             except SyntaxError:
                 continue                                # 파싱 실패는 규칙 (k) 가 말한다
             hit = _order_use(tree)
-            if hit and not any(isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) == "require_execution_approval"
-                               for n in ast.walk(tree)):
+            names = _Names(tree)
+            if hit and not any(names.name(n) == "require_execution_approval" for n in _call_nodes(tree)):
                 out.append(f"[order] {p.relative_to(REPO).as_posix()} — {hit} 를 쓰는데 require_execution_approval 을 안 부른다(docs/PIPELINE.md 10단계).")
     return out
 

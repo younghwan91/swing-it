@@ -44,7 +44,8 @@ def test_example_satisfies_the_lint():
     spec = importlib.util.spec_from_file_location("check_guardrails", REPO / "scripts" / "check_guardrails.py")
     lint = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lint)
-    assert lint._pipeline_problem(ast.parse(PATH.read_text(encoding="utf-8")), lint._load_gate()) is None
+    tree = ast.parse(PATH.read_text(encoding="utf-8"))
+    assert lint._pipeline_problem(tree, lint._load_gate(), lint._Names(tree), lint._call_nodes(tree)) is None
 
 
 def test_example_stops_at_the_gate_before_touching_data(example, tmp_path, monkeypatch):
