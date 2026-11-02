@@ -33,6 +33,7 @@ Pure DataFrame in → DataFrame out.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 # Frozen universe hyperparameters (pre-registered — do not tune per experiment).
@@ -84,3 +85,35 @@ def smallmid_universe(
         size_ok = (df["cap_rank"] > cap_rank[0]) & (df["cap_rank"] <= cap_rank[1])
     df["eligible"] = size_ok & (df["adv"] >= adv_floor)
     return df[["code", "date", "eligible"]].reset_index(drop=True)
+
+
+# ── 시총 순위 띠 유니버스(배열 좌표) — 1단계 ───────────────────────────────────────────
+#
+# PEAD 단계 B·전진 팔·ML 예측이 같은 정의를 쓴다. 신호 유한 ∧ ADV ≥ 하한 ∧ U_t 안에서 시총 순위를 매긴다 — 시총 순위는 **유동성
+# 필터 뒤**의 순위다(core ``staggered_tranche_backtest`` 의 ``cap_rank`` 와 같다). 기본값은 사전등록 값(PEAD PREREG §2)이다.
+
+#: 시총 순위 띠 (lo, hi] — 21~100위. 행 번호로는 ``order[lo:hi]``.
+RANK_BAND = (20, 100)
+#: 20일 평균 거래대금 하한(백만원) — 200억.
+RANK_BAND_ADV_FLOOR = 20000.0
+
+
+def m0_mask(t: int, sig: np.ndarray, adv: np.ndarray, in_u: np.ndarray, *, adv_floor: float = RANK_BAND_ADV_FLOOR) -> np.ndarray:
+    """M0(t) = ① 신호 유한 ∧ ② 20일 ADV ≥ 하한(백만원, core ``_trailing_adv``) ∧ ③ U_t."""
+    return np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor) & in_u
+
+
+def rank_band_eligible(t: int, sig: np.ndarray, adv: np.ndarray, cap: np.ndarray, in_u: np.ndarray, *,
+                       adv_floor: float = RANK_BAND_ADV_FLOOR, cap_rank: tuple[int, int] = RANK_BAND) -> np.ndarray:
+    """eligible(t) — M0(t) 안의 시총 순위 띠(행 번호, 시총 내림차순, 동률은 행 순서)."""
+    ok = np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor) & in_u & np.isfinite(cap[:, t])
+    liq = np.flatnonzero(ok)
+    order = liq[np.argsort(-cap[liq, t], kind="stable")]
+    return order[cap_rank[0]:cap_rank[1]]
+
+
+def u_exclusion(t: int, sig: np.ndarray, adv: np.ndarray, in_u: np.ndarray, *, adv_floor: float = RANK_BAND_ADV_FLOOR) -> float:
+    """①∧② 중 ③(U_t) 때문에 빠진 비율."""
+    base = np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor)
+    n = int(base.sum())
+    return float((base & ~in_u).sum() / n) if n else float("nan")

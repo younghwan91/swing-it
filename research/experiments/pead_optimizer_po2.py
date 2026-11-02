@@ -93,6 +93,20 @@ def _db():
     return con, cur
 
 
+def yoy_signal_strict(codes, dates) -> tuple[np.ndarray, dict]:
+    """PO-2.1-5 — 실적·정기보고서 접수일을 ≤ END 로 읽는다. 2019Q1 이후 분기는 END 이전 정기보고서가 없으면 뺀다.
+
+    구현은 ``features.earnings_asof`` 로 옮겼다. ``tie_col=None`` 은 단계 B 재현에 묶인 옛 동작이다.
+    """
+    from swing_it.features.earnings_asof import load_yoy_strict
+
+    con, _ = _db()
+    try:
+        return load_yoy_strict(con, codes, dates, END, tie_col=None)
+    finally:
+        con.close()
+
+
 def raw_closes_and_events(codes, dates):
     """원 종가(``daily_bars_raw``·``supply_demand``)와 사건 날짜 — 모두 ≤ END."""
     con, cur = _db()
@@ -115,48 +129,6 @@ def raw_closes_and_events(codes, dates):
     ev = pd.DataFrame(cur.fetchall(), columns=["code", "date"])
     con.close()
     return out, ev
-
-
-def yoy_signal_strict(codes, dates) -> tuple[np.ndarray, dict]:
-    """PO-2.1-5 — 실적·정기보고서 접수일을 ≤ END 로 읽는다. 2019Q1 이후 분기는 END 이전 정기보고서가 없으면 뺀다."""
-    from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
-    from swing_it.storage import read_earnings
-
-    con, cur = _db()
-    ea = read_earnings(con, all_versions=True, until=END, cols=(
-        "code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"))
-    cur.execute(
-        "SELECT code, period, min(rcept_dt) FROM earnings_disclosures "
-        "WHERE kind = 'periodic' AND rcept_dt <= %s GROUP BY code, period", (END,))
-    per = pd.DataFrame(cur.fetchall(), columns=["code", "period", "per"])
-    con.close()
-    ea["avail_date"] = pd.to_datetime(ea["avail_date"])
-    ea["knowledge_date"] = pd.to_datetime(ea["knowledge_date"])
-    assert ea["avail_date"].max() <= pd.Timestamp(END) and ea["knowledge_date"].max() <= pd.Timestamp(END)
-    n_read = len(ea)
-    ea["code"] = ea["code"].astype(str)
-    per["code"] = per["code"].astype(str)
-    per["per"] = pd.to_datetime(per["per"])
-    ea = ea.merge(per, on=["code", "period"], how="left")
-    late = (ea["period"].astype(str) >= "2019Q1") & ea["per"].isna()
-    n_drop = int(late.sum())
-    ea = ea[~late].copy()
-    known = ea[["avail_date", "per"]].max(axis=1).to_numpy(dtype="datetime64[ns]")
-    days = pd.DatetimeIndex(dates)
-    i = days.searchsorted(known, side="right")
-    ok = (i < len(days)) & ~np.isnat(known)
-    ea = ea[ok].copy()
-    ea["known_date"] = days[i[ok]].strftime("%Y-%m-%d")
-    ea["knowledge_date"] = ea["knowledge_date"].dt.strftime("%Y-%m-%d")
-    ea["yoy"] = _yoy_vec(ea["netinc"], ea["netinc_prior"])
-    panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), list(days.strftime("%Y-%m-%d")),
-                               avail_col="known_date", knowledge_col="knowledge_date")
-    wide = panel.pivot(index="code", columns="date", values="yoy")
-    wide = wide.reindex(index=[str(c) for c in codes], columns=list(days.strftime("%Y-%m-%d")))
-    info = {"earnings_rows_read_le_end": int(n_read),
-            "dropped_2019Q1plus_no_periodic_le_end": n_drop,
-            "rows_used": int(len(ea))}
-    return wide.to_numpy(dtype=np.float64), info
 
 
 # ── 위험모델(병렬) ────────────────────────────────────────────────────────────

@@ -20,13 +20,16 @@ import pandas as pd
 from krx_quant_core.risk.attribution import factor_attribution
 from krx_quant_core.stats.sharpe import deflated_sharpe_from_sample, t_haircut
 
+from swing_it.diagnostics.hac import NW_LAG, nw_t_rows, ols_hac
+
+__all__ = ["NW_LAG", "ols_hac"]  # 옮긴 구현을 이 이름으로 부르는 러너가 있다
+
 # run_b 가 실행 전에 확인한다(PO-7 M4 — 빠진 항목이 있으면 B 를 돌리지 않는다).
 IMPLEMENTED = {"factor_alpha": True, "pead_qualification": True, "vs_kospi": True, "attribution": True,
                "deflation": True, "f_boot": True, "render": True}
 REQUIRED = tuple(IMPLEMENTED)
 
 FACTOR_NAMES = ("KOSPI", "KOSDAQ", "UMD", "SMB", "LOWVOL")
-NW_LAG = 2
 ALPHA_T_FLOOR = 2.0  # GUARDRAILS 팩터 알파 t>2
 META_GEN3_TRIALS = 13  # fcs META_GEN3 — 원장 파일이 이 브랜치에 없어 상수로 적는다(PREREG §4)
 LEDGERS = ("pead_optimizer", "pead_concentrated")
@@ -46,40 +49,6 @@ LABEL_MARKET = ("시장 구분(반스프레드 5·15bp)은 `stocks` 현재 스�
 LABEL_QUAL = "구성은 정했지만 PEAD 는 팩터 노출"
 FOLD_NOTE = ("GUARDRAILS §2: 2020/21 은 TRAIN 내부 → 클린 아님. IC 는 폴드마다 누적·퍼지로 학습했지만 PEAD 신호 자체가 2016~2026 연구로 "
              "골라졌다 — 어느 폴드도 신호 선택에 대해 깨끗하지 않다(§2).")
-
-
-# ── HAC 회귀 ──────────────────────────────────────────────────────────────────
-
-
-def ols_hac(y, X, lag: int = NW_LAG) -> dict:
-    """OLS + Newey-West(Bartlett, ``lag``) 샌드위치. 자유도 보정 없음 — 상수만이면 core ``newey_west_t`` 와 같다.
-
-    ``X`` 는 상수 열을 포함하지 않는다(여기서 붙인다). 유한하지 않은 행은 뺀다.
-    """
-    y = np.asarray(y, dtype=np.float64)
-    X = np.asarray(X, dtype=np.float64).reshape(len(y), -1)
-    ok = np.isfinite(y) & np.isfinite(X).all(axis=1)
-    y, X = y[ok], X[ok]
-    Z = np.column_stack([np.ones(len(y)), X])
-    n, p = Z.shape
-    if n < p + lag + 2:
-        return {"n": int(n), "alpha": float("nan"), "t_alpha": float("nan"), "beta": [float("nan")] * (p - 1),
-                "t_beta": [float("nan")] * (p - 1), "r2": float("nan")}
-    ZtZi = np.linalg.pinv(Z.T @ Z)
-    b = ZtZi @ Z.T @ y
-    e = y - Z @ b
-    u = Z * e[:, None]
-    S = u.T @ u
-    for k in range(1, lag + 1):
-        G = u[k:].T @ u[:-k]
-        S += (1.0 - k / (lag + 1.0)) * (G + G.T)
-    V = ZtZi @ S @ ZtZi
-    se = np.sqrt(np.clip(np.diag(V), 0.0, None))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = np.where(se > 0, b / se, np.nan)
-    ss = float(((y - y.mean()) ** 2).sum())
-    return {"n": int(n), "alpha": float(b[0]), "t_alpha": float(t[0]), "beta": [float(v) for v in b[1:]],
-            "t_beta": [float(v) for v in t[1:]], "r2": float(1.0 - (e @ e) / ss) if ss > 0 else float("nan")}
 
 
 def ledger_n(count_trials=None, extra: int = META_GEN3_TRIALS) -> dict:
@@ -292,20 +261,6 @@ def attribution_report(ctx, recs, fr, prep, eligible_of) -> dict:
 
 
 # ── PO-1.3 f_boot ─────────────────────────────────────────────────────────────
-
-
-def nw_t_rows(X: np.ndarray, lag: int = NW_LAG) -> np.ndarray:
-    """행마다 core ``newey_west_t`` 의 t(평균/HAC se). se=0 이면 NaN."""
-    X = np.asarray(X, dtype=np.float64)
-    n = X.shape[1]
-    mu = X.mean(axis=1)
-    d = X - mu[:, None]
-    var = (d * d).sum(axis=1) / n
-    for k in range(1, lag + 1):
-        var += 2.0 * (1.0 - k / (lag + 1.0)) * (d[:, k:] * d[:, :-k]).sum(axis=1) / n
-    se = np.sqrt(np.clip(var, 0.0, None) / n)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(se > 0, mu / se, np.nan)
 
 
 def max_ratio(paths: np.ndarray, looks=OBF_LOOKS, shape=OBF_SHAPE) -> np.ndarray:

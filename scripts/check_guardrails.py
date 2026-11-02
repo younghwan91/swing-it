@@ -484,7 +484,7 @@ _BACKTEST_NAMES = frozenset({"simulate", "prop_gate", "gate_sim", "run_recipe"})
 _BEFORE_GATE_OK = frozenset({
     "ArgumentParser", "add_argument", "add_argument_group", "add_mutually_exclusive_group", "add_subparsers",
     "add_parser", "set_defaults", "exit", "SystemExit", "print", "time", "perf_counter", "monotonic", "now", "today",
-    "str", "int", "float", "bool", "len", "Path", "basicConfig", "getLogger", "setLevel", "Fire",
+    "str", "int", "float", "bool", "len", "split", "strip", "Path", "basicConfig", "getLogger", "setLevel", "Fire",
 })
 #: 이름에 파싱이 드러나는 호출(build_parser·parse_args·my_parse). 이 이름의 함수가 다른 모듈에서 데이터를 읽으면 못 잡는다.
 _PARSER_NAME = re.compile(r"pars|_args$|^args$")

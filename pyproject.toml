@@ -22,6 +22,8 @@ dependencies = [
     # 뉴스 LLM 판정기(swing_it.news.judge·labelset)의 raw HTTP. SDK 를 쓰지 않는다(daytrade-it 판정기와 같은
     # 요청을 바이트 단위로 보내려고). krx-quant-core → kiwoom-client 로 이미 깔리지만 직접 쓰므로 명시한다.
     "httpx>=0.27",
+    # 순위 IC·순열 널·요약 통계(swing_it.book·validation.ic). 연구 러너가 이미 쓰고 있던 것을 src 로 옮기며 명시한다.
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]

@@ -437,6 +437,21 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
     return pd.read_sql_query(sql, con, params=params or None)
 
 
+def read_periodic_filings(con: Any, until: str):
+    """(code, period)별 정기보고서 첫 접수일 — 긴 형식 code·period·per. ``until`` 이하만 읽는다.
+
+    실적을 쓸 수 있는 첫날을 정하는 재료다(:mod:`swing_it.features.earnings_asof`).
+    """
+    import pandas as pd
+
+    ph = "%s" if _is_pg(con) else "?"
+    cur = con.cursor()
+    cur.execute(  # noqa: S608 — 자리표시자만 다르다
+        f"SELECT code, period, min(rcept_dt) FROM earnings_disclosures WHERE kind = 'periodic' AND rcept_dt <= {ph} "
+        "GROUP BY code, period", (until,))
+    return pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "period", "per"])
+
+
 PRICE_TABLE = "daily_bars_adjusted"   # 분할조정. 백테스트는 원자료(daily_bars) 금지.
 _PRICE_READ_COLS = ("code", "date", "open", "high", "low", "close", "volume", "trade_value")
 
