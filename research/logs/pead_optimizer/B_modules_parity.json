@@ -1,0 +1,37 @@
+{
+ "what": "단계 B 구현을 src/swing_it/book 으로 옮긴 뒤의 재현. 성과 숫자 없음 — 대조 개수와 최대 차만.",
+ "book_tree": "20683d5",
+ "core_ref": "13c56a7",
+ "tol": 1e-10,
+ "b_json": {
+  "compared_numbers": 709,
+  "max_abs_diff": 0.0,
+  "n_mismatch": 0,
+  "sections": [
+   "cells",
+   "ic",
+   "invariants",
+   "mode",
+   "parity",
+   "primary"
+  ],
+  "note": "B.json 의 cells·ic·invariants·mode·parity·primary 전부를 대조했다. code·fingerprints·elapsed_s 는 실행마다 달라 뺐다."
+ },
+ "before_move": {
+  "compared_numbers": 709,
+  "max_abs_diff": 0.0,
+  "n_mismatch": 0,
+  "note": "옮기기 전 트리에서 같은 대조를 먼저 돌렸다 — 환경이 B.json 을 재현함을 확인"
+ },
+ "ml_s2_0": {
+  "pass": true,
+  "fingerprint_same_as_B": true,
+  "O": 0,
+  "R": 0,
+  "ic_by_year": 0,
+  "core_parity_max_abs_diff_book": 0.0,
+  "core_parity_max_abs_diff_bench": 2.7755575615628914e-17,
+  "note": "ml_forecast_book.py --mode parity 를 옮긴 코드에서 다시 돌렸다. research/logs/ml_forecast/S2_parity.json 은 건드리지 않았다"
+ },
+ "how": "tests/real_db/test_b_json_reproduction.py"
+}
