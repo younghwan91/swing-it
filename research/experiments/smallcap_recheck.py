@@ -41,7 +41,8 @@ def recompute(rows: pd.DataFrame, calendar: pd.DatetimeIndex, e_day, last_day_en
         if np.isfinite(c[k]):
             r = cff[k] / cff[k - 1] - 1.0
             newlim = calendar.values[k] >= limit_change
-            seam = traded[k] and ((not traded[k - 1]) or abs(r) > (0.305 if newlim else 0.155)) and k not in tail
+            lim = 0.305 if newlim else 0.155
+            seam = traded[k] and (((not traded[k - 1]) or abs(r) > lim) and k not in tail or (k in tail and r > lim))
             pos *= 1.0 + (min(r, 0.0) if seam else r)
         if selling and traded[k]:
             thr = 0.29 if calendar.values[k] >= limit_change else 0.14

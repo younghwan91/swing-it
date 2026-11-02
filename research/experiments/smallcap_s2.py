@@ -57,6 +57,7 @@ def main() -> int:
         f"| 수정 사건 칸(수정가/원가 계단 > 1%) | {int(p.action[:, t0:].sum()):,} ({len(set(np.nonzero(p.action[:, t0:])[0])):,}종목) | 사건에서 제외 |",
         f"| 시리즈가 표본 전에 끝난 종목 | {int(ended.sum()):,} (부실 분류 {int((p.distress & ended).sum()):,}) | 꼬리 {L.TAIL_ROWS}행 제한폭 잠김 없음 |",
         f"| 꼬리 칸 | {int(p.tail.sum()):,} | |",
+        f"| 수정가/원가 < 2% 칸(자료 오류, U 밖) | {int(p.bad_adj[:, t0:].sum()):,} ({len(set(np.nonzero(p.bad_adj[:, t0:])[0])):,}종목) | 정정 SC-2 |",
         f"| 시장 매핑 | KOSPI {int((p.market == 'KOSPI').sum()):,} · KOSDAQ {int((p.market == 'KOSDAQ').sum()):,} | 단언 |",
         f"| U(t) 종목-일 / U2(t) | {int(u.sum()):,} / {int(u2.sum()):,} | |",
         f"| 대역 칸 고가·저가 없음(대표가 = 종가) | {float((~np.isfinite(p.H) | ~np.isfinite(p.L))[u].mean()):.4%} | 기록 |", "",

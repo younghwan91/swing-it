@@ -34,6 +34,7 @@ SIGMA_WIN = 63
 TAIL_ROWS = 10
 LIMIT_CHANGE = np.datetime64("2015-06-15")
 MOM_STEP = 20
+BAD_ADJ_RATIO = 0.02           # 정정 SC-2: 수정가/원가 < 2% 칸은 자료 오류(008080 수정가 1원)
 
 # 이름 거르개. '리츠' 는 메리츠를 잡지 않게 앞 글자를 본다.
 NAME_FILTER = re.compile(
@@ -154,9 +155,12 @@ class Panel:
         with np.errstate(invalid="ignore"):
             over = traded & (np.abs(r) > lim + 0.005)
         self.seam = (reopen | over) & ~tail
+        with np.errstate(invalid="ignore"):
+            tail_up = tail & traded & (r > lim + 0.005)      # 정정 SC-2: 꼬리의 제한폭 초과 상승도 이익 0
+        clip = self.seam | tail_up
         r0 = np.nan_to_num(r, nan=0.0)
-        rb = np.where(self.seam, 0.0, r0)
-        rp = np.where(self.seam, np.minimum(r0, 0.0), r0)
+        rb = np.where(clip, 0.0, r0)
+        rp = np.where(clip, np.minimum(r0, 0.0), r0)
         rows = np.isfinite(Cff)
         self.Cb = np.where(rows, np.cumprod(1.0 + rb, axis=1), np.nan)
         self.Cp = np.where(rows, np.cumprod(1.0 + rp, axis=1), np.nan)
@@ -166,6 +170,8 @@ class Panel:
             step = np.zeros((N, T), dtype=bool)
             step[:, 1:] = np.abs(ratio[:, 1:] / ratio[:, :-1] - 1.0) > 0.01
         self.action = step
+        with np.errstate(invalid="ignore", divide="ignore"):
+            self.bad_adj = np.nan_to_num(self.C / np.where(self.RAW > 0, self.RAW, np.nan), nan=1.0) < BAD_ADJ_RATIO
         tv = np.where(traded, self.TV, np.nan)
         self.ADV = _roll(tv, 20, 15, "mean")
         self.TVMAX = _roll(tv, TV_WIN, WIN_MIN, "max")
@@ -187,6 +193,7 @@ class Panel:
         with np.errstate(invalid="ignore"):
             u = self.traded & np.isfinite(self.TV) & (self.ADV >= band[0]) & (self.ADV < band[1])
         u[self.excluded, :] = False
+        u &= ~self.bad_adj
         u[:, : self.sig_t0] = False
         return u
 

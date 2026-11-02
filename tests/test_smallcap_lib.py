@@ -185,6 +185,24 @@ def test_series_end_uses_last_close_without_limit_lock_in_tail():
     assert L.net(o2, 2.0, dist100=True) == pytest.approx(0.0 * 1 - 1.0)
 
 
+def test_tail_over_limit_gain_is_zero_but_loss_stays():
+    c = np.full(100, 100.0)
+    c[80:] = np.nan
+    c[77:80] = [40.0, 80.0, 40.0]            # 꼬리: −60%(유지), +100%(이익 0), −50%(유지)
+    p = mk(c)
+    assert p.tail[0, 78]
+    assert p.Cp[0, 79] / p.Cp[0, 76] == pytest.approx(0.4 * 1.0 * 0.5)
+    assert p.Cb[0, 79] / p.Cb[0, 76] == pytest.approx(0.4 * 1.0 * 0.5)
+
+
+def test_bad_adjusted_price_leaves_universe():
+    c = np.full(100, 100.0)
+    p = mk(c, RAW=np.full(100, 6000.0))      # 수정가/원가 1.7%
+    assert not p.universe((300.0, 20000.0)).any()
+    q = mk(c, RAW=np.full(100, 4000.0))      # 2.5%: 남는다
+    assert q.universe((300.0, 20000.0)).any()
+
+
 def test_bench_buy_hold_with_delisted_flat_and_dist100():
     a = np.full(100, 100.0)
     a[70:] = 200.0 / 1  # 이음매라 0 — 아래 b 로 본다

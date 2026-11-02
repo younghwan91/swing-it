@@ -1,0 +1,8 @@
+{"config": {"half": 0, "prereg": "SC-1", "signal": "HVNM", "universe": "U", "view": "event_study"}, "fingerprint": "0b5bb86028fce74f", "note": "지도"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "HVNM", "universe": "U2", "view": "event_study"}, "fingerprint": "3d4aa306bb52a60a", "note": "지도"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "MOM", "universe": "U", "view": "event_study"}, "fingerprint": "f11109315d375f99", "note": "지도"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "MOM", "universe": "U2", "view": "event_study"}, "fingerprint": "35e8b04486ced260", "note": "지도"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "EW", "universe": "U", "view": "ew_vs_index"}, "fingerprint": "4e67c593acf7279b", "note": "지도"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "EW", "universe": "U2", "view": "ew_vs_index"}, "fingerprint": "03dbf6765affe541", "note": "지도"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "HVNM", "universe": "U", "view": "book"}, "fingerprint": "78f8b06d7f19c0ee", "note": "입구 관문"}
+{"config": {"half": 0, "prereg": "SC-1", "signal": "MOM", "universe": "U", "view": "book"}, "fingerprint": "b57818a07a62713a", "note": "입구 관문"}
