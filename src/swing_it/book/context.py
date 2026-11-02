@@ -44,15 +44,20 @@ class Ctx:
 
     def in_u(self, t: int) -> np.ndarray:
         if t not in self._u:
-            m = np.zeros(self.C.shape[0], bool)
-            m[np.asarray(self.models[t][0], dtype=int)] = True
-            self._u[t] = m
+            self._u[t] = index_mask(self.C.shape[0], self.models[t][0])
         return self._u[t]
 
 
 def models_from_mask(mask: np.ndarray, grid: list[int]) -> dict:
     """위험모델 없는 순위 북의 ``Ctx.models`` — 격자일마다 U_t 종목만 적는다. 사전 위험 칸은 NaN 으로 남는다."""
     return {t: (np.flatnonzero(mask[:, t]), None, None, None, []) for t in grid}
+
+
+def index_mask(n: int, idx) -> np.ndarray:
+    """행 번호 목록 → 길이 ``n`` 불리언."""
+    m = np.zeros(n, bool)
+    m[np.asarray(idx, dtype=int)] = True
+    return m
 
 
 def delisted(ctx: Ctx, f: int) -> np.ndarray:

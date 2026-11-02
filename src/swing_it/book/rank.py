@@ -29,12 +29,8 @@ def tranche_names(t, rank_sig, sig, adv, cap, in_u, top_n=DEFAULT_SPEC.top_n, mi
     return idx[np.argsort(-vals)[:top_n]]
 
 
-def r_target(ctx: Ctx, k: int, t: int, tranches: dict, flags: Flags, f: int, with_parts: bool = False,
-             spec: BookSpec = DEFAULT_SPEC):
-    """R 목표 비중(체결일 f 기준, 합 1): 활성 트랜치(k, k−1, … ``spec.n_tranches`` 개)마다 1/n, 트랜치 안 동일가중. 강제 매도·폐지 종목은 뺀다.
-
-    ``with_parts`` 면 ``(w, 활성 트랜치 수)`` 를 돌려준다(PO-7 M3 불변식).
-    """
+def r_target(ctx: Ctx, k: int, t: int, tranches: dict, flags: Flags, f: int, spec: BookSpec = DEFAULT_SPEC) -> tuple[np.ndarray, int]:
+    """R 목표 비중(체결일 f 기준, 합 1)과 활성 트랜치 수(PO-7 M3 불변식). 활성 트랜치(k, k−1, … ``spec.n_tranches`` 개)마다 1/n, 트랜치 안 동일가중. 강제 매도·폐지 종목은 뺀다."""
     nN = ctx.C.shape[0]
     in_u = ctx.in_u(t)
     gone = delisted(ctx, f)
@@ -54,4 +50,4 @@ def r_target(ctx: Ctx, k: int, t: int, tranches: dict, flags: Flags, f: int, wit
             parts.append(b)
     for b in parts:
         w[b] += 1.0 / (len(parts) * b.size)
-    return (w, len(parts)) if with_parts else w
+    return w, len(parts)

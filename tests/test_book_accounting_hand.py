@@ -94,7 +94,6 @@ def test_nan_in_the_optimized_book_bounds_does_not_pass():
 
 def test_no_steps_is_a_violation_not_a_pass():
     assert check_invariants([], "R")
-    assert check_invariants([], "R", min_steps=0) == []
 
 
 def test_invariant_cap_comes_from_the_spec():

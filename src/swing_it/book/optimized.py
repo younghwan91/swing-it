@@ -14,7 +14,7 @@ import math
 import numpy as np
 from scipy import stats
 
-from swing_it.book.context import delisted
+from swing_it.book.context import delisted, index_mask
 from swing_it.book.risk import active_risk, factor_share, sub_model, top_exposures
 from swing_it.book.spec import DEFAULT_SPEC, BookSpec
 from swing_it.core_layers import core_layer
@@ -182,7 +182,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
     Sb = sub.X @ (sub.F @ (sub.X.T @ b)) + sub.D * b
     w_prev = w_t[P]
     no_trade = ~(tradeable[P] & costable[P]) | frozen[P]
-    outside_frozen = frozen & ~np.isin(np.arange(nN), P)
+    outside_frozen = frozen & ~index_mask(nN, P)
     budget = 1.0 - float(w_t[outside_frozen].sum())
     con = Constraints(budget=budget, long_only=True, max_weight=spec.max_weight, sector=ctx.lab[P, t], benchmark=b,
                       sector_band=cell.band, max_turnover=spec.max_turnover if built else None, max_participation=spec.max_participation,

@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from swing_it.book.context import Ctx, StepRec, delisted
+from swing_it.book.context import Ctx, StepRec, delisted, index_mask
 from swing_it.book.costs import linear_bp, trade_costs, trailing_vol
 from swing_it.book.optimized import FACTOR_ALARM, capped_rescale, o_target
 from swing_it.book.rank import r_target, tranche_names
@@ -17,6 +17,63 @@ from swing_it.features.universe import rank_band_eligible, u_exclusion, u_exclus
 INV_EPS = 1e-6      # 불변식 허용오차
 COST_BP_PER_TURN = (1.5, 300.0)  # 1배 비용/회전(bp): 수수료 하한 ~ 상한
 LIMIT_UP_RET = 0.29  # 체결일 종가 수익 ≥ 29% 면 상한가 체결로 센다
+
+
+def _equal_weight(n: int, idx: np.ndarray) -> np.ndarray:
+    """벤치 — ``idx`` 동일가중, 합 1. ``idx`` 가 비면 부르지 않는다."""
+    b = np.zeros(n)
+    b[idx] = 1.0 / idx.size
+    return b
+
+
+def _r_exante(ctx: Ctx, rec: StepRec, t: int, want: np.ndarray, in_u: np.ndarray, el: np.ndarray, spec: BookSpec) -> None:
+    """R 의 사전 위험(결정 목표 비중, 결정일 모델, U_t 안, 합 1 로 맞춤). 모델이 없으면 칸을 NaN 으로 둔다."""
+    w_r = want * in_u
+    if not (w_r.sum() > 0 and el.size and ctx.models[t][1] is not None):
+        return
+    nN = want.size
+    w_r = w_r / w_r.sum()
+    rows = np.flatnonzero(in_u & ((w_r > 0) | index_mask(nN, el)))
+    sub = sub_model(ctx.models[t], rows, spec.step)
+    d = (w_r - _equal_weight(nN, el))[rows]
+    rec.exante_20 = active_risk(sub, d)
+    rec.factor_share = factor_share(sub, d)
+    if rec.factor_share > FACTOR_ALARM:
+        rec.alarm_top3 = top_exposures(sub, d)
+
+
+def _rebalance(want: np.ndarray, w_f: np.ndarray, frozen: np.ndarray, tradeable: np.ndarray, forced: np.ndarray, *, trade: bool,
+               cap: "float | None") -> tuple[np.ndarray, float, float]:
+    """체결 뒤 비중·현금·재비례 몫. ``trade`` 가 거짓이면(최적화 실패) 거래 안 함 — 강제 매도만, 대금은 현금."""
+    renorm = 0.0
+    if trade:
+        free = tradeable & ~frozen
+        room = 1.0 - w_f[frozen].sum()
+        s = want[free].sum()
+        new = np.where(frozen, w_f, 0.0)
+        if s > 0:  # PO-9: O 는 상한을 지키며 채운다(넘치는 몫은 현금)
+            new[free] = capped_rescale(want[free], room, cap)
+            renorm = abs(room - s)
+    else:
+        new = w_f.copy()
+        new[forced & tradeable] = 0.0
+    return new, 1.0 - new.sum(), renorm
+
+
+def _o_invariant_inputs(ctx: Ctx, rec: StepRec, cell: Cell, spec: BookSpec, t: int, el: np.ndarray, new: np.ndarray, w_f: np.ndarray, w_t: np.ndarray,
+                        frozen: np.ndarray, forced: np.ndarray, tradeable: np.ndarray, held: np.ndarray, in_u: np.ndarray, renorm: float, built: bool) -> None:
+    """O 불변식 재료 — 업종 편차와 허용폭, 구축 뒤 회전율 한도."""
+    nN = new.size
+    bvec = _equal_weight(nN, el)
+    labs = ctx.lab[:, t]
+    groups = {g for g in labs[(new > 0) | (bvec > 0)] if g is not None}
+    rec.sector_dev = max((abs(float(new[labs == g].sum() - bvec[labs == g].sum())) for g in groups), default=0.0)
+    outside = float(w_f[frozen & ~index_mask(nN, np.union1d(el, np.flatnonzero(held & in_u)))].sum())
+    rec.sector_tol = cell.band + INV_EPS + outside + renorm + rec.dust_mass  # PO-9: 먼지 재분배로 옮긴 몫
+    if built:
+        drift = float(np.abs(w_f - w_t).sum())  # t→f 표류 + 폐지 현금화
+        rec.turn_bound = (spec.max_turnover + drift + float(w_f[forced & tradeable].sum()) + renorm
+                          + 2.0 * rec.dust_mass + INV_EPS)
 
 
 def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), rank_sig=None, ic_by_year=None,
@@ -104,21 +161,9 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         # 목표 비중(체결일 f, 합 ≤ 1)
         trade = True
         if kind == "R":
-            want, rec.n_tranches = r_target(ctx, k, t, tranches, flags, f, with_parts=True, spec=spec)
+            want, rec.n_tranches = r_target(ctx, k, t, tranches, flags, f, spec=spec)
             rec.n_untradeable = int(((want > 0) & ~tradeable).sum())
-            # 사전 위험(결정 목표 비중, 결정일 모델, U_t 안, 합 1 로 맞춤)
-            w_r = want * in_u
-            if w_r.sum() > 0 and el.size and ctx.models[t][1] is not None:
-                w_r = w_r / w_r.sum()
-                rows = np.flatnonzero(in_u & ((w_r > 0) | np.isin(np.arange(nN), el)))
-                sub = sub_model(ctx.models[t], rows, spec.step)
-                b = np.zeros(nN)
-                b[el] = 1.0 / el.size
-                d = (w_r - b)[rows]
-                rec.exante_20 = active_risk(sub, d)
-                rec.factor_share = factor_share(sub, d)
-                if rec.factor_share > FACTOR_ALARM:
-                    rec.alarm_top3 = top_exposures(sub, d)
+            _r_exante(ctx, rec, t, want, in_u, el, spec)
             want = np.where(tradeable, want, 0.0)
         else:
             want, info = o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol,
@@ -126,21 +171,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             for key, v in info.items():
                 setattr(rec, key, v)
             trade = rec.status == "optimal"
-        renorm = 0.0
-        if trade:
-            free = tradeable & ~frozen
-            room = 1.0 - w_f[frozen].sum()
-            s = want[free].sum()
-            new = np.where(frozen, w_f, 0.0)
-            if s > 0:  # PO-9: O 는 상한을 지키며 채운다(넘치는 몫은 현금)
-                new[free] = capped_rescale(want[free], room, spec.max_weight if kind == "O" else None)
-                renorm = abs(room - s)
-            new_cash = 1.0 - new.sum()
-        else:  # 최적화 실패 → 거래 안 함(강제 매도만, 대금은 현금)
-            new = w_f.copy()
-            sold = forced & tradeable
-            new[sold] = 0.0
-            new_cash = 1.0 - new.sum()
+        new, new_cash, renorm = _rebalance(want, w_f, frozen, tradeable, forced, trade=trade, cap=spec.max_weight if kind == "O" else None)
         dw = np.where(tradeable, new - w_f, 0.0)
         new = np.where(tradeable, new, w_f)
         if flags.costs and np.any(dw != 0):
@@ -156,17 +187,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
         rec.max_w = float(new[ctrl].max()) if ctrl.any() else 0.0
         rec.max_w_frozen = float(new[frozen].max()) if frozen.any() else 0.0
         if kind == "O" and rec.status == "optimal" and el.size:
-            bvec = np.zeros(nN)
-            bvec[el] = 1.0 / el.size
-            labs = ctx.lab[:, t]
-            groups = {g for g in labs[(new > 0) | (bvec > 0)] if g is not None}
-            rec.sector_dev = max((abs(float(new[labs == g].sum() - bvec[labs == g].sum())) for g in groups), default=0.0)
-            outside = float(w_f[frozen & ~np.isin(np.arange(nN), np.union1d(el, np.flatnonzero(held & in_u)))].sum())
-            rec.sector_tol = cell.band + INV_EPS + outside + renorm + rec.dust_mass  # PO-9: 먼지 재분배로 옮긴 몫
-            if built:
-                drift = float(np.abs(w_f - w_t).sum())  # t→f 표류 + 폐지 현금화
-                rec.turn_bound = (spec.max_turnover + drift + float(w_f[forced & tradeable].sum()) + renorm
-                                  + 2.0 * rec.dust_mass + INV_EPS)
+            _o_invariant_inputs(ctx, rec, cell, spec, t, el, new, w_f, w_t, frozen, forced, tradeable, held, in_u, renorm, built)
         if flags.lag:
             rf = ctx.ret[:, f]
             rec.n_buy_limit_up = int(((dw > 0) & np.isfinite(rf) & (rf >= LIMIT_UP_RET)).sum())
@@ -188,10 +209,10 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
 
 
 def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_weight: "float | None" = None,
-                     spec: BookSpec = DEFAULT_SPEC, costs: bool = True, *, min_steps: int = 1) -> list[str]:
+                     spec: BookSpec = DEFAULT_SPEC, costs: bool = True) -> list[str]:
     """성과와 무관한 불변식(스텝마다). 위반 문장 목록을 돌려준다(비면 통과). 러너는 하나라도 있으면 결과를 쓰지 않는다.
 
-    NaN 은 통과가 아니다 — 비교는 "지켜졌다"를 묻는 꼴로 쓴다. 스텝이 ``min_steps`` 보다 적어도 위반이다(빈 장부는 아무것도 증명하지 않는다). 상한 기본값은 ``spec.max_weight``.
+    NaN 은 통과가 아니다 — 비교는 "지켜졌다"를 묻는 꼴로 쓴다. 스텝이 없어도 위반이다(빈 장부는 아무것도 증명하지 않는다). 상한 기본값은 ``spec.max_weight``.
 
     - Σw + 현금 = 1, w ≥ −ε. O: (거래 가능·안 얼린 종목) max w ≤ 상한 + ε, 업종 |Σw_g − b_g| ≤ 밴드 + ε + (문제 밖 얼린 몫 + 재비례 + 먼지),
       구축 뒤 회전율 ≤ 상한 + 표류·폐지 + 강제 매도 + 재비례 + 2·먼지. 해는 no_buy 종목을 사지 않고 참여율 상한을 지킨다.
@@ -201,8 +222,8 @@ def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_w
     if max_weight is not None:
         spec = replace(spec, max_weight=max_weight)
     out = []
-    if len(recs) < min_steps:
-        out.append(f"{kind}: 스텝 {len(recs)}개 < {min_steps} — 검사할 장부가 없다")
+    if not recs:
+        out.append(f"{kind}: 스텝이 없다 — 검사할 장부가 없다")
     cap = spec.max_weight
     lo_bp, hi_bp = COST_BP_PER_TURN
     for r in recs:
