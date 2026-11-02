@@ -395,7 +395,7 @@ id = "check-forecast-ignores-label-overlap"
 why = "학습 라벨이 예측일을 넘어 겹치면 미래가 샌다"
 guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
 file = "src/swing_it/pipeline/checks.py"
-find = "    if (np.busday_count(train_end, date) < horizon).any():"
+find = "    if (at_date - at_end < horizon).any():"
 replace = "    if False:"
 
 [[mutation]]
@@ -611,3 +611,11 @@ guards = ["tests/test_book_units.py::test_permutation_null_passes_spec_max_weigh
 file = "src/swing_it/book/nulls.py"
 find = "max_weight=spec.max_weight, spec=spec, costs=flags.costs)"
 replace = "spec=spec)"
+
+[[mutation]]
+id = "forecast-overlap-counts-weekdays"
+why = "평일로 세면 휴장일이 낀 라벨 겹침이 지나간다 — 실제 달력에서 겹침의 57.7%"
+guards = ["tests/test_pipeline_checks.py::test_forecast_overlap_counts_trading_days_not_weekdays"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if (at_date - at_end < horizon).any():"
+replace = "    if (np.busday_count(train_end.to_numpy(\"datetime64[D]\"), date.to_numpy(\"datetime64[D]\")) < horizon).any():"

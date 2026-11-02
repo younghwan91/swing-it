@@ -1,10 +1,10 @@
 # 파이프라인 11단계
 
-연구는 아래 순서로만 흐른다. 단계마다 부를 함수가 `src/` 에 있고, 순서는 게이트와 CI 가 막는다. 지금 상태는 `python -m swing_it.pipeline status` 로 본다.
+연구는 아래 순서로만 흐른다. 순서는 게이트와 CI 가 막는다. 부를 함수는 대부분 `src/` 에 있다. 예외는 5단계(연구 코드에만 있다)·6단계 모델 빌드·10단계(없다)·11단계 보고서다. 지금 상태는 `python -m swing_it.pipeline status` 로 본다.
 
 ## 단계와 실제 함수
 
-러너가 이 함수들을 부른다. 게이트는 러너가 부른다. 표는 `swing_it.pipeline.stages.STAGE_FUNCTIONS` 와 같고, 시험이 경로와 심볼의 실재를 본다.
+함수는 러너가 부르고 게이트도 러너가 부른다. 표는 `swing_it.pipeline.stages.STAGE_FUNCTIONS` 와 같고, 시험이 경로와 심볼의 실재를 본다.
 
 | # | 단계 | 함수 | 위치 |
 |---|---|---|---|
@@ -12,7 +12,7 @@
 | 2 | 데이터 | `read_prices`·`read_earnings`·`read_periodic_filings` | `swing_it.storage`. PEAD 러너의 가격은 이 정문이 아니라 `pead_optimizer_po4.load_inputs` → core `load_risk_inputs`(`load_daily_bars`) 다 |
 | 3 | 알파 발굴 | `yoy_strict_wide`·`load_yoy_strict` | `swing_it.features.earnings_asof` |
 | 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`daily_mean_ic`·`quintile_excess`·`ic_summary`·`ic_permutation_null`·`fold_ic` | `swing_it.validation.ic` |
-| 5 | ML 수익률 예측 | `research/experiments/ml_forecast_models.py` | 연구 코드에 남았다. 예측은 `check_forecast` 로 검사한다 |
+| 5 | ML 수익률 예측 | `research/experiments/ml_forecast_models.py` | **`src` 에 없다.** 연구 코드에 남았다. `check_forecast` 는 있지만 부르는 러너가 아직 없다 |
 | 6 | 팩터 위험모델 | `sub_model`·`active_risk`, 모델은 `build_models` | `swing_it.book.risk`, `research/experiments/pead_optimizer_po3.py`(core `build_risk_model` 호출) |
 | 7 | 포트폴리오 | 순위 북 `tranche_names`·`r_target`, 최적화 북 `o_target`·`match_lambda` | `swing_it.book.rank`, `swing_it.book.optimized` |
 | 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` | `swing_it.book.costs` |
@@ -32,6 +32,8 @@
 
 **4단계에서 보고할 것.** 순위 IC 는 평균 정보량을 과대 표시한다(ML S2: 순위 .041 대 평균 .014). 롱온리는 평균만 수확하므로 `daily_mean_ic`·`quintile_excess` 의 Q5−U 와 2배 왕복 비용을 함께 적는다. 요약은 `ic_summary`(NW lag = h, 비겹침 ICIR), 널은 `ic_permutation_null` 이다. 책 전체를 돌리는 `permutation_nulls` 는 9단계 널이고, 두 널 모두 π 가 신호의 베타·변동성·사이즈 상관을 지운다(기울기 입력에서 기각률 23~28%). 팩터 회귀와 함께 쓴다. 폐지 뒤 수익은 0% 로 잰다.
 
+**5단계의 한계.** N1(라벨 섞기)은 학습 경로 스모크다. 누출 검사가 아니다. 주입한 누출 6종을 하나도 못 잡았다. 누출은 절단 동일성과 `check_forecast` 로 본다. ML 연구는 닫혔고 `check_forecast` 를 안 부른 채 끝났다. 새 예측 러너는 거래일 달력을 넘겨 부른다.
+
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
 ## 경계 검사
@@ -43,7 +45,7 @@
 | `check_universe(frame, min_per_day=1)` | 중복 (code, date), 날짜 아닌 값·결측, 코드 결측·빈 값, bool 아닌 적격 열, 전체 적격 0개, 적격이 `min_per_day` 미만인 날 |
 | `check_panels(prices, earnings, end)` | `end` 뒤 가격, 종가 NaN·inf·0·음수, `end` 뒤에 안 실적 행, `end` ≥ 2026-09-14(애프터마켓 오염 — main 의 `read_prices` 는 정규장 값을 만들지 못한다) |
 | `check_signal(sig)` | inf, 전부 NaN |
-| `check_forecast(df, horizon)` | 학습 구간 안 예측, `train_end` 뒤 평일 `horizon` 일 안의 예측(라벨 겹침, 휴장일이 끼면 놓칠 수 있다) |
+| `check_forecast(df, horizon, calendar)` | 학습 구간 안 예측, `train_end` 뒤 거래일 `horizon` 일(마지막 라벨일까지의 거래일 수) 안의 예측, 거래일이 아닌 날짜 |
 | `check_weights(w, codes)` | 음수, 합 초과, NaN, 코드 중복 |
 | `check_attribution(frame, names)` | 기여 합과 total 의 차이 |
 

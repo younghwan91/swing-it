@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -41,11 +42,14 @@ def _forecast(date="2020-03-03", train_end="2020-01-02", forecast=0.1):
     return pd.DataFrame({"code": ["A"], "date": [date], "forecast": [forecast], "train_end": [train_end]})
 
 
+CAL = pd.bdate_range("2019-12-02", "2020-06-30")
+
+
 def test_valid_inputs_pass():
     check_universe(_universe())
     check_panels(_prices(), _earnings(), "2020-01-03")
     check_signal(np.array([[1.0, np.nan]]))
-    check_forecast(_forecast(), 20)
+    check_forecast(_forecast(), 20, CAL)
     check_weights([0.5, 0.5], ["A", "B"])
     check_attribution(pd.DataFrame({"date": ["d"], "f": [0.1], "specific": [0.1], "total": [0.2]}), ("f",))
 
@@ -73,10 +77,15 @@ def test_valid_inputs_pass():
     (lambda: check_signal(np.array([[np.inf]])), "inf"),
     (lambda: check_signal(np.array([[np.nan]])), "유효한"),
     (lambda: check_signal(np.array([1.0])), "2차원"),
-    (lambda: check_forecast(_forecast(date="2020-01-02"), 20), "누출"),
-    (lambda: check_forecast(_forecast(date="2020-01-03"), 20), "겹친다"),
-    (lambda: check_forecast(_forecast(forecast=np.nan), 20), "NaN"),
-    (lambda: check_forecast(_forecast(), 0), "horizon"),
+    (lambda: check_forecast(_forecast(date="2020-01-02"), 20, CAL), "누출"),
+    (lambda: check_forecast(_forecast(date="2020-01-03"), 20, CAL), "겹친다"),
+    (lambda: check_forecast(_forecast(forecast=np.nan), 20, CAL), "NaN"),
+    (lambda: check_forecast(_forecast(), 0, CAL), "horizon"),
+    (lambda: check_forecast(_forecast(), 2.5, CAL), "horizon"),
+    (lambda: check_forecast(_forecast(), 20, []), "calendar"),
+    (lambda: check_forecast(_forecast(), 20, CAL[::-1]), "calendar"),
+    (lambda: check_forecast(_forecast(date="2020-03-07"), 20, CAL), "거래일이 아닌"),
+    (lambda: check_forecast(_forecast(train_end="2020-01-04"), 20, CAL), "거래일이 아닌"),
     (lambda: check_weights([-0.1]), "음수"),
     (lambda: check_weights([0.8, 0.8]), "합"),
     (lambda: check_weights([np.nan]), "NaN"),
@@ -92,6 +101,31 @@ def test_violation_is_refused(call, match):
 def test_aftermarket_window_has_no_way_around():
     """"처리했다"고 말하는 인자는 없다 — main 의 read_prices 는 정규장 값을 만들지 못한다."""
     assert "handled" not in check_panels.__code__.co_varnames
+
+
+def test_forecast_overlap_counts_trading_days_not_weekdays():
+    """휴장일이 끼면 평일 수는 충분해도 라벨은 아직 안 끝났다. 평일 계산은 실제 달력에서 57.7% 를 겹침으로 통과시켰다(검증 5단계)."""
+    holidays = pd.bdate_range("2020-01-20", "2020-01-24")
+    cal = CAL.difference(holidays)
+    edge = _forecast(date=str(cal[cal.searchsorted(pd.Timestamp("2020-01-02")) + 19].date()))
+    assert np.busday_count(np.datetime64("2020-01-02"), np.datetime64(edge["date"].iloc[0])) >= 20, "평일로는 통과했을 칸"
+    with pytest.raises(CheckError, match="겹친다"):
+        check_forecast(edge, 20, cal)
+    check_forecast(_forecast(date=str(cal[cal.searchsorted(pd.Timestamp("2020-01-02")) + 20].date())), 20, cal)
+
+
+def test_check_forecast_requires_a_calendar():
+    with pytest.raises(TypeError):
+        check_forecast(_forecast(), 20)
+
+
+def test_ml_common_does_not_need_the_core_portfolio_layer_for_its_rng():
+    """기본 핀에서 ``pead_optimizer_c0`` 를 거치면 import 부터 죽는다. 난수는 정본에서 가져오고 값은 같다."""
+    from swing_it.validation.keys import keyed_rng
+
+    tree = ast.parse((REPO / "research/experiments/ml_forecast_common.py").read_text(encoding="utf-8"))
+    assert "pead_optimizer_c0" not in [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+    assert keyed_rng("ML-N2", 3).integers(1 << 30) == np.random.default_rng(np.random.SeedSequence(20261101, spawn_key=(zlib.crc32(b"ML-N2"), 3))).integers(1 << 30)
 
 
 def test_a_day_without_eligible_names_can_be_declared():
@@ -123,8 +157,6 @@ def _resolve(ref: str) -> None:
 def test_stage_table_points_at_real_functions(stage):
     assert STAGE_FUNCTIONS[stage]
     for ref in STAGE_FUNCTIONS[stage]:
-        if ref == "research/experiments/ml_forecast_models.py" and not (REPO / ref).exists():
-            continue                                        # ML 브랜치가 머지되기 전
         _resolve(ref)
 
 

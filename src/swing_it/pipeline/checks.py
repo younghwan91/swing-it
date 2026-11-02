@@ -95,23 +95,30 @@ def check_signal(sig: np.ndarray) -> None:
         raise CheckError("유효한 신호가 하나도 없다")
 
 
-def check_forecast(df: pd.DataFrame, horizon: int) -> None:
+def check_forecast(df: pd.DataFrame, horizon: int, calendar: Any) -> None:
     """5단계. 긴 형식 code·date·forecast·train_end. ``train_end`` = 그 예측을 만든 모델의 마지막 학습 행 날짜.
 
-    학습 라벨은 ``horizon`` 거래일 앞을 본다. 그래서 ``date`` 는 ``train_end`` 에서 평일 ``horizon`` 일 이상 떨어져야 한다.
-    KRX 달력을 모르니 평일로 센다 — 휴장일이 끼면 놓칠 수 있다(겹침을 잘못 막지는 않는다).
+    ``horizon`` = 학습 행 날짜에서 **마지막 라벨일까지의 거래일 수**(ML: y = Σ_{s=t+2}^{t+21} 이면 21). ``date`` 는 ``train_end`` 에서 거래일로
+    ``horizon`` 일 이상 떨어져야 그 라벨이 다 끝나 있다. ``calendar`` 는 거래일 전체(단조 증가)이고, 두 날짜 열은 그 안에 있어야 한다.
+    평일로 세면 휴장일이 낀 겹침을 통과시킨다(실제 달력에서 겹침의 57.7%).
     """
     _long_frame(df, ("code", "date", "forecast", "train_end"), "forecast")
-    if horizon <= 0:
-        raise CheckError(f"horizon 은 양수여야 한다: {horizon}")
+    if isinstance(horizon, bool) or not isinstance(horizon, (int, np.integer)) or horizon <= 0:
+        raise CheckError(f"horizon 은 양의 정수여야 한다: {horizon}")
+    cal = pd.DatetimeIndex(pd.to_datetime(list(calendar))) if len(calendar) else pd.DatetimeIndex([])
+    if cal.empty or not cal.is_monotonic_increasing or cal.has_duplicates:
+        raise CheckError("calendar 는 비어 있지 않고 중복 없이 단조 증가하는 거래일이어야 한다")
     if not np.isfinite(df["forecast"].to_numpy(dtype=np.float64)).all():
         raise CheckError("forecast 에 NaN·inf 가 있다")
-    date = _day(df["date"], "date").to_numpy("datetime64[D]")
-    train_end = _day(df["train_end"], "train_end").to_numpy("datetime64[D]")
-    if (date <= train_end).any():
+    date = pd.DatetimeIndex(_day(df["date"], "date"))
+    train_end = pd.DatetimeIndex(_day(df["train_end"], "train_end"))
+    at_date, at_end = cal.get_indexer(date), cal.get_indexer(train_end)
+    if (at_date < 0).any() or (at_end < 0).any():
+        raise CheckError("date·train_end 에 calendar 의 거래일이 아닌 날이 있다")
+    if (at_date <= at_end).any():
         raise CheckError("학습 구간 안 예측이 있다 — 누출")
-    if (np.busday_count(train_end, date) < horizon).any():
-        raise CheckError(f"학습 라벨이 예측일과 겹친다 — train_end 뒤 평일 {horizon}일 안의 예측이 있다")
+    if (at_date - at_end < horizon).any():
+        raise CheckError(f"학습 라벨이 예측일과 겹친다 — train_end 뒤 거래일 {horizon}일 안의 예측이 있다")
 
 
 def check_weights(w: Any, codes: Any = None, *, budget: float = 1.0, tol: float = 1e-6) -> None:

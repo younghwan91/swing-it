@@ -948,6 +948,7 @@ def check_verdicts_have_runner() -> list[str]:
     return out
 
 
+# (j) 범위: 파일 이름이 ml_forecast_*.py 인 것만 본다. 다른 이름의 로더, src, 동적 SQL 은 못 잡는다 — 그 연구 한 벌의 원천 규칙이다.
 # (j) ML 예측(PREREG §3·정정 ML-1 ⑯): 피처는 폐지 종목까지 같은 정의인 원천만 쓴다. ``credit_balance``·
 # ``short_selling``·``program_trading`` 백필은 상장 생존 종목뿐이고, ``supply_demand`` 는 상장=키움·폐지=네이버로 원천이
 # 갈려 정의 차이가 폐지 여부와 상관된다(결측·정의가 미래 폐지와 상관되면 누출이다). 기관 세부 열도 폐지 종목은 NULL 이다.
