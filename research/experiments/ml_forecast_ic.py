@@ -394,7 +394,7 @@ def run(args, log) -> int:
         "n1": {"reps": N1_REPS, "mean": n1_mean, "means": n1_means, "m_n2_q95": n1_q, "void": bool(n1_mean > n1_q)},
         "determinism": {"same": bool(det_same), "cells": det_cells},
         "data_check": dq, "fingerprints": {"before": fp0, "after": fp1, "panel_2019_end": P["info"]["fingerprint"]},
-        "elapsed_s": time.time() - t_start,
+        "code_sha": _git_sha(), "elapsed_s": time.time() - t_start,
         "label_public": "재사용 창 — 알파 주장 불가. 2020~23 은 진화 폴드·B·옛 ML-PEAD 가 모두 썼다.",
         "limits": ["N1 은 피처가 미래와 연결된 누출을 못 잡는다(§8). 절단 동일성은 원천이 나중에 고친 값을 못 잡는다(§8) — 예: 2026-10 백필 naver_investor_trend, 정정 리포트 목표가."],
     }
@@ -405,6 +405,14 @@ def run(args, log) -> int:
     (OUT / "RUN.md").write_text("\n".join(run_md) + "\n")
     log(f"1단계 판정 {verdict}")
     return 0
+
+
+def _git_sha() -> str:
+    d = str(Path(__file__).resolve().parent)
+    sha = subprocess.run(["git", "-C", d, "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
+    dirty = subprocess.run(["git", "-C", d, "status", "--porcelain", "--", "research/experiments", "src"],
+                           capture_output=True, text=True, check=False).stdout.strip()
+    return sha + ("-dirty" if dirty else "")
 
 
 def _lgb_version() -> str:
@@ -423,7 +431,7 @@ def render(r: dict) -> str:
     st, nl = r["stats"], r["null_n2"]
     L = [f"# ML 수익률 예측 1단계 — IC ({r['status']})", "",
          f"> **{r['status']}.** 리뷰(`quant-reviewer`)·재계산(`haiku-verifier`) 전 숫자다. {r['label_public']}", "",
-         f"사전등록 `{r['prereg']}` + 정정 {', '.join(r['corrections'])}. END {r['end']}, core `{r['core_ref']}`, LightGBM {r['lightgbm']}. 원본 `S1.json`.", "",
+         f"사전등록 `{r['prereg']}` + 정정 {', '.join(r['corrections'])}. END {r['end']}, core `{r['core_ref']}`, LightGBM {r['lightgbm']}, 코드 `{r['code_sha']}`. 원본 `S1.json`.", "",
          f"**1단계 판정: {r['verdict']}**" + (f" — VOID 사유: {r['void']}" if r["void"] else ""), "",
          f"OOS IC 격자 {r['grid']['oos_days']}일({r['grid']['first']}~{r['grid']['last']}, 5거래일). U(t) 중앙 {r['universe']['median_oos']:.0f}, U* {r['universe']['U_star']}.", "",
          "## 표 1 — IC 와 널", "",
