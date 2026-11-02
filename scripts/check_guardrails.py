@@ -152,8 +152,8 @@ def check_no_raw_earnings_select() -> list[str]:
             if _RAW_EARNINGS.search(line):
                 out.append(
                     f"[earnings] {rel}:{i} — earnings 를 직접 SELECT 했다. "
-                    f"swing_it.storage.read_earnings(con, asof=...) 를 쓸 것 "
-                    f"(정정공시 버전이 중복 행으로 새어나온다)."
+                    f"신호는 swing_it.features.earnings_asof.load_yoy_strict, 그 밖에는 "
+                    f"swing_it.storage.read_earnings 를 쓸 것 (정정공시 버전이 중복 행으로 새어나온다)."
                 )
     return out
 
@@ -782,6 +782,9 @@ def _pipeline_problem(tree: ast.Module, gate) -> "str | None":
                 "앞 단계로 적으면 게이트가 비어 버린다.")
     if problem:
         return problem
+    if any(names.name(n) == "read_prices" and not any(k.arg == "end" for k in n.keywords)
+           for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        return "read_prices 에 end= 가 없다 — 2026-09-14~ 애프터마켓 오염 구간까지 읽는다(docs/PIPELINE.md 2단계)."
     entry = next((n.body for n in tree.body if _is_main_guard(n)), None)
     if entry is None:
         return "PIPELINE 을 선언했는데 __main__ 진입점이 없다 — 러너가 아니면 PIPELINE_LIBRARY 를 적는다."

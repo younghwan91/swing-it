@@ -39,6 +39,15 @@ def _day(values: pd.Series, name: str) -> pd.Series:
     return days
 
 
+def check_price_end(end: Any) -> pd.Timestamp:
+    """가격 상한이 날짜이고 애프터마켓 오염 구간 전인지 본다. 정문 ``read_prices`` 와 :func:`check_panels` 가 같이 쓴다."""
+    end_ts = _day(pd.Series([end]), "end").iloc[0]
+    if end_ts >= pd.Timestamp(AFTERMARKET_FROM):
+        raise CheckError(f"end {end} 는 애프터마켓 오염 구간({AFTERMARKET_FROM}~)이다. "
+                         "main 의 read_prices 는 정규장 값을 만들지 못한다 — 이 구간은 받지 않는다")
+    return end_ts
+
+
 def check_universe(frame: pd.DataFrame, *, min_per_day: int = 1) -> None:
     """1단계. 긴 형식 code·date·eligible(bool), (code, date) 하나씩, 날짜·코드가 유효하고, 날마다 적격이 ``min_per_day`` 개 이상이다.
 
@@ -61,12 +70,12 @@ def check_universe(frame: pd.DataFrame, *, min_per_day: int = 1) -> None:
 
 
 def check_panels(prices: pd.DataFrame, earnings: pd.DataFrame, end: str, *, knowledge_col: str = "knowledge_date") -> None:
-    """2단계. ``end`` 뒤 가격·``end`` 뒤에 안 실적 행을 거부한다. ``end`` 는 애프터마켓 오염 구간 전이어야 한다."""
+    """2단계. ``end`` 뒤 가격·``end`` 뒤에 안 실적 행, 양의 유한수가 아닌 종가를 거부한다. ``end`` 는 애프터마켓 오염 구간 전이어야 한다."""
     _long_frame(prices, ("code", "date", "close"), "prices")
-    end_ts = _day(pd.Series([end]), "end").iloc[0]
-    if end_ts >= pd.Timestamp(AFTERMARKET_FROM):
-        raise CheckError(f"end {end} 는 애프터마켓 오염 구간({AFTERMARKET_FROM}~)이다. "
-                         "main 의 read_prices 는 정규장 값을 만들지 못한다 — 이 구간은 받지 않는다")
+    end_ts = check_price_end(end)
+    close = prices["close"].to_numpy(dtype=np.float64)
+    if not (np.isfinite(close) & (close > 0)).all():
+        raise CheckError("prices.close 에 NaN·inf·0·음수가 있다 — 없는 날은 행이 없어야 한다")
     if _day(prices["date"], "prices.date").max() > end_ts:
         raise CheckError(f"prices 에 end({end}) 뒤 날짜가 있다 — 미래 데이터")
     _long_frame(earnings, ("code", "period", "avail_date", knowledge_col), "earnings", key=())

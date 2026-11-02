@@ -68,7 +68,7 @@ def run(inputs: dict, *, costs: bool, n_null: int = 5) -> dict:
 
     # 2 데이터 — 경계 검사
     prices = pd.DataFrame({"code": np.repeat(codes, len(dates)), "date": np.tile(dates.strftime("%Y-%m-%d"), len(codes)),
-                           "close": close.ravel()})
+                           "close": close.ravel()}).dropna(subset=["close"])  # 정문처럼 가격 없는 날은 행이 없다
     check_panels(prices, inputs["earnings"], END)
 
     # 3 알파 — 알게 된 날 규칙을 지키는 YoY

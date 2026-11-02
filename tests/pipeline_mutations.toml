@@ -539,3 +539,43 @@ guards = ["tests/test_pipeline_checks.py::test_the_doc_table_matches_the_code_ta
 file = "docs/PIPELINE.md"
 find = "| 8 | 거래비용 | `trade_costs`·`linear_bp`·`trailing_vol` |"
 replace = "| 8 | 거래비용 | `linear_bp`·`trailing_vol` |"
+
+[[mutation]]
+id = "universe-day-without-eligible-passes"
+why = "날짜별 적격 0개가 지나가면 그날 북이 조용히 비고 전체 적격 검사만 초록이다"
+guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if len(short):\n"
+replace = "    if False:\n"
+
+[[mutation]]
+id = "read-prices-reads-the-aftermarket"
+why = "정문이 2026-09-14~ 를 받으면 애프터마켓이 섞인 종가가 정규장 값처럼 읽힌다"
+guards = ["tests/test_read_prices_guard.py::test_end_in_the_aftermarket_window_is_refused"]
+file = "src/swing_it/storage.py"
+find = "        check_price_end(end)\n"
+replace = ""
+
+[[mutation]]
+id = "survivor-guard-skips-table-without-backfill"
+why = "폐지 백필이 없는 표를 읽을 때 가드가 '폐지 시세 없음'으로 통과하면 생존자만 읽힌다"
+guards = ["tests/test_read_prices_guard.py::test_a_table_without_delisted_rows_cannot_pass_when_the_default_table_has_them"]
+file = "src/swing_it/storage.py"
+find = "        if table != PRICE_TABLE and _codes(PRICE_TABLE):"
+replace = "        if False:"
+
+[[mutation]]
+id = "panels-take-a-bad-close"
+why = "0·NaN 종가가 지나가면 수익이 inf·NaN 이 되어 아래 단계에서 조용히 빠진다"
+guards = ["tests/test_pipeline_checks.py::test_violation_is_refused"]
+file = "src/swing_it/pipeline/checks.py"
+find = "    if not (np.isfinite(close) & (close > 0)).all():"
+replace = "    if False:"
+
+[[mutation]]
+id = "new-runner-reads-prices-without-end"
+why = "새 러너가 end 없이 읽으면 오염 구간까지 읽는다"
+guards = ["tests/test_check_guardrails.py::test_rule_k_requires_end_on_read_prices_in_a_declared_runner"]
+file = "scripts/check_guardrails.py"
+find = "    if any(names.name(n) == \"read_prices\" and not any(k.arg == \"end\" for k in n.keywords)"
+replace = "    if False and any(names.name(n) == \"read_prices\" and not any(k.arg == \"end\" for k in n.keywords)"

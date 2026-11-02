@@ -254,6 +254,17 @@ def test_rule_k_catches_data_calls_outside_the_runner_folders(lint, tmp_path, mo
     assert len(out) == 1 and "선언이 없다" in out[0], out
 
 
+def test_rule_k_requires_end_on_read_prices_in_a_declared_runner(lint, tmp_path, monkeypatch):
+    """옛 러너는 면제 목록에 있고 ``end=None`` 으로 표 전체를 읽는다. 새 러너가 2026-09-14~ 오염을 읽지 않게 ``end=`` 를 요구한다."""
+    bad = _RUNNER_OK.replace('    connect(args.db)\n', '    read_prices(connect(args.db))\n').replace(
+        "from swing_it.storage import connect", "from swing_it.storage import connect, read_prices")
+    assert bad != _RUNNER_OK
+    out = _rule_k(lint, tmp_path, monkeypatch, bad)
+    assert len(out) == 1 and "end=" in out[0], out
+    good = bad.replace("read_prices(connect(args.db))", 'read_prices(connect(args.db), end="2023-12-28")')
+    assert _rule_k(lint, tmp_path / "ok", monkeypatch, good) == []
+
+
 def test_rule_k_ignores_files_that_touch_no_data(lint, tmp_path, monkeypatch):
     src = "import json\n\ndef f(x):\n    return json.dumps(x)\n"
     assert _rule_k(lint, tmp_path, monkeypatch, src, where="scripts") == []

@@ -9,7 +9,7 @@
 | # | 단계 | 함수 | 위치 |
 |---|---|---|---|
 | 1 | 유니버스 | `rank_band_eligible`·`u_exclusion_causes` | `swing_it.features.universe` |
-| 2 | 데이터 | `read_prices`·`read_earnings`·`read_periodic_filings` | `swing_it.storage` |
+| 2 | 데이터 | `read_prices`·`read_earnings`·`read_periodic_filings` | `swing_it.storage`. PEAD 러너의 가격은 이 정문이 아니라 `pead_optimizer_po4.load_inputs` → core `load_risk_inputs`(`load_daily_bars`) 다 |
 | 3 | 알파 발굴 | `yoy_strict_wide`·`load_yoy_strict` | `swing_it.features.earnings_asof` |
 | 4 | 알파 검증(IC/ICIR) | `daily_rank_ic`·`fold_ic`, `permutation_nulls` | `swing_it.validation.ic`, `swing_it.book.nulls` |
 | 5 | ML 수익률 예측 | `research/experiments/ml_forecast_models.py` | 연구 코드에 남았다. 예측은 `check_forecast` 로 검사한다 |
@@ -26,6 +26,8 @@
 
 **1단계 띠의 뜻.** 시총 21~100위는 "as-of 주식수가 있는 종목 안의" 순위다. 전 시장 순위가 아니다. 2021~22 측정에서 주식수 공백으로 평균 26.8종목이 순위에서 빠졌고 띠의 약 13% 가 전 시장 순위 띠와 달랐다. B 숫자는 이 정의로 재현한다. 메우려면 quant-airflow 의 `shares_outstanding_history` 백필이 필요하다(요청 사항). 스텝별 원인 분리는 `StepRec.u_excl_cap_missing`·`u_excl_model`·`cap_missing_in_u` 에 있다.
 
+**2단계 가격 정문.** `read_prices(end=None)` 은 옛 호출 그대로 표 전체를 읽는다. 옛 러너의 숫자를 바꾸지 않으려는 기본값이다. `end` 를 주면 그날까지 (code, date) 순서로 읽고, 2026-09-14 이상이면 `CheckError` 다. 파이프라인을 선언한 새 러너는 린트 (k) 가 `end=` 를 요구한다. **`volume` 은 수정주가 표에서도 조정되지 않는다.** ADV 는 `trade_value`(백만원)만 쓴다. 실적 정정 이력은 2026-08 전에 없다. 코드는 버전을 처리하지만 그 전 값에 정정치가 섞인 정도는 측정하지 않았다(GUARDRAILS §4-3).
+
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
 ## 경계 검사
@@ -35,7 +37,7 @@
 | 함수 | 거부하는 것 |
 |---|---|
 | `check_universe(frame, min_per_day=1)` | 중복 (code, date), 날짜 아닌 값·결측, 코드 결측·빈 값, bool 아닌 적격 열, 전체 적격 0개, 적격이 `min_per_day` 미만인 날 |
-| `check_panels(prices, earnings, end)` | `end` 뒤 가격, `end` 뒤에 안 실적 행, `end` ≥ 2026-09-14(애프터마켓 오염 — main 의 `read_prices` 는 정규장 값을 만들지 못한다) |
+| `check_panels(prices, earnings, end)` | `end` 뒤 가격, 종가 NaN·inf·0·음수, `end` 뒤에 안 실적 행, `end` ≥ 2026-09-14(애프터마켓 오염 — main 의 `read_prices` 는 정규장 값을 만들지 못한다) |
 | `check_signal(sig)` | inf, 전부 NaN |
 | `check_forecast(df, horizon)` | 학습 구간 안 예측, `train_end` 뒤 평일 `horizon` 일 안의 예측(라벨 겹침, 휴장일이 끼면 놓칠 수 있다) |
 | `check_weights(w, codes)` | 음수, 합 초과, NaN, 코드 중복 |
