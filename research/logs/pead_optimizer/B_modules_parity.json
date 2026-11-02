@@ -33,5 +33,80 @@
   "core_parity_max_abs_diff_bench": 2.7755575615628914e-17,
   "note": "ml_forecast_book.py --mode parity 를 옮긴 코드에서 다시 돌렸다. research/logs/ml_forecast/S2_parity.json 은 건드리지 않았다"
  },
- "how": "tests/real_db/test_b_json_reproduction.py"
+ "how": "tests/real_db/test_b_json_reproduction.py",
+ "table_fingerprint": "e66f309e07de",
+ "table_note": "위 b_json·before_move·ml_s2_0 은 지문 e66f309e07de 표에서 한 것이다. 2026-11-02 16:55 재계산 뒤 표는 지문 400dfcc393ab 다.",
+ "current_table": {
+  "what": "단계별 검증 지적을 고친 뒤 지금 표에서 다시 한 재현. 성과 숫자 없음 — 개수와 최대 차만.",
+  "code": "57bda04",
+  "core_ref": "13c56a7",
+  "table_fingerprint": "400dfcc393ab",
+  "versions": {
+   "cvxpy": "1.9.3",
+   "clarabel": "0.11.1",
+   "numpy": "2.5.3",
+   "scipy": "1.18.1"
+  },
+  "versions_note": "cvxpy·clarabel 은 uv.lock 에 없다. 환경이 바뀌면 O 가 움직인다.",
+  "sections_compared": [
+   "cells",
+   "invariants",
+   "mode",
+   "parity",
+   "primary"
+  ],
+  "sections_skipped": [
+   "ic"
+  ],
+  "ic_note": "IC 패널은 준비 400일 때문에 약 2015-09 부터 읽어 2009~2016-08 잠금 대역에 걸린다. 그래서 B.json 의 ic_by_year 를 입력으로 썼고 ic 절은 대조하지 않았다.",
+  "vs_B_json": {
+   "compared_numbers": 696,
+   "verdict": "표 바뀜",
+   "R_mismatch": 0,
+   "O_mismatch": 333,
+   "non_O_mismatch": 0,
+   "max_abs_diff_O_IR": 5.648784314860045e-06,
+   "max_abs_diff_O_any": 3.0,
+   "worst_O": [
+    [
+     "/cells/H20_band0.05_aum3e+08/O/n_dust",
+     3.0
+    ],
+    [
+     "/primary/verdict/null_q95_O",
+     0.00022272044579696448
+    ],
+    [
+     "/cells/H60_band0.10_aum1e+10/O/folds_IR_2x/2022",
+     2.61316520341337e-05
+    ],
+    [
+     "/cells/H20_band0.05_aum3e+08/O/folds_IR_1x/2020",
+     2.5949462962859826e-05
+    ],
+    [
+     "/cells/H60_band0.10_aum1e+10/O/folds_IR_1x/2022",
+     2.4297301075476563e-05
+    ]
+   ],
+   "other_environment_max_O_IR": 3.829166473900969e-06,
+   "other_environment_note": "검증 9단계 bmodels·docenv 실행, O 어긋남 334개. 판은 적어 두지 않았다."
+  },
+  "vs_pre_fix_code": {
+   "pre_fix_tree": "03fee83",
+   "path": "got_docenv.json",
+   "compared_numbers": 696,
+   "n_mismatch": 0,
+   "max_abs_diff": 0.0,
+   "all_values_compared_between_runs": 830,
+   "all_values_differences": 0,
+   "note": "같은 표·같은 환경에서 옮기기 전 코드 출력과 대조. 코드 회귀 검사는 이것이다."
+  },
+  "risk_models_bit_same": {
+   "n": 55,
+   "same": true,
+   "note": "옮긴 6단계 빌드 대 옮기기 전 코드의 캐시, 지문 400dfcc393ab, core 13c56a7"
+  },
+  "ml_s2_0": "다시 돌리지 않았다. 같은 IC 패널을 읽어 잠금 대역에 걸리고, fingerprint_same_as_B 가 거짓이라 pass 도 나오지 않는다. 표 문제다."
+ }
 }

@@ -24,7 +24,11 @@
 
 `research/experiments/pead_optimizer_b.py` 는 위 함수를 부르는 러너가 됐다. **지문 `e66f309e07de` 표에서** 옮긴 뒤의 코드가 `B.json` 의 숫자를 1e-10 안에서 재현했다(`research/logs/pead_optimizer/B_modules_parity.json`, 재현 방법은 `tests/real_db/test_b_json_reproduction.py`).
 
-**지금 표에서는 O 가 어긋난다.** 2026-11-02 16:55 재계산(052670 ×1500 등)으로 표 지문이 `400dfcc393ab` 가 됐다. R 경로는 그대로이고 O 값 약 334개가 움직인다(IR 최대 3.8e-6, 폴드 IR·왜도 수 e-5, 널 q95 2.2e-4, `n_dust` 정수 3). 재현 시험은 지문을 먼저 보고 "표 바뀜"과 "코드 회귀"를 가른다. 기본은 IC 절을 건너뛴다 — IC 패널이 준비 400일 때문에 약 2015-09 부터 읽어 2009~2016-08 잠금 대역에 걸린다. ML S2-0(`ml_forecast_book.py --mode parity`)은 `fingerprint_same_as_B` 가 거짓이 되어 표가 바뀐 지금은 `pass` 가 나오지 않는다. 코드 문제가 아니라 표 문제다.
+**지금 표에서는 O 가 어긋난다.** 2026-11-02 16:55 재계산(052670 ×1500 등)으로 표 지문이 `400dfcc393ab` 가 됐다. R 경로는 그대로이고 O 값 333~334개가 움직인다. 최대 차는 IR 3.83e-6 또는 5.65e-6, 폴드 IR 수 e-5, 널 q95 2.2e-4, `n_dust` 정수 3 이다. IR 이 두 값인 것은 솔버 환경 차이다. cvxpy·clarabel 은 `uv.lock` 에 없고, 5.65e-6 은 cvxpy 1.9.3·clarabel 0.11.1 에서 쟀다. **코드가 만든 차이는 아니다.** 옮기기 전 코드(`03fee83`)를 같은 표·같은 환경에서 돌린 출력과 값 830개가 차이 0 이다(이 대조는 IC 를 `B.json` 입력으로 넣었다). 재현 시험은 지문을 먼저 보고 "표 바뀜"과 "코드 회귀"를 가르고, `SWING_IT_B_BASELINE` 을 주면 옛 트리 출력과 맞댄다.
+
+**IC 절은 기본으로 건너뛴다.** IC 패널은 `load_risk_inputs(2016-11-01)` 에 준비 400일이 붙어 약 2015-09 부터 읽는다. 2009~2016-08 잠금 대역에 걸린다. 그래서 기본 재현은 `B.json` 의 `ic_by_year` 를 입력으로 쓰고 `ic` 절을 대조하지 않는다. 그 표에서 IC 자체가 재현되는지는 지금 보지 않은 것이다.
+
+**ML S2-0.** `ml_forecast_book.py --mode parity` 는 지금 돌리지 않는다. 같은 IC 패널을 읽어 잠금 대역에 걸리고, 표가 바뀌어 `fingerprint_same_as_B` 가 거짓이라 `pass` 도 나오지 않는다. 코드 문제가 아니라 표 문제다. 마지막 통과 기록은 지문 `e66f309e07de` 표의 것이다.
 
 **1단계 띠의 뜻.** 시총 21~100위는 "as-of 주식수가 있는 종목 안의" 순위다. 전 시장 순위가 아니다. 2021~22 측정에서 주식수 공백으로 평균 26.8종목이 순위에서 빠졌고 띠의 약 13% 가 전 시장 순위 띠와 달랐다. B 숫자는 이 정의로 재현한다. 메우려면 quant-airflow 의 `shares_outstanding_history` 백필이 필요하다(요청 사항). 스텝별 원인 분리는 `StepRec.u_excl_cap_missing`·`u_excl_model`·`cap_missing_in_u` 에 있다.
 
