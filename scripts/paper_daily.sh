@@ -11,5 +11,9 @@ for arm in leader_A leader_C leader_C20 leader_A_rs leader_C_rs leader_C20_rs le
     echo "== $(date '+%F %T') $arm"
     $UV run --with numba --extra pg python research/paper/leader_paper.py --arm "$arm" | grep -E "^(기록|이미 기록됨|시작 전)" || echo "실패: $arm"
 done
+# PEAD 순위 북 전진 팔(research/paper/PEAD_FORWARD_PREREG.md) — 위 leader 팔 뒤에 따로 돈다. 실패·시간 초과(15분)여도 leader 장부와
+# 아래 커밋은 그대로 간다(set -e 없음, 오류는 이 로그로). 행 쓰기는 덧붙이기 전용이라 실패한 날은 --asof 로 채운다.
+echo "== $(date '+%F %T') pead_rank_F1"
+timeout 900 $UV run --extra pg python -W ignore research/paper/pead_paper.py | grep -E "^(기록|이미 기록됨|시작 전)" || echo "실패: pead_rank_F1"
 git add research/paper/*_ledger.jsonl
 git diff --cached --quiet || git commit -q -m "research(paper): $(date +%F) 장부(cron)" && echo "커밋 $(git rev-parse --short HEAD)"
