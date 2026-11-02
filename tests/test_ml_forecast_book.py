@@ -191,3 +191,11 @@ def test_ledger_n_ml_formula():
 def test_s2_no_win_rate_in_outputs():
     src = (Path(BK.__file__)).read_text(encoding="utf-8")
     assert "win_rate" not in src and "hit_rate" not in src
+
+
+def test_parity_compare_needs_same_key_type():
+    """정수 키와 문자열 키는 빠진 값으로 잡힌다 — 러너는 JSON 왕복으로 맞춘다."""
+    assert not BK.parity_compare({20: {"2020": 0.1}}, {"20": {"2020": 0.1}})["pass"]
+    import json
+
+    assert BK.parity_compare(json.loads(json.dumps({20: {"2020": 0.1}})), {"20": {"2020": 0.1}})["pass"]

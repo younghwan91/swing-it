@@ -286,7 +286,8 @@ def run_parity(args, log) -> int:
         s = B.book_summary(recs)
         res[kind] = parity_compare({k: s[k] for k in keys}, {k: bj["primary"][kind][k] for k in keys})
         log(f"{kind}: 대조 {res[kind]['compared']}, 어긋남 {res[kind]['n_mismatch']}")
-    ic = parity_compare(ic_info["ic_by_year"], bj["ic"]["ic_by_year"])
+    # B.json 은 JSON 왕복을 거쳐 키가 문자열이다 — 같은 왕복으로 맞춘다
+    ic = parity_compare(json.loads(json.dumps(ic_info["ic_by_year"])), bj["ic"]["ic_by_year"])
     fp_same = fp == bj["fingerprints"]["daily_bars_adjusted_b_range"] or list(map(str, fp)) == list(map(str, bj["fingerprints"]["daily_bars_adjusted_b_range"]))
     out = {"core_ref": args.core_ref, "B_code": bj["code"], "fingerprint_same_as_B": bool(fp_same), "core_parity": pc, "O": res["O"], "R": res["R"], "ic_by_year": ic,
            "pass": bool(pc["pass"] and res["O"]["pass"] and res["R"]["pass"] and ic["pass"] and fp_same), "elapsed_s": time.time() - t0,
