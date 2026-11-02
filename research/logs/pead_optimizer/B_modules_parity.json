@@ -38,7 +38,7 @@
  "table_note": "위 b_json·before_move·ml_s2_0 은 지문 e66f309e07de 표에서 한 것이다. 2026-11-02 16:55 재계산 뒤 표는 지문 400dfcc393ab 다.",
  "current_table": {
   "what": "단계별 검증 지적을 고친 뒤 지금 표에서 다시 한 재현. 성과 숫자 없음 — 개수와 최대 차만.",
-  "code": "57bda04",
+  "code": "4a0678e",
   "core_ref": "13c56a7",
   "table_fingerprint": "400dfcc393ab",
   "versions": {
@@ -62,7 +62,6 @@
   "vs_B_json": {
    "compared_numbers": 696,
    "verdict": "표 바뀜",
-   "R_mismatch": 0,
    "O_mismatch": 333,
    "non_O_mismatch": 0,
    "max_abs_diff_O_IR": 5.648784314860045e-06,
@@ -90,7 +89,8 @@
     ]
    ],
    "other_environment_max_O_IR": 3.829166473900969e-06,
-   "other_environment_note": "검증 9단계 bmodels·docenv 실행, O 어긋남 334개. 판은 적어 두지 않았다."
+   "other_environment_note": "검증 9단계 bmodels·docenv 실행, O 어긋남 334개. 판은 적어 두지 않았다.",
+   "verdict_rule": "지문이 B.json 과 다르면 O 밖은 B.json 과, 전체는 옮기기 전 코드 출력과 정확히 대조한다. O 차이 개수·최대는 보고용이고 판정에 안 쓴다."
   },
   "vs_pre_fix_code": {
    "pre_fix_tree": "03fee83",
@@ -105,7 +105,8 @@
   "risk_models_bit_same": {
    "n": 55,
    "same": true,
-   "note": "옮긴 6단계 빌드 대 옮기기 전 코드의 캐시, 지문 400dfcc393ab, core 13c56a7"
+   "note": "옮긴 6단계 빌드 대 옮기기 전 코드의 캐시, 지문 400dfcc393ab, core 13c56a7",
+   "code": "4a0678e"
   },
   "ml_s2_0": "다시 돌리지 않았다. 같은 IC 패널을 읽어 잠금 대역에 걸리고, fingerprint_same_as_B 가 거짓이라 pass 도 나오지 않는다. 표 문제다."
  }
