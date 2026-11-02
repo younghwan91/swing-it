@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from book_fixtures import synthetic_ctx  # noqa: E402
 
 from swing_it.book.accounting import check_invariants, simulate  # noqa: E402
-from swing_it.book.context import StepRec, models_from_mask  # noqa: E402
-from swing_it.book.costs import COMMISSION_BP, linear_bp, trailing_vol  # noqa: E402
+from swing_it.book.context import Ctx, StepRec, models_from_mask  # noqa: E402
+from swing_it.book.costs import ADV_MIN_OBS, COMMISSION_BP, HALF_SPREAD_BP, linear_bp, trailing_adv, trailing_vol  # noqa: E402
 from swing_it.book.metrics import holding_intervals, ir, oos, payoff_ratio, step_returns  # noqa: E402
 from swing_it.book.optimized import capped_rescale, clean_dust, match_lambda, rank_z  # noqa: E402
 from swing_it.book.rank import tranche_names  # noqa: E402
@@ -577,3 +577,57 @@ def test_invariants_catch_a_buy_outside_the_universe_and_a_participation_breach(
     assert any("매수 금지" in v for v in check_invariants([_inv_rec(n_buy_outside=2)], "O", cell))
     assert any("참여율" in v for v in check_invariants([_inv_rec(max_part=0.06)], "O", cell))
     assert check_invariants([_inv_rec(max_part=0.05)], "O", cell) == []
+
+
+# --- 8 거래비용 ---
+
+def test_linear_bp_by_hand():
+    day = pd.Timestamp("2023-06-01").date()
+    got = linear_bp(np.array(["BUY", "SELL"]), np.array(["KOSPI", "KOSDAQ"], dtype=object), day, np.array([5.0, 15.0]))
+    from krx_quant_core.costs.tax import sell_tax_rate
+
+    assert got[0] == pytest.approx(COMMISSION_BP + 5.0)
+    assert got[1] == pytest.approx(COMMISSION_BP + sell_tax_rate(day, "KOSDAQ") * 1e4 + 15.0)
+
+
+@pytest.mark.parametrize("side,hs,match", [
+    (["buy"], [5.0], "side"),
+    (["HOLD"], [5.0], "side"),
+    (["BUY"], [np.nan], "반스프레드"),
+    (["BUY"], [-1.0], "반스프레드"),
+    (["BUY"], [5.0, 5.0], "길이"),
+])
+def test_linear_bp_refuses_inputs_it_would_price_as_a_buy(side, hs, match):
+    """소문자 "sell" 은 세금 없는 매수로 값이 매겨졌다. NaN 반스프레드는 비용 NaN 으로 번진다."""
+    with pytest.raises(ValueError, match=match):
+        linear_bp(np.array(side), np.array(["KOSPI"], dtype=object), pd.Timestamp("2023-06-01").date(), np.array(hs))
+
+
+def _ctx_market(market):
+    n = len(market)
+    C = np.full((n, 3), 100.0)
+    return Ctx(dates=pd.bdate_range("2020-01-01", periods=3), C=C, tv_won=C, adv=C, cap=C, sig=C, ret=C, lab=C, market=np.array(market, dtype=object),
+               grid=[0], models={0: (np.arange(n), None, None, None, [])}, delist_after=np.full(n, 10**9))
+
+
+def test_ctx_parses_market_names_instead_of_charging_everything_kosdaq():
+    """``stocks.market`` 은 한글이다. 사전에 없으면 KOSDAQ 으로 떨어져 코스피 종목이 15bp 를 물었다."""
+    got = _ctx_market(["KOSPI", "kospi", "거래소", "KOSDAQ", "코스닥", "KONEX"]).hs_bp
+    k, q = HALF_SPREAD_BP["KOSPI"], HALF_SPREAD_BP["KOSDAQ"]
+    np.testing.assert_array_equal(got, [k, k, k, q, q, q])
+
+
+def test_ctx_refuses_an_unknown_market():
+    with pytest.raises(ValueError):
+        _ctx_market(["NYSE"])
+
+
+def test_trailing_adv_min_obs_masks_a_window_with_one_trade():
+    """재개 첫날 거래대금 하나가 20일 평균으로 읽히는 것을 막는다. 기본 None 은 core 그대로(재현)."""
+    tv = np.full((1, 30), np.nan)
+    tv[0, 5] = 5e4
+    close = np.where(np.isfinite(tv), 100.0, np.nan)
+    assert trailing_adv(tv, close)[0, 21] == pytest.approx(5e4), "core 는 관측 1개로 평균을 낸다"
+    assert np.isnan(trailing_adv(tv, close, min_obs=ADV_MIN_OBS)[0, 21])
+    full = np.full((1, 30), 7.0)
+    assert trailing_adv(full, full, min_obs=ADV_MIN_OBS)[0, 25] == pytest.approx(7.0)

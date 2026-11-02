@@ -36,6 +36,8 @@
 
 **7단계 알려진 결함 — 재사용 전에 고칠 것.** 얼린 칸(거래 불가 보유)이 표류로 종목 상한·업종 밴드를 넘으면 문제가 infeasible 이 되어 O 북이 그 스텝을 멈춘다(B 2022-04-06 k=33 `solver_fail`). 얼린 칸을 분리하면 O 숫자가 바뀌어 코드는 고치지 않았다. **사전등록 정정이 필요하다.** 새 연구는 이 수정, `BookSpec(min_names_after_nan=True, strict_lam_cause=True)` 를 함께 켠다. 둘 다 기본 끔은 B 재현 때문이다. `max_turnover` 는 Σ|Δw|(매수 + 매도 합)이고 편도가 아니다. O 재현은 cvxpy·clarabel 판에 달린다. `uv.lock` 에 없어 새 환경에서 5e-6 안팎 움직였다.
 
+**8단계 비용의 한계.** KOSPI 반스프레드 5bp 는 2017~22 틱 하한 미만이다. 1배는 그 구간에서 낙관이고 2배가 덮는다(B 영향 상한 4.4bp). 2배는 세금까지 두 배다. ADV 는 core `_trailing_adv` 가 관측 1개로도 평균을 내므로 새 연구는 `trailing_adv(min_obs=ADV_MIN_OBS)` 를 쓴다(B 재현은 그대로). core 쪽 메모(이 PR 범위 밖): `costs/impact.py` 의 ADV 가드는 하한뿐이라 원을 다시 ×1e6 한 값이 통과한다. `costs/tax.py` 의 시행일은 2차 출처다.
+
 **core 의존.** 기본 핀 `krx-quant-core==0.7.0` 에 없는 것은 부를 때 import 하고, 없으면 `CoreLayerMissing` 이 설치 방법을 말한다. `trade_costs` 의 충격비용, `o_target` 의 최적화기, 위험모델, `factor_attribution` 이 그렇다. 비용을 끈 순위 북(`Flags(costs=False)`)은 기본 핀에서 돈다. 나머지 시험은 CI `research` 잡이 core `8286e3e` 로 돌리고, 거기서는 건너뛰면 실패다.
 
 ## 경계 검사

@@ -15,9 +15,9 @@ import sys
 
 import numpy as np
 import pandas as pd
-from krx_quant_core.backtest.crosssectional import _trailing_adv
 
 from swing_it.book.accounting import check_invariants, simulate
+from swing_it.book.costs import ADV_MIN_OBS, trailing_adv
 from swing_it.book.context import Ctx, models_from_mask
 from swing_it.book.metrics import book_summary, oos, step_returns
 from swing_it.book.nulls import permutation_nulls
@@ -76,7 +76,7 @@ def run(inputs: dict, *, costs: bool, n_null: int = 5) -> dict:
     check_signal(sig)
 
     # 1 유니버스 — 신호·유동성 뒤에 정해지는 띠라 신호 다음에 재료를 묶는다
-    adv = _trailing_adv(tv_won / 1e6, len(dates), 20, close)
+    adv = trailing_adv(tv_won / 1e6, close, min_obs=ADV_MIN_OBS)
     in_universe = np.isfinite(close)
     grid = list(range(int(np.searchsorted(dates, np.datetime64("2020-06-01"))), len(dates), SPEC.step))
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+from krx_quant_core.market.codes import Market
 
 from swing_it.book.costs import HALF_SPREAD_BP
 from swing_it.engine.panels import ffill_axis1
@@ -37,7 +38,8 @@ class Ctx:
         if self.Cff is None:
             self.Cff = ffill_axis1(self.C)
         if self.hs_bp is None:
-            self.hs_bp = np.array([HALF_SPREAD_BP.get(m, HALF_SPREAD_BP["KOSDAQ"]) for m in self.market])
+            # 표기는 Market.parse 가 푼다(한글·소문자). 모르는 값은 예외다. KONEX 만 정가 값이 없어 비용 큰 쪽(KOSDAQ)으로 둔다
+            self.hs_bp = np.array([HALF_SPREAD_BP.get(Market.parse(m).value, HALF_SPREAD_BP["KOSDAQ"]) for m in self.market])
         self._u = {}
 
     def in_u(self, t: int) -> np.ndarray:
