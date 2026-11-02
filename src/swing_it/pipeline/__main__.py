@@ -61,7 +61,7 @@ def _record(args: argparse.Namespace) -> int:
         args.study, args.stage, args.status,
         evidence=args.evidence, reviewer=args.reviewer, reason=args.reason,
         data_fingerprint=args.data_fingerprint, approval=approval,
-        forward_evidence=args.forward_evidence, backfill=args.backfill, root=args.root,
+        forward_evidence=args.forward_evidence, root=args.root,
     )
     path = gate.ledger_path(ev["study"], root=args.root)
     print(f"기록: {ev['study']} {Stage(ev['stage']).label} {ev['status']} → {path}")
@@ -103,7 +103,6 @@ def main(argv: "list[str] | None" = None) -> int:
     p.add_argument("--approval-max-krw", type=int, help="10단계: 승인한 주문 금액 상한(원)")
     p.add_argument("--approval-basket", help="10단계: 승인한 바구니 해시. 주면 그 바구니에만 쓴다")
     p.add_argument("--forward-evidence", help="10단계: 전진 페이퍼 결과")
-    p.add_argument("--backfill", help=f"게이트 이전 작업의 실제 날짜(≤ {gate.BACKFILL_CUTOFF})")
     p.set_defaults(func=_record)
 
     p = sub.add_parser("verify", parents=[common], help="체인·행 규칙·증거 해시 재검사(문제 있으면 1)")

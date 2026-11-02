@@ -150,9 +150,6 @@ def test_a_skip_cannot_cover_a_fail(tmp_path):
     ev = _doc(tmp_path, "why.md")
     with pytest.raises(RecordRejected, match="skip 으로"):
         record_stage(STUDY, Stage.ALPHA_VALIDATION, "skip", evidence=[ev], reason="안 쓰기로 함", root=tmp_path)
-    with pytest.raises(RecordRejected, match="skip 으로"):
-        record_stage(STUDY, Stage.ALPHA_VALIDATION, "skip", evidence=[ev], reason="안 쓰기로 함",
-                     backfill="2026-11-02", root=tmp_path)
     with pytest.raises(StageGateError):
         require_stage(STUDY, Stage.FORECAST, root=tmp_path)
 
@@ -211,7 +208,7 @@ def test_skip_opens_the_stages_after_it(tmp_path):
 @pytest.mark.parametrize("stage", [Stage.UNIVERSE, Stage.DATA, Stage.ALPHA, Stage.COSTS, Stage.BACKTEST])
 def test_core_stages_cannot_be_skipped(tmp_path, stage):
     with pytest.raises(RecordRejected, match="건너뛸 수 없"):
-        record_stage(STUDY, stage, "skip", reason="귀찮다", root=tmp_path, backfill="2026-11-02")
+        record_stage(STUDY, stage, "skip", reason="귀찮다", root=tmp_path)
 
 
 def test_rank_book_may_skip_alpha_ml_risk_and_optimizer(tmp_path):
@@ -405,10 +402,10 @@ def test_approval_must_be_recorded_soon(tmp_path, monkeypatch):
 def test_expired_approval_stops_the_order_path(tmp_path, monkeypatch):
     _open_upto(tmp_path, Stage.EXECUTION)
     _pass(tmp_path, Stage.EXECUTION)
-    assert require_execution_approval(STUDY, root=tmp_path)["expires"] == "2026-11-30"
+    assert require_execution_approval(STUDY, amount_krw=1, root=tmp_path)["expires"] == "2026-11-30"
     _advance(monkeypatch, 29)
     with pytest.raises(StageGateError, match="만료"):
-        require_execution_approval(STUDY, root=tmp_path)
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
 
 
 def test_order_amount_and_basket_are_held_to_the_approval(tmp_path):
@@ -421,6 +418,8 @@ def test_order_amount_and_basket_are_held_to_the_approval(tmp_path):
         require_execution_approval(STUDY, amount_krw=1, basket_hash="def", root=tmp_path)
     with pytest.raises(StageGateError, match="바구니"):
         require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
+    with pytest.raises(TypeError, match="amount_krw"):
+        require_execution_approval(STUDY, basket_hash="abc", root=tmp_path)
 
 
 def test_a_line_separator_in_a_quote_does_not_brick_the_ledger(tmp_path):
@@ -428,7 +427,7 @@ def test_a_line_separator_in_a_quote_does_not_brick_the_ledger(tmp_path):
     _open_upto(tmp_path, Stage.EXECUTION)
     _pass(tmp_path, Stage.EXECUTION, approval={**APPROVAL, "quote": "진행\u2028해"}, reason="이유\u0085끝")
     assert verify(STUDY, root=tmp_path) == []
-    assert require_execution_approval(STUDY, root=tmp_path)["quote"] == "진행\u2028해"
+    assert require_execution_approval(STUDY, amount_krw=1, root=tmp_path)["quote"] == "진행\u2028해"
 
 
 def test_execution_pass_needs_forward_evidence(tmp_path):
@@ -439,12 +438,11 @@ def test_execution_pass_needs_forward_evidence(tmp_path):
 
 
 def test_execution_pass_cannot_be_backfilled(tmp_path):
-    """승인은 추론하지 않는다 — 소급 기록 경로가 있으면 안 된다."""
-    ev = _doc(tmp_path, "x.md")
-    fwd = _doc(tmp_path, "forward.md")
-    with pytest.raises(RecordRejected, match="소급"):
-        record_stage(STUDY, Stage.EXECUTION, "pass", reason="왜", evidence=[ev], approval=APPROVAL,
-                     forward_evidence=fwd, backfill="2026-11-02", root=tmp_path)
+    """승인은 추론하지 않는다 — 소급 줄이 원장에 있어도 읽지 않는다."""
+    _forge(tmp_path, stage=int(Stage.EXECUTION), stage_name="주문 실행", evidence=_forge_evidence(tmp_path), approval=APPROVAL,
+           forward_evidence=_forge_evidence(tmp_path)[0], backfill="2026-11-02")
+    with pytest.raises(LedgerCorrupt, match="소급"):
+        gate.read_events(STUDY, root=tmp_path)
 
 
 def test_approval_on_other_stages_is_rejected(tmp_path):
@@ -459,7 +457,7 @@ def test_require_stage_10_alone_is_not_approval(tmp_path):
     _open_upto(tmp_path, Stage.EXECUTION)
     require_stage(STUDY, Stage.EXECUTION, root=tmp_path)
     with pytest.raises(StageGateError, match="승인"):
-        require_execution_approval(STUDY, root=tmp_path)
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
 
 
 def test_skipping_execution_is_not_approval(tmp_path):
@@ -467,13 +465,13 @@ def test_skipping_execution_is_not_approval(tmp_path):
     record_stage(STUDY, Stage.EXECUTION, "skip", reason="페이퍼 북 — 주문 없음", root=tmp_path)
     require_stage(STUDY, Stage.ATTRIBUTION, root=tmp_path)      # 페이퍼 모니터링은 막지 않는다
     with pytest.raises(StageGateError, match="승인"):
-        require_execution_approval(STUDY, root=tmp_path)
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
 
 
 def test_recorded_approval_is_returned(tmp_path):
     _open_upto(tmp_path, Stage.EXECUTION)
     _pass(tmp_path, Stage.EXECUTION)
-    assert require_execution_approval(STUDY, root=tmp_path) == APPROVAL
+    assert require_execution_approval(STUDY, amount_krw=1, root=tmp_path) == APPROVAL
 
 
 def test_approval_goes_stale_when_an_earlier_stage_is_redone(tmp_path):
@@ -481,7 +479,7 @@ def test_approval_goes_stale_when_an_earlier_stage_is_redone(tmp_path):
     _pass(tmp_path, Stage.EXECUTION)
     _pass(tmp_path, Stage.COSTS)
     with pytest.raises(StageGateError):
-        require_execution_approval(STUDY, root=tmp_path)
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
 
 
 # --- 되돌아가기 --------------------------------------------------------------------
@@ -563,7 +561,7 @@ def test_tampered_forward_evidence_goes_stale(tmp_path):
     _doc(tmp_path, "forward.md", "전진 결과 고침\n")
     assert _state(tmp_path, Stage.EXECUTION).status == "stale"
     with pytest.raises(StageGateError):
-        require_execution_approval(STUDY, root=tmp_path)
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
 
 
 def test_replacing_a_stages_evidence_only_rechecks_the_latest_event(tmp_path):
@@ -705,7 +703,7 @@ def test_a_forged_backdated_approval_is_caught_on_read(tmp_path):
     _forge(tmp_path, stage=10, evidence=_forge_evidence(tmp_path), approval={**APPROVAL, "date": "2026-11-01"},
            forward_evidence={"path": fwd, "sha256": gate.sha256_file(tmp_path / fwd)})
     with pytest.raises(LedgerCorrupt, match="9단계"):
-        require_execution_approval(STUDY, root=tmp_path)
+        require_execution_approval(STUDY, amount_krw=1, root=tmp_path)
 
 
 def test_forged_line_out_of_order_is_rejected(tmp_path):
@@ -760,38 +758,79 @@ def test_bad_status_is_rejected(tmp_path):
         record_stage(STUDY, Stage.UNIVERSE, "stale", reason="x", root=tmp_path)
 
 
+# --- 입구의 오류 순서 ---------------------------------------------------------------
+
+@pytest.mark.parametrize("call", [lambda s, st, root: require_stage(s, st, root=root),
+                                  lambda s, st, root: record_stage(s, st, "pass", reason="왜", root=root)])
+def test_bad_names_are_refused_at_both_doors(tmp_path, call):
+    """이름 검사는 원장 경로를 만들 때 한 번이다. 둘 다 틀리면 단계가 먼저지만 어느 쪽이든 막는다."""
+    with pytest.raises(StageGateError, match="연구 이름"):
+        call("Bad-Name", Stage.UNIVERSE, tmp_path)
+    with pytest.raises(StageGateError, match="단계|stage"):
+        call(STUDY, "없는 단계", tmp_path)
+    with pytest.raises(StageGateError, match="단계|stage"):
+        call("Bad-Name", "없는 단계", tmp_path)
+
+
+def test_unknown_status_is_refused_with_the_stage_rules(tmp_path):
+    ev = _doc(tmp_path, "x.md")
+    with pytest.raises(RecordRejected, match="status 는"):
+        record_stage(STUDY, Stage.UNIVERSE, "maybe", reason="왜", evidence=[ev], root=tmp_path)
+
+
+def test_a_falsy_evidence_reference_is_a_shape_problem(tmp_path):
+    """모양 검사가 ``_refs`` 를 쓴다. 빈 값을 건너뛰면 빈 reviewer 가 통과한다."""
+    _forge(tmp_path, stage=int(Stage.UNIVERSE), stage_name="유니버스", evidence=_forge_evidence(tmp_path), reviewer={})
+    with pytest.raises(LedgerCorrupt, match="모양"):
+        gate.read_events(STUDY, root=tmp_path)
+
+
 # --- 소급 기록 ---------------------------------------------------------------------
 
+def _forge_backfill(root: Path, *, stage: Stage = Stage.RISK_MODEL, backfill: str = "2026-11-02", **fields) -> None:
+    """이미 원장에 있는 소급 줄 — 지금은 적는 경로가 없어 손으로 만든다."""
+    _forge(root, stage=int(stage), stage_name=stage.ko, evidence=_forge_evidence(root), reason="왜", backfill=backfill, **fields)
+
+
+def test_record_has_no_backfill_path(tmp_path):
+    """적는 경로가 있으면 순서 검사를 끄는 스위치가 된다. 읽기 규칙만 남긴다."""
+    ev = _doc(tmp_path, "x.md")
+    with pytest.raises(TypeError, match="backfill"):
+        record_stage(STUDY, Stage.UNIVERSE, "pass", reason="왜", evidence=[ev], backfill="2026-11-02", root=tmp_path)
+    with pytest.raises(SystemExit):
+        cli(["record", STUDY, "1", "pass", "--evidence", ev, "--reason", "왜", "--backfill", "2026-11-02", "--root", str(tmp_path)])
+    assert record_stage(STUDY, Stage.UNIVERSE, "pass", reason="왜", evidence=[ev], root=tmp_path)["backfill"] is None
+
+
 def test_backfill_records_out_of_order_but_does_not_open_the_gate(tmp_path):
-    """옛 증거를 적을 수는 있어도 게이트는 여전히 앞 단계 fail 로 막힌다 — 우회로가 아니다."""
+    """옛 증거가 적혀 있어도 게이트는 여전히 앞 단계 fail 로 막힌다 — 우회로가 아니다."""
     _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
     record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", reason="SIG 실패", root=tmp_path)
-    ev = _doc(tmp_path, "risk.md")
-    record_stage(STUDY, Stage.RISK_MODEL, "pass", reason="왜", evidence=[ev], backfill="2026-11-02", root=tmp_path)
+    _forge_backfill(tmp_path)
     assert _state(tmp_path, Stage.RISK_MODEL).status == "pass"
     with pytest.raises(StageGateError):
         require_stage(STUDY, Stage.PORTFOLIO, root=tmp_path)
 
 
 def test_backfill_only_covers_work_before_the_gate_existed(tmp_path):
-    ev = _doc(tmp_path, "risk.md")
     late = (date.fromisoformat(gate.BACKFILL_CUTOFF) + timedelta(days=1)).isoformat()
-    with pytest.raises(RecordRejected, match="소급"):
-        record_stage(STUDY, Stage.RISK_MODEL, "pass", reason="왜", evidence=[ev], backfill=late, root=tmp_path)
+    _forge_backfill(tmp_path, backfill=late)
+    with pytest.raises(LedgerCorrupt, match="소급"):
+        gate.read_events(STUDY, root=tmp_path)
 
 
-def test_backfill_cannot_be_written_after_the_cutoff(tmp_path, monkeypatch):
-    """날짜 칸만 보면 언제든 옛날 날짜로 적어 순서 검사를 피한다. 적는 시각도 본다."""
-    ev = _doc(tmp_path, "x.md")
-    _advance(monkeypatch, 1)
-    with pytest.raises(RecordRejected, match="소급"):
-        record_stage(STUDY, Stage.RISK_MODEL, "pass", reason="왜", evidence=[ev], backfill="2026-11-02", root=tmp_path)
+def test_backfill_cannot_be_written_after_the_cutoff(tmp_path):
+    """날짜 칸만 보면 언제든 옛날 날짜로 적어 순서 검사를 피한다. 적은 시각도 본다."""
+    late = (date.fromisoformat(gate.BACKFILL_CUTOFF) + timedelta(days=1)).isoformat()
+    _forge_backfill(tmp_path, ts=f"{late}T00:00:00+09:00")
+    with pytest.raises(LedgerCorrupt, match="소급"):
+        gate.read_events(STUDY, root=tmp_path)
 
 
 def test_backfill_still_needs_the_stage_rules(tmp_path):
-    ev = _doc(tmp_path, "b.md")
-    with pytest.raises(RecordRejected, match="검증 문서"):
-        record_stage(STUDY, Stage.BACKTEST, "pass", reason="왜", evidence=[ev], backfill="2026-11-02", root=tmp_path)
+    _forge_backfill(tmp_path, stage=Stage.BACKTEST)
+    with pytest.raises(LedgerCorrupt, match="검증 문서"):
+        gate.read_events(STUDY, root=tmp_path)
 
 
 # --- CLI ---------------------------------------------------------------------------
@@ -841,8 +880,7 @@ def test_cli_status_marks_blocked_stages(tmp_path, capsys):
     _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
     root = ["--root", str(tmp_path)]
     record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", reason="SIG 실패", root=tmp_path)
-    ev = _doc(tmp_path, "risk.md")
-    record_stage(STUDY, Stage.RISK_MODEL, "pass", reason="왜", evidence=[ev], backfill="2026-11-02", root=tmp_path)
+    _forge_backfill(tmp_path)
     capsys.readouterr()
     cli(["status", STUDY, *root])
     out = capsys.readouterr().out

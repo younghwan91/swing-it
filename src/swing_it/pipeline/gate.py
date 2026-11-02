@@ -59,7 +59,7 @@ RESULT_STAGES = frozenset({Stage.ALPHA_VALIDATION, Stage.FORECAST, Stage.BACKTES
 NOT_SKIPPABLE = frozenset({Stage.UNIVERSE, Stage.DATA, Stage.ALPHA, Stage.COSTS, Stage.BACKTEST})
 #: 페이퍼 북 모니터링은 판정을 기다리지 않는다 — 11단계는 이 두 단계가 pending 이어도 열린다. fail·stale 은 막는다.
 MONITORING_MAY_PRECEDE = frozenset({Stage.BACKTEST, Stage.EXECUTION})
-#: 소급 기록(``backfill``)은 게이트가 생기기 전 작업에만 쓴다.
+#: 소급 기록(``backfill``)은 게이트가 생기기 전 작업에만 있다. 이 날짜까지 적힌 줄을 읽기만 하고 새로 적는 길은 없다.
 BACKFILL_CUTOFF = "2026-11-02"
 #: 승인은 들은 지 이 일수 안에 적는다. 오래된 말을 끌어다 쓰지 못하게 한다.
 APPROVAL_MAX_AGE_DAYS = 14
@@ -232,11 +232,9 @@ def _shape_problems(ev: dict[str, Any]) -> list[str]:
         return [f"stage 가 정수가 아니다: {ev.get('stage')!r}"]
     if _strict_day(str(ev.get("ts"))[:10]) is None:
         return [f"ts 가 날짜로 시작하지 않는다: {ev.get('ts')!r}"]
-    refs = ev.get("evidence")
-    if not isinstance(refs, list):
+    if not isinstance(ev.get("evidence"), list):
         return ["evidence 가 목록이 아니다"]
-    refs = refs + [ev[k] for k in ("reviewer", "forward_evidence") if ev.get(k) is not None]
-    bad = [r for r in refs if not (isinstance(r, dict) and isinstance(r.get("path"), str)
+    bad = [r for r in _refs(ev) if not (isinstance(r, dict) and isinstance(r.get("path"), str)
                                    and isinstance(r.get("sha256"), str))]
     return [f"증거 참조 모양이 어긋난다: {bad}"] if bad else []
 
@@ -323,7 +321,7 @@ def _refs(ev: dict[str, Any]) -> list[dict[str, str]]:
     """이 줄이 해시로 묶은 파일 전부."""
     out = list(ev.get("evidence") or [])
     for key in ("reviewer", "forward_evidence"):
-        if ev.get(key):
+        if ev.get(key) is not None:     # 빈 값도 싣는다. 모양 검사가 잡아야 한다
             out.append(ev[key])
     return out
 
@@ -421,9 +419,8 @@ def require_stage(study: str, stage: "Stage | int | str", *, root: "Path | str |
     러너는 데이터를 읽기 전에 ``require_stage(*PIPELINE)`` 을 부른다. 자기 단계의 fail 은 막지 않는다 — 다시 돌려야
     새 pass 를 얻는다. 11단계만 예외다: 9·10 이 pending 이어도 열린다(전진 중인 페이퍼 북 모니터링).
     """
-    _check_study(study)
     target = _parse_stage(stage)
-    states = study_states(study, root=root)
+    states = study_states(study, root=root)     # 연구 이름은 원장 경로를 만들 때 본다
     blockers = _blockers(states, target)
     if blockers:
         lines = "\n".join("  - " + st.describe() for st in blockers)
@@ -435,12 +432,12 @@ def require_stage(study: str, stage: "Stage | int | str", *, root: "Path | str |
     return states
 
 
-def require_execution_approval(study: str, *, amount_krw: "float | None" = None, basket_hash: "str | None" = None,
+def require_execution_approval(study: str, *, amount_krw: float, basket_hash: "str | None" = None,
                                root: "Path | str | None" = None) -> dict[str, Any]:
     """주문 경로의 정문. 10단계 자체의 유효한 pass(사용자 승인·전진 증거)가 있어야 승인 기록을 돌려준다.
 
     ``require_stage(study, 10)`` 은 1~9 단계만 본다. 그것만으로는 승인 없이 주문이 나갈 수 있다. 만료가 지났거나, ``amount_krw`` 가 상한을 넘거나,
-    승인이 한 바구니로 좁혀졌는데 ``basket_hash`` 가 다르면 막는다. 실주문 경로는 둘 다 넘긴다.
+    승인이 한 바구니로 좁혀졌는데 ``basket_hash`` 가 다르면 막는다. 금액은 필수다 — 빠뜨리면 상한이 장식이 된다.
 
     **이 함수는 부른 코드만 막는다.** scalp-it·daytrade-it 의 주문 코드와 fcs ``sw-live`` 는 부르지 않는다(``docs/PIPELINE.md``).
     """
@@ -451,7 +448,7 @@ def require_execution_approval(study: str, *, amount_krw: "float | None" = None,
     approval = dict(state.event["approval"])
     if _now().date() > date.fromisoformat(approval["expires"]):
         raise StageGateError(f"{study}: 승인이 만료됐다({approval['expires']}) — 다시 묻고 새로 적는다", [state])
-    if amount_krw is not None and not amount_krw <= approval["max_amount_krw"]:
+    if not amount_krw <= approval["max_amount_krw"]:
         raise StageGateError(f"{study}: 주문 금액 {amount_krw} 가 승인 상한 {approval['max_amount_krw']} 를 넘는다", [state])
     if approval.get("basket_hash") is not None and basket_hash != approval["basket_hash"]:
         raise StageGateError(f"{study}: 승인한 바구니({approval['basket_hash']})가 아니다: {basket_hash!r}", [state])
@@ -487,24 +484,20 @@ def record_stage(
     data_fingerprint: "str | None" = None,
     approval: "dict[str, str] | None" = None,
     forward_evidence: "str | None" = None,
-    backfill: "str | None" = None,
     root: "Path | str | None" = None,
 ) -> dict[str, Any]:
     """단계 사건 한 줄을 덧붙인다. 규칙에 어긋나면 적지 않고 :class:`RecordRejected`.
 
     pass·skip 은 앞 단계가 열려 있어야 적힌다. fail 은 언제든 적힌다(더 막는 쪽이고, 늦게 드러난 실패를 적을 길이
-    있어야 한다). ``backfill=<날짜>`` 는 게이트 이전 작업의 순서 검사만 면제한다 — 적어도 게이트는 열리지 않는다.
+    있어야 한다).
     """
-    _check_study(study)
     target = _parse_stage(stage, exc=RecordRejected)
     base = _root(root)
-    events = read_events(study, root=base)      # 손상된 원장에는 덧붙이지 않는다
-    if status not in STATUSES:
-        raise RecordRejected(f"status 는 {STATUSES} 중 하나여야 한다: {status!r}")
+    events = read_events(study, root=base)      # 손상된 원장에는 덧붙이지 않는다. 연구 이름도 여기서 본다
 
     # 파일을 읽기 전에 행 규칙부터 본다 — 사유·승인 누락이 "파일 없음" 뒤에 숨지 않게.
     draft: dict[str, Any] = {
-        "stage": int(target), "status": status, "reason": reason, "approval": approval, "backfill": backfill,
+        "stage": int(target), "status": status, "reason": reason, "approval": approval,
         "evidence": list(evidence),
         "reviewer": {"path": reviewer} if reviewer else None,
         "forward_evidence": {"path": forward_evidence} if forward_evidence else None,
@@ -514,7 +507,7 @@ def record_stage(
     if problems:
         raise RecordRejected(f"{study} {target.label} {status} 거부: " + "; ".join(problems))
 
-    if status in OPEN_STATUSES and backfill is None:
+    if status in OPEN_STATUSES:
         shut = _blockers(_states(events, base), target)
         if shut:
             lines = ", ".join(st.describe() for st in shut)
@@ -538,7 +531,7 @@ def record_stage(
         "forward_evidence": forward,
         "data_fingerprint": data_fingerprint,
         "reason": reason,
-        "backfill": backfill,
+        "backfill": None,
         "git_sha": _git_sha(base),
         "ts": draft["ts"],
         "prev": events[-1]["sha"] if events else None,

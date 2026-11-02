@@ -228,7 +228,7 @@ def test_order_path_needs_the_execution_gate(lint, tmp_path, monkeypatch, src):
     out = lint.check_order_path_gated()
     assert len(out) == 1 and "require_execution_approval" in out[0], out
     (tmp_path / "src" / "orders.py").write_text(
-        src + "from swing_it.pipeline import require_execution_approval\n\ndef run(s):\n    require_execution_approval(s)\n", encoding="utf-8")
+        src + "from swing_it.pipeline import require_execution_approval\n\ndef run(s):\n    require_execution_approval(s, amount_krw=1)\n", encoding="utf-8")
     assert lint.check_order_path_gated() == []
 
 
