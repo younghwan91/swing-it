@@ -69,7 +69,10 @@ def test_different_seed_differs():
 
 
 def test_leak_injection_gives_high_oos_ic_and_shuffling_kills_it():
-    """피처 = y + 잡음이면 OOS IC > 0.5(배선 확인). 라벨을 날짜 안에서 섞으면 |IC| 가 작다(GUARDRAILS §4.5)."""
+    """피처 = y + 잡음이면 OOS IC > 0.5(배선 확인). 라벨을 날짜 안에서 섞으면 |IC| 가 작다(GUARDRAILS §4.5).
+
+    **맹점을 고정한 시험이다.** 누출이 있어도 N1 은 0 근처다 — 그래서 N1 은 누출을 잡지 못한다. 학습 경로 스모크로만 읽는다(docs/PIPELINE.md 5단계).
+    """
     days, U, Z, y, vol = _xy(leak=True)
     train, test = days[:40], days[44:]
     bst, (X, Y, w, ids) = _fit(train, U, Z, y, vol)

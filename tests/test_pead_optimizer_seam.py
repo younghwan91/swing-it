@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from research.experiments.pead_optimizer_seam import seam_guard
+from swing_it.book.seam import seam_guard
 
 DATES = pd.DatetimeIndex(["2021-07-27", "2021-07-28", "2021-07-29", "2021-07-30", "2021-08-02"])
 

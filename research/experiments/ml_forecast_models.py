@@ -54,7 +54,10 @@ def train_matrix(days, Z: dict, U: dict, y: dict, vol) -> tuple[np.ndarray, np.n
 
 
 def shuffle_within_dates(Y: np.ndarray, ids: np.ndarray, rng_of) -> np.ndarray:
-    """N1 — 날짜 안에서 라벨을 섞는다. ``rng_of(t)`` 는 날짜별 생성기."""
+    """N1 — 날짜 안에서 라벨을 섞는다. ``rng_of(t)`` 는 날짜별 생성기.
+
+    **학습 경로 스모크이지 누출 검사가 아니다.** 피처가 미래와 연결되면 섞인 라벨에는 배울 것이 없어 IC 가 0 으로 나온다. 주입한 누출 6종을 하나도 못 잡았다(검증 5단계).
+    """
     out = Y.copy()
     for t in np.unique(ids):
         pos = np.flatnonzero(ids == t)

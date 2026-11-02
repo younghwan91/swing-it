@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import sys
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+
+from swing_it.pipeline.checks import CheckError
 
 pytest.importorskip("krx_quant_core.portfolio")
 pytest.importorskip("cvxpy")
@@ -112,13 +115,26 @@ def test_attribution_reconciles_with_step_active_return():
     msk = np.isfinite(ctx.C)
     prep = {"R": ctx.ret, "Xs": Xs, "lab": ctx.lab, "cap": cap, "msk": msk}
     fr = factor_returns(prep["R"], Xs, ctx.lab, cap, msk)
-    rep = BR.attribution_report(ctx, recs[3:], fr, prep, lambda t: B.eligible(t, ctx.sig, ctx.adv, ctx.cap, ctx.in_u(t)))
+    el = lambda t: B.eligible(t, ctx.sig, ctx.adv, ctx.cap, ctx.in_u(t))  # noqa: E731
+    rep = BR.attribution_report(ctx, recs[3:], fr, prep, el)
     assert rep["n_steps"] == len(recs[3:])
     assert 0.0 <= rep["specific_share_var"] <= 1.0
     # 단리 일 귀속 합 대 복리 스텝 능동수익: 일 2% 변동성·20일이면 차이는 작다
     act = np.array([r.gross - r.bench for r in recs[3:]])
-    assert rep["check_mean_abs_gap"] < 0.25 * np.mean(np.abs(act)) + 2e-3
+    assert rep["check_mean_abs_gap"] < 0.25 * np.mean(np.abs(act))
     assert set(rep["mean_by_group"]) == {"market", "sector", "style"}
+    assert "signed_gap_mean" not in rep, "기본 출력은 B.json 재현이다"
+    # 대조가 살아 있다 — 수익을 망가뜨리면 차이가 커지고 검사가 거부한다
+    full = BR.attribution_report(ctx, recs[3:], fr, prep, el, detail=True, actual_atol=0.25)
+    assert full["mean_actual"] == pytest.approx(act.mean())
+    assert full["signed_gap_mean"] == pytest.approx(full["mean_factor"] + full["mean_specific"] - act.mean())
+    assert full["specific_share_of_actual"] == pytest.approx(full["mean_specific"] / act.mean())
+    bad = recs[3:]
+    bad[2] = dataclasses.replace(bad[2], gross=bad[2].gross + 5.0)
+    with pytest.raises(CheckError, match="실제 수익"):
+        BR.attribution_report(ctx, bad, fr, prep, el, detail=True, actual_atol=0.25)
+    bad_rep = BR.attribution_report(ctx, bad, fr, prep, el)
+    assert bad_rep["check_mean_abs_gap"] > rep["check_mean_abs_gap"] + 0.1
 
 
 # ── PO-1.3 f_boot ───────────────────────────────────────────────────────────

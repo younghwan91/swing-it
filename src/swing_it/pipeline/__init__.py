@@ -1,7 +1,7 @@
-"""파이프라인 11단계 — 단계별 모듈과 순서 가드레일. 사용법은 ``docs/PIPELINE.md``.
+"""파이프라인 11단계의 순서 가드레일. 사용법은 ``docs/PIPELINE.md``.
 
-여기서는 게이트만 내보낸다(표준 라이브러리만 쓴다). 계약과 단계 모듈은 numpy·pandas 가 필요하니
-``from swing_it.pipeline import s04_alpha_validation`` 처럼 필요한 것만 부른다.
+여기서는 게이트만 내보낸다(표준 라이브러리만 쓴다). 단계의 실제 구현은 ``swing_it.features``·``swing_it.book``·``swing_it.validation`` 에
+있고, 표는 :data:`swing_it.pipeline.stages.STAGE_FUNCTIONS` 다. 경계 검사는 ``swing_it.pipeline.checks`` 다(numpy·pandas 필요).
 """
 
 from __future__ import annotations

@@ -1237,6 +1237,8 @@ dependencies = [
     { name = "httpx" },
     { name = "krx-quant-core" },
     { name = "pandas" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.optional-dependencies]
@@ -1266,6 +1268,7 @@ requires-dist = [
     { name = "psycopg2-binary", marker = "extra == 'pg'", specifier = ">=2.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.2" },
+    { name = "scipy", specifier = ">=1.11" },
 ]
 provides-extras = ["viz", "pg", "dev", "ml"]
 

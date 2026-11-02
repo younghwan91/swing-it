@@ -12,8 +12,9 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from pead_optimizer_c0 import keyed_rng  # noqa: F401 — 이 연구의 난수는 모두 이 키 생성기(PO-1.7 꼴)
 from scipy import stats
+
+from swing_it.validation.keys import keyed_rng  # noqa: F401 — 이 연구의 난수는 모두 이 키 생성기(PO-1.7 꼴). c0 도 같은 함수를 다시 내보낸다
 
 PREREG_SHA = "6925e75"
 LABEL = "ml_forecast"  # 다중검정 원장 라벨(§9)

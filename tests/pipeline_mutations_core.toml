@@ -1,0 +1,27 @@
+# core 의 최적화기가 있어야 도는 가드의 변이. CI research 잡이 돌린다 — pipeline-mutations 잡의 기본 핀에서는 이 시험이 건너뛰어져 변이가 살아남는다.
+# 형식과 실행은 tests/pipeline_mutations.toml·scripts/check_pipeline_mutations.py 와 같다.
+
+[[mutation]]
+id = "o-objective-drops-benchmark-term"
+why = "목적함수의 선형항이 바뀌어도 녹화 응답을 그대로 받으면 재생 시험이 초록이다. 입력 요약이 잡아야 한다"
+guards = ["tests/test_pead_optimizer_book_golden.py::test_optimized_book_matches_golden"]
+file = "src/swing_it/book/optimized.py"
+find = "return optimize(alpha + lam * Sb, sub,"
+replace = "return optimize(alpha, sub,"
+
+[[mutation]]
+id = "o-risk-target-moved"
+why = "λ 맞춤의 목표가 움직이면 이분법 경로가 달라진다. 녹화 응답을 줘도 λ 대조가 잡아야 한다"
+guards = ["tests/test_pead_optimizer_book_golden.py::test_optimized_book_matches_golden"]
+file = "src/swing_it/book/optimized.py"
+find = "target = float(sigma_r[t]) * math.sqrt(cell.h_alpha / spec.step)"
+replace = "target = 1.01 * float(sigma_r[t]) * math.sqrt(cell.h_alpha / spec.step)"
+
+[[mutation]]
+id = "o-budget-ignores-frozen-outside"
+why = "문제 밖 얼린 몫을 예산에서 안 빼면 합이 1 을 넘는 해를 받는다. 예산 대조가 잡아야 한다"
+guards = ["tests/test_pead_optimizer_book_golden.py::test_optimized_book_matches_golden",
+          "tests/test_pead_optimizer_book_golden.py::test_nulls_and_boot_match_golden"]
+file = "src/swing_it/book/optimized.py"
+find = "budget = 1.0 - float(w_t[outside_frozen].sum())"
+replace = "budget = 1.0"

@@ -1,0 +1,276 @@
+"""경계 검사·단계 표·지연 import — 위반을 주입해 실제로 거부하는지 본다."""
+
+from __future__ import annotations
+
+import ast
+import importlib
+import zlib
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from swing_it.core_layers import CoreLayerMissing, core_layer
+from swing_it.pipeline.checks import (
+    _day,
+    CheckError,
+    check_attribution,
+    check_forecast,
+    check_panels,
+    check_signal,
+    check_universe,
+    check_weights,
+)
+from swing_it.pipeline.stages import STAGE_FUNCTIONS, Stage
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _universe(**kw):
+    return pd.DataFrame({"code": ["A", "B"], "date": ["2020-01-02", "2020-01-02"], "eligible": [True, False], **kw})
+
+
+def _prices(end="2020-01-03"):
+    return pd.DataFrame({"code": ["A", "A"], "date": ["2020-01-02", end], "close": [1.0, 2.0]})
+
+
+def _earnings(**kw):
+    return pd.DataFrame({"code": ["A"], "period": ["2019Q3"], "avail_date": ["2019-11-14"], "knowledge_date": ["2019-11-14"], **kw})
+
+
+def _forecast(date="2020-03-03", train_end="2020-01-02", forecast=0.1):
+    return pd.DataFrame({"code": ["A"], "date": [date], "forecast": [forecast], "train_end": [train_end]})
+
+
+CAL = pd.bdate_range("2019-12-02", "2020-06-30")
+
+
+def _attr(**kw):
+    return pd.DataFrame({"date": ["d"], "f": [0.1], "specific": [0.1], "total": [0.2], **kw})
+
+
+def test_valid_inputs_pass():
+    check_universe(_universe())
+    check_panels(_prices(), _earnings(), "2020-01-03")
+    check_signal(np.array([[1.0, np.nan]]))
+    check_forecast(_forecast(), 20, CAL)
+    check_weights([0.5, 0.5], ["A", "B"])
+    check_attribution(_attr(), ("f",), [0.2])
+
+
+@pytest.mark.parametrize("call,match", [
+    (lambda: check_universe(_universe(eligible=[1, 0])), "bool"),
+    (lambda: check_universe(_universe().iloc[:0]), "비었다"),
+    (lambda: check_universe(_universe(eligible=[False, False])), "적격"),
+    (lambda: check_universe(_universe(code=["A", "A"])), "중복"),
+    (lambda: check_universe(_universe(date=["2020-13-45", "2020-01-02"])), "날짜"),
+    (lambda: check_universe(_universe(date=[None, "2020-01-02"])), "날짜"),
+    (lambda: check_universe(_universe(code=[None, "B"])), "코드"),
+    (lambda: check_universe(_universe(code=["", "B"])), "코드"),
+    (lambda: check_universe(pd.DataFrame({"code": ["A", "B"], "date": ["2020-01-02", "2020-01-03"], "eligible": [True, False]})), "2020-01-03"),
+    (lambda: check_panels(_prices("2020-02-01"), _earnings(), "2020-01-03"), "미래"),
+    (lambda: check_panels(_prices(), _earnings(knowledge_date=["2020-06-01"]), "2020-01-03"), "몰랐던"),
+    (lambda: check_panels(_prices(), _earnings(avail_date=["2020-06-01"]), "2020-01-03"), "몰랐던"),
+    (lambda: check_panels(_prices(), _earnings(knowledge_date=[None]), "2020-01-03"), "결측"),
+    (lambda: check_panels(_prices(), _earnings().drop(columns="knowledge_date"), "2020-01-03"), "열이 없다"),
+    (lambda: check_panels(_prices("2026-09-14"), _earnings(), "2026-09-14"), "애프터마켓"),
+    (lambda: check_panels(_prices().assign(close=[np.nan, 2.0]), _earnings(), "2020-01-03"), "close"),
+    (lambda: check_panels(_prices().assign(close=[0.0, 2.0]), _earnings(), "2020-01-03"), "close"),
+    (lambda: check_panels(_prices().assign(close=[-1.0, 2.0]), _earnings(), "2020-01-03"), "close"),
+    (lambda: check_panels(_prices().assign(close=[np.inf, 2.0]), _earnings(), "2020-01-03"), "close"),
+    (lambda: check_signal(np.array([[np.inf]])), "inf"),
+    (lambda: check_signal(np.array([[np.nan]])), "유효한"),
+    (lambda: check_signal(np.array([1.0])), "2차원"),
+    (lambda: check_forecast(_forecast(date="2020-01-02"), 20, CAL), "누출"),
+    (lambda: check_forecast(_forecast(date="2020-01-03"), 20, CAL), "겹친다"),
+    (lambda: check_forecast(_forecast(forecast=np.nan), 20, CAL), "NaN"),
+    (lambda: check_forecast(_forecast(), 0, CAL), "horizon"),
+    (lambda: check_forecast(_forecast(), 2.5, CAL), "horizon"),
+    (lambda: check_forecast(_forecast(), 20, []), "calendar"),
+    (lambda: check_forecast(_forecast(), 20, CAL[::-1]), "calendar"),
+    (lambda: check_forecast(_forecast(date="2020-03-07"), 20, CAL), "거래일이 아닌"),
+    (lambda: check_forecast(_forecast(train_end="2020-01-04"), 20, CAL), "거래일이 아닌"),
+    (lambda: check_weights([-0.1]), "음수"),
+    (lambda: check_weights([0.8, 0.8]), "합"),
+    (lambda: check_weights([np.nan]), "NaN"),
+    (lambda: check_weights([0.1, 0.1], ["A", "A"]), "중복"),
+    (lambda: check_weights([0.1, 0.1], ["A"]), "길이"),
+    (lambda: check_attribution(_attr(total=[0.3]), ("f",), [0.3]), "기여 합"),
+    (lambda: check_attribution(_attr(), ("f",), [0.25]), "실제 수익"),
+    (lambda: check_attribution(_attr(), ("f",), [0.2, 0.2]), "길이"),
+    (lambda: check_attribution(_attr(), ("f",), [np.nan]), "actual"),
+    (lambda: check_attribution(_attr(f=[np.nan], total=[np.nan]), ("f",), [0.2]), "NaN"),
+    (lambda: check_attribution(_attr(specific=[np.inf], total=[np.inf]), ("f",), [0.2]), "NaN"),
+], ids=lambda x: x if isinstance(x, str) else "")
+def test_violation_is_refused(call, match):
+    with pytest.raises(CheckError, match=match):
+        call()
+
+
+def test_aftermarket_window_has_no_way_around():
+    """"처리했다"고 말하는 인자는 없다 — main 의 read_prices 는 정규장 값을 만들지 못한다."""
+    assert "handled" not in check_panels.__code__.co_varnames
+
+
+def test_attribution_can_be_true_to_itself_and_wrong_about_the_book():
+    """옛 검사는 total 이 Σ 칸인지만 봤다. core 가 total 을 그렇게 만드니 동어반복이었다. 실제 수익과 대조해야 뜻이 있다."""
+    check_attribution(_attr(), ("f",), [0.21], actual_atol=0.02)
+    with pytest.raises(CheckError, match="실제 수익"):
+        check_attribution(_attr(), ("f",), [0.21])
+
+
+def test_forecast_overlap_counts_trading_days_not_weekdays():
+    """휴장일이 끼면 평일 수는 충분해도 라벨은 아직 안 끝났다. 평일 계산은 실제 달력에서 57.7% 를 겹침으로 통과시켰다(검증 5단계)."""
+    holidays = pd.bdate_range("2020-01-20", "2020-01-24")
+    cal = CAL.difference(holidays)
+    edge = _forecast(date=str(cal[cal.searchsorted(pd.Timestamp("2020-01-02")) + 19].date()))
+    assert np.busday_count(np.datetime64("2020-01-02"), np.datetime64(edge["date"].iloc[0])) >= 20, "평일로는 통과했을 칸"
+    with pytest.raises(CheckError, match="겹친다"):
+        check_forecast(edge, 20, cal)
+    check_forecast(_forecast(date=str(cal[cal.searchsorted(pd.Timestamp("2020-01-02")) + 20].date())), 20, cal)
+
+
+def test_check_forecast_requires_a_calendar():
+    with pytest.raises(TypeError):
+        check_forecast(_forecast(), 20)
+
+
+def test_ml_common_does_not_need_the_core_portfolio_layer_for_its_rng():
+    """기본 핀에서 ``pead_optimizer_c0`` 를 거치면 import 부터 죽는다. 난수는 정본에서 가져오고 값은 같다."""
+    from swing_it.validation.keys import keyed_rng
+
+    tree = ast.parse((REPO / "research/experiments/ml_forecast_common.py").read_text(encoding="utf-8"))
+    assert "pead_optimizer_c0" not in [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+    assert keyed_rng("ML-N2", 3).integers(1 << 30) == np.random.default_rng(np.random.SeedSequence(20261101, spawn_key=(zlib.crc32(b"ML-N2"), 3))).integers(1 << 30)
+
+
+def test_a_day_without_eligible_names_can_be_declared():
+    """날짜별 0개는 기본 거부다. 예열 구간처럼 의도한 빈 날은 호출자가 말한다."""
+    frame = pd.DataFrame({"code": ["A", "B"], "date": ["2020-01-02", "2020-01-03"], "eligible": [True, False]})
+    check_universe(frame, min_per_day=0)
+
+
+# --- 단계 표 --------------------------------------------------------------------------
+
+def test_the_eleven_stages_are_the_users_process_in_order():
+    assert [s.ko for s in Stage] == [
+        "유니버스", "데이터", "알파 발굴", "알파 검증(IC/ICIR)", "ML 수익률 예측", "팩터 위험모델",
+        "포트폴리오 최적화", "거래비용 모델", "백테스트", "주문 실행", "성과 기여·모니터링",
+    ]
+    assert [int(s) for s in Stage] == list(range(1, 12))
+
+
+def _resolve(ref: str) -> None:
+    path, _, symbol = ref.partition("::")
+    assert (REPO / path).is_file(), f"경로가 없다: {path}"
+    if symbol:
+        tree = ast.parse((REPO / path).read_text(encoding="utf-8"))
+        names = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        assert symbol in names, f"{path} 에 {symbol} 가 없다"
+
+
+@pytest.mark.parametrize("stage", list(Stage), ids=lambda s: s.name)
+def test_stage_table_points_at_real_functions(stage):
+    assert STAGE_FUNCTIONS[stage]
+    for ref in STAGE_FUNCTIONS[stage]:
+        _resolve(ref)
+
+
+@pytest.mark.parametrize("ref", ["research/experiments/nope.py", "src/swing_it/storage.py::nope"])
+def test_table_check_catches_a_rotten_pointer(ref):
+    with pytest.raises(AssertionError):
+        _resolve(ref)
+
+
+@pytest.mark.parametrize("stage", list(Stage), ids=lambda s: s.name)
+def test_the_doc_table_matches_the_code_table(stage):
+    doc = (REPO / "docs" / "PIPELINE.md").read_text(encoding="utf-8").splitlines()
+    row = next(line for line in doc if line.startswith(f"| {int(stage)} | "))
+    for ref in STAGE_FUNCTIONS[stage]:
+        symbol = ref.partition("::")[2] or Path(ref).name
+        assert symbol in row, f"docs/PIPELINE.md {int(stage)}단계 줄에 {symbol} 가 없다"
+
+
+# --- 모듈 경계 ------------------------------------------------------------------------
+
+BOOK_FILES = sorted((REPO / "src" / "swing_it" / "book").glob("*.py")) + sorted((REPO / "src" / "swing_it" / "pipeline").glob("*.py"))
+
+
+def _imports(path: Path) -> list[str]:
+    out = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            out += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            out.append(node.module or "")
+        elif isinstance(node, ast.Call) and getattr(node.func, "id", "") == "core_layer":
+            out.append(ast.unparse(node))
+    return out
+
+
+@pytest.mark.parametrize("path", BOOK_FILES, ids=lambda p: p.name)
+def test_no_order_path_and_no_research_import(path):
+    """주문·키움 호출을 하지 않고, src 는 research 를 부르지 않는다(린트 (a) 를 importlib 로 돌아가지 않는다)."""
+    banned = ("kiwoom", "krx_quant_core.execution", "httpx", "requests", "research")
+    assert not [m for m in _imports(path) if any(b in m for b in banned)]
+
+
+def test_price_adjust_does_not_depend_on_the_new_packages():
+    """``price_adjust.py`` 는 Airflow 라이브 마운트로 돈다. 나머지 import 범위는 ``tests/test_price_adjust.py`` 가 본다."""
+    mods = _imports(REPO / "src" / "swing_it" / "price_adjust.py")
+    assert not [m for m in mods if "pipeline" in m or "book" in m]
+
+
+@pytest.mark.parametrize("name", ["accounting", "context", "costs", "metrics", "nulls", "optimized", "parity", "rank", "risk", "riskmodel", "seam", "spec"])
+def test_book_modules_import_on_the_default_pin(name):
+    """기본 핀 0.7.0 에서도 import 된다 — 충격비용·최적화기는 부를 때 import 한다."""
+    importlib.import_module(f"swing_it.book.{name}")
+
+
+def test_gate_does_not_pull_the_book_in():
+    """린트가 게이트를 읽는다. 게이트가 무거워지면 린트가 무의존이 아니게 된다(test_pipeline_gate 가 sys.modules 로도 본다)."""
+    assert not [m for m in _imports(REPO / "src" / "swing_it" / "pipeline" / "gate.py") if m.startswith("swing_it.book")]
+
+
+# --- core 레이어 지연 import ------------------------------------------------------------
+
+@pytest.mark.parametrize("module", ["krx_quant_core.portfolio.optimize", "krx_quant_core.costs.impact"])
+def test_missing_core_layer_says_what_to_do(module, monkeypatch):
+    def _missing(name, *a, **k):
+        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+    monkeypatch.setattr(importlib, "import_module", _missing)
+    with pytest.raises(CoreLayerMissing, match=r"0\.7\.0.*미배포"):
+        core_layer(module)
+
+
+def test_core_layer_does_not_hide_a_different_missing_dependency(monkeypatch):
+    """cvxpy 같은 다른 의존성 문제를 "core 가 없다"로 둔갑시키지 않는다."""
+    def _missing(name, *a, **k):
+        raise ModuleNotFoundError("No module named 'cvxpy'", name="cvxpy")
+
+    monkeypatch.setattr(importlib, "import_module", _missing)
+    with pytest.raises(ModuleNotFoundError) as e:
+        core_layer("krx_quant_core.portfolio.optimize")
+    assert not isinstance(e.value, CoreLayerMissing)
+
+
+def test_trade_costs_on_a_missing_layer_is_a_clear_error_not_a_zero(monkeypatch):
+    """비용 레이어가 없다고 비용 0 으로 조용히 돌지 않는다."""
+    from swing_it.book import costs
+
+    monkeypatch.setattr(costs, "core_layer", lambda m: (_ for _ in ()).throw(CoreLayerMissing(m)))
+    with pytest.raises(CoreLayerMissing):
+        costs.trade_costs(np.array([0.1]), np.array([1e10]), np.array([0.02]), np.array(["KOSPI"], dtype=object),
+                          pd.Timestamp("2023-06-01").date(), np.array([5.0]), 3e8)
+    assert costs.trade_costs(np.array([0.0]), np.array([1e10]), np.array([0.02]), np.array(["KOSPI"], dtype=object),
+                             pd.Timestamp("2023-06-01").date(), np.array([5.0]), 3e8)[0] == 0.0
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), "nope"])
+def test_day_parses_unique_values_but_a_missing_one_still_fails(bad):
+    """고유 값만 파싱한다. 결측이 ``factorize`` 표지값으로 새면 마지막 날짜로 둔갑해 검사를 통과한다."""
+    with pytest.raises(CheckError, match="날짜"):
+        _day(pd.Series(["2020-01-02", bad, "2020-01-03"]), "x")
+    assert _day(pd.Series(["2020-01-02", "2020-01-02", "20200103"]), "x").dt.strftime("%Y%m%d").tolist() == ["20200102", "20200102", "20200103"]

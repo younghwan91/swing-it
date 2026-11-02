@@ -34,7 +34,7 @@ import pandas as pd
 import pead_optimizer_po2 as P2
 from krx_quant_core.backtest.crosssectional import _trailing_adv
 from krx_quant_core.data.risk_inputs import STYLE_NAMES, load_risk_inputs
-from krx_quant_core.risk.factor_model import RiskModel, build_risk_model, factor_returns
+from krx_quant_core.risk.factor_model import factor_returns
 from pead_optimizer_c0 import (
     END,
     GRID_LAST,
@@ -50,6 +50,8 @@ from pead_optimizer_c0 import (
     nu_from,
 )
 from pead_optimizer_seam import seam_guard
+
+from swing_it.book import riskmodel as _riskmodel
 
 GRID_VRA = (None, 21, 42, 84)
 GRID_SHRINK = (0.1, 0.3, 0.6)
@@ -71,33 +73,13 @@ def cell_name(cell) -> str:
 
 # ── 위험모델(병렬, 칸 인자) ───────────────────────────────────────────────────
 
-_CTX: dict = {}
-
-
-def _build(a):
-    c = _CTX
-    m = build_risk_model(c["R"], c["Xs"], c["lab"], c["cap"], c["msk"], a, codes=np.arange(c["R"].shape[0]),
-                         spec_shrink=c["shrink"], spec_vra_half_life=c["vra"])
-    return a, (m.codes.astype(int), m.X, m.F, m.D, list(m.names))
-
-
 def build_models(c, need, workers, path: Path, log, *, vra=None, shrink=0.3):
-    if path.exists():
-        return pickle.load(open(path, "rb"))
-    _CTX.clear()
-    _CTX.update(c)
-    _CTX.update({"vra": vra, "shrink": shrink})
-    with mp.get_context("fork").Pool(workers) as pool:
-        models = dict(pool.imap_unordered(_build, need, chunksize=2))
-    _CTX.clear()
-    pickle.dump(models, open(path, "wb"))
-    log(f"  모델 {len(models)}개 → {path.name}")
-    return models
+    """구현은 :func:`swing_it.book.riskmodel.build_models` 로 옮겼다. 캐시가 입력 해시에 묶인다(옛 구현은 설정을 무시했다)."""
+    return _riskmodel.build_models(c, need, workers, path, log, vra=vra, shrink=shrink)
 
 
 def as_model(models, a):
-    idx, X, F, D, names = models[a]
-    return RiskModel(codes=idx, names=names, X=X, F=F, D=D), idx
+    return _riskmodel.as_risk_model(models, a)
 
 
 # ── σ_target·OB·실현 ───────────────────────────────────────────────────────────

@@ -23,8 +23,6 @@ import json
 import multiprocessing as mp
 import pickle
 import time
-import zlib
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -35,13 +33,18 @@ from krx_quant_core.risk.factor_model import (
     bias_statistic,
     build_risk_model,
     factor_returns,
-    standardize,
 )
 from scipy import stats
 
+from swing_it.book.risk import Sub
+from swing_it.features.universe import rank_band_eligible
+from swing_it.book.riskmodel import exposures as _exposures
+from swing_it.validation.keys import SEED, keyed_rng
+
+__all__ = ["SEED", "Sub", "keyed_rng"]  # 옮긴 구현을 이 이름으로 부르는 러너가 있다
+
 START, END = "2019-07-01", "2023-12-28"
 HORIZON = 21
-SEED = 20261101
 N_RANDOM, RANDOM_NAMES = 100, 50  # R0 (validate_risk_model.py 그대로)
 N_P = 100  # P5·P50·P10B 각 포트 수
 N_OB = 200
@@ -69,28 +72,11 @@ R0_DESIGN = {  # 설계 §6 v3 열(krx-quant-core docs/superpowers/specs/2026-11
 OUT = Path(__file__).resolve().parents[1] / "logs" / "pead_optimizer"
 
 
-def keyed_rng(name: str, *extra: int) -> np.random.Generator:
-    """PO-1.7 — 대상·시나리오 이름 키 시드."""
-    return np.random.default_rng(
-        np.random.SeedSequence(SEED, spawn_key=(zlib.crc32(name.encode()), *extra)))
-
-
 # ── 입력 ──────────────────────────────────────────────────────────────────────
 
 
-def exposures(x, raw, mask):  # validate_risk_model.py 와 같은 규칙
-    out = {}
-    for k, v in raw.items():
-        e = np.full_like(v, np.nan)
-        for t in range(v.shape[1]):
-            m = mask[:, t]
-            if m.sum() < 30:
-                continue
-            col = standardize(v[:, t], x.cap[:, t], m)
-            col[m & ~np.isfinite(col)] = 0.0
-            e[:, t] = col
-        out[k] = e
-    return out
+def exposures(x, raw, mask):  # validate_risk_model.py 와 같은 규칙. 구현은 src 로 옮겼다
+    return _exposures(x, raw, mask)
 
 
 def month_ends(dates, lo, last_index):  # validate_risk_model.py 그대로
@@ -178,19 +164,8 @@ def yoy_wide(ea: pd.DataFrame, per: pd.DataFrame, codes, dates, end, fallback: b
 
 
 def eligible_idx(t, sig, adv, cap, in_u):
-    """eligible(t) — M0(신호 유한 ∧ ADV ≥ 200억 ∧ U_t) 안의 시총 21~100위(행 번호)."""
-    ok = np.isfinite(sig[:, t]) & (adv[:, t] >= ADV_FLOOR) & in_u & np.isfinite(cap[:, t])
-    liq = np.flatnonzero(ok)
-    order = liq[np.argsort(-cap[liq, t], kind="stable")]
-    return order[CAP_RANK[0]:CAP_RANK[1]]
-
-
-@dataclass
-class Sub:
-    X: np.ndarray
-    F: np.ndarray
-    D: np.ndarray
-    names: list
+    """eligible(t) — M0(신호 유한 ∧ ADV ≥ 200억 ∧ U_t) 안의 시총 21~100위(행 번호). 구현은 ``features.universe`` 로 옮겼다."""
+    return rank_band_eligible(t, sig, adv, cap, in_u, adv_floor=ADV_FLOOR, cap_rank=CAP_RANK)
 
 
 # ── OB(PO-1.6) ────────────────────────────────────────────────────────────────

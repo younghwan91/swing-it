@@ -18,21 +18,21 @@ Point-in-time by construction: the caller passes as-of market-cap and ADV panels
 the "small-mid" classification never peeks ahead. ⚠️ PIT removes look-ahead
 classification only.
 
-⚠️ **이 경로의 생존편향은 아직 안 풀렸다 (2026-08-15 기준).** 폐지 종목의 시세·실적은
-백필했지만(``daily_bars.source='naver'``), 여기서 쓰는 ``cap_panel`` 의 출처인
-``shares_outstanding_history`` 에는 폐지분이 여전히 0건이다 — KRX 과거 상장주식수가
-로그인 장벽 뒤에 있다. 즉 cap 기반 유니버스는 지금도 생존자만 담는다. 거래대금 기반
-ADV 필터만 쓰는 경로(PEAD 게이트)는 영향이 없다. GUARDRAILS §4 공백 2 참조.
+⚠️ **이 경로의 생존편향은 일부만 풀렸다 (2026-11-02 측정).** ``cap_panel`` 의 출처인
+``shares_outstanding_history`` 에 폐지 전용 코드가 440개 2,362행 있다(DART, 종목당 연 1점 안팎). 없는 것이
+아니라 **듬성듬성하다** — 점 앞 구간의 종목-일은 시총이 없어 유니버스에서 빠진다. 거래대금 기반 ADV 필터만
+쓰는 경로(PEAD 게이트)는 영향이 없다. GUARDRAILS §4 공백 2, 띠에 주는 영향은 ``docs/PIPELINE.md`` 1단계 참조.
 
-**현재 호출자 없음.** ``engine.panels.build_panels`` 가 유일한 소비자였는데 미너비니
-제거와 함께 삭제됐다. 위 공백을 닫고 cap 기반 유니버스를 다시 세울 때를 위해 남긴다 —
-지운 게 아니라 의도적으로 보존한 것이다.
+**이 함수(``smallmid_universe``)는 호출자가 없다.** ``engine.panels.build_panels`` 가 유일한 소비자였는데 미너비니
+제거와 함께 삭제됐다. cap 기반 유니버스를 다시 세울 때를 위해 남긴다. 파이프라인 1단계의 함수는
+아래 :func:`rank_band_eligible` 이다.
 
 Pure DataFrame in → DataFrame out.
 """
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 # Frozen universe hyperparameters (pre-registered — do not tune per experiment).
@@ -84,3 +84,52 @@ def smallmid_universe(
         size_ok = (df["cap_rank"] > cap_rank[0]) & (df["cap_rank"] <= cap_rank[1])
     df["eligible"] = size_ok & (df["adv"] >= adv_floor)
     return df[["code", "date", "eligible"]].reset_index(drop=True)
+
+
+# ── 시총 순위 띠 유니버스(배열 좌표) — 1단계 ───────────────────────────────────────────
+#
+# PEAD 단계 B·전진 팔·ML 예측이 같은 정의를 쓴다. 신호 유한 ∧ ADV ≥ 하한 ∧ U_t 안에서 시총 순위를 매긴다 — 시총 순위는 **유동성
+# 필터 뒤**의 순위다(core ``staggered_tranche_backtest`` 의 ``cap_rank`` 와 같다). 기본값은 사전등록 값(PEAD PREREG §2)이다.
+
+#: 시총 순위 띠 (lo, hi] — 21~100위. 행 번호로는 ``order[lo:hi]``.
+RANK_BAND = (20, 100)
+#: 20일 평균 거래대금 하한(백만원) — 200억.
+RANK_BAND_ADV_FLOOR = 20000.0
+
+
+def m0_mask(t: int, sig: np.ndarray, adv: np.ndarray, in_u: np.ndarray, *, adv_floor: float = RANK_BAND_ADV_FLOOR) -> np.ndarray:
+    """M0(t) = ① 신호 유한 ∧ ② 20일 ADV ≥ 하한(백만원, core ``_trailing_adv``) ∧ ③ U_t."""
+    return np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor) & in_u
+
+
+def rank_band_eligible(t: int, sig: np.ndarray, adv: np.ndarray, cap: np.ndarray, in_u: np.ndarray, *,
+                       adv_floor: float = RANK_BAND_ADV_FLOOR, cap_rank: tuple[int, int] = RANK_BAND) -> np.ndarray:
+    """eligible(t) — M0(t) 안의 시총 순위 띠(행 번호, 시총 내림차순, 동률은 행 순서)."""
+    ok = np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor) & in_u & np.isfinite(cap[:, t])
+    liq = np.flatnonzero(ok)
+    order = liq[np.argsort(-cap[liq, t], kind="stable")]
+    return order[cap_rank[0]:cap_rank[1]]
+
+
+def u_exclusion(t: int, sig: np.ndarray, adv: np.ndarray, in_u: np.ndarray, *, adv_floor: float = RANK_BAND_ADV_FLOOR) -> float:
+    """①∧② 중 ③(U_t) 때문에 빠진 비율."""
+    base = np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor)
+    n = int(base.sum())
+    return float((base & ~in_u).sum() / n) if n else float("nan")
+
+
+def u_exclusion_causes(t: int, sig: np.ndarray, adv: np.ndarray, cap: np.ndarray, in_u: np.ndarray, *,
+                       adv_floor: float = RANK_BAND_ADV_FLOOR) -> dict[str, float]:
+    """①∧② 분모로 잰 적격 탈락 원인. ``cap_missing`` + ``risk_model`` = :func:`u_exclusion`.
+
+    - ``cap_missing``: U_t 밖이고 시총도 없다 — 주식수 원천 공백일 수 있다.
+    - ``risk_model``: 시총은 있는데 U_t 밖이다 — 위험모델 탈락.
+    - ``cap_missing_in_u``: U_t 안인데 시총이 없어 띠 순위에서 빠졌다.
+    """
+    base = np.isfinite(sig[:, t]) & (adv[:, t] >= adv_floor)
+    n = int(base.sum())
+    if not n:
+        return {"cap_missing": float("nan"), "risk_model": float("nan"), "cap_missing_in_u": float("nan")}
+    no_cap = ~np.isfinite(cap[:, t])
+    return {"cap_missing": float((base & ~in_u & no_cap).sum() / n), "risk_model": float((base & ~in_u & ~no_cap).sum() / n),
+            "cap_missing_in_u": float((base & in_u & no_cap).sum() / n)}

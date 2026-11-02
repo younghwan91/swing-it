@@ -20,13 +20,17 @@ import pandas as pd
 from krx_quant_core.risk.attribution import factor_attribution
 from krx_quant_core.stats.sharpe import deflated_sharpe_from_sample, t_haircut
 
+from swing_it.diagnostics.hac import NW_LAG, nw_t_rows, ols_hac
+from swing_it.pipeline.checks import check_attribution
+
+__all__ = ["NW_LAG", "ols_hac"]  # 옮긴 구현을 이 이름으로 부르는 러너가 있다
+
 # run_b 가 실행 전에 확인한다(PO-7 M4 — 빠진 항목이 있으면 B 를 돌리지 않는다).
 IMPLEMENTED = {"factor_alpha": True, "pead_qualification": True, "vs_kospi": True, "attribution": True,
                "deflation": True, "f_boot": True, "render": True}
 REQUIRED = tuple(IMPLEMENTED)
 
 FACTOR_NAMES = ("KOSPI", "KOSDAQ", "UMD", "SMB", "LOWVOL")
-NW_LAG = 2
 ALPHA_T_FLOOR = 2.0  # GUARDRAILS 팩터 알파 t>2
 META_GEN3_TRIALS = 13  # fcs META_GEN3 — 원장 파일이 이 브랜치에 없어 상수로 적는다(PREREG §4)
 LEDGERS = ("pead_optimizer", "pead_concentrated")
@@ -46,40 +50,6 @@ LABEL_MARKET = ("시장 구분(반스프레드 5·15bp)은 `stocks` 현재 스�
 LABEL_QUAL = "구성은 정했지만 PEAD 는 팩터 노출"
 FOLD_NOTE = ("GUARDRAILS §2: 2020/21 은 TRAIN 내부 → 클린 아님. IC 는 폴드마다 누적·퍼지로 학습했지만 PEAD 신호 자체가 2016~2026 연구로 "
              "골라졌다 — 어느 폴드도 신호 선택에 대해 깨끗하지 않다(§2).")
-
-
-# ── HAC 회귀 ──────────────────────────────────────────────────────────────────
-
-
-def ols_hac(y, X, lag: int = NW_LAG) -> dict:
-    """OLS + Newey-West(Bartlett, ``lag``) 샌드위치. 자유도 보정 없음 — 상수만이면 core ``newey_west_t`` 와 같다.
-
-    ``X`` 는 상수 열을 포함하지 않는다(여기서 붙인다). 유한하지 않은 행은 뺀다.
-    """
-    y = np.asarray(y, dtype=np.float64)
-    X = np.asarray(X, dtype=np.float64).reshape(len(y), -1)
-    ok = np.isfinite(y) & np.isfinite(X).all(axis=1)
-    y, X = y[ok], X[ok]
-    Z = np.column_stack([np.ones(len(y)), X])
-    n, p = Z.shape
-    if n < p + lag + 2:
-        return {"n": int(n), "alpha": float("nan"), "t_alpha": float("nan"), "beta": [float("nan")] * (p - 1),
-                "t_beta": [float("nan")] * (p - 1), "r2": float("nan")}
-    ZtZi = np.linalg.pinv(Z.T @ Z)
-    b = ZtZi @ Z.T @ y
-    e = y - Z @ b
-    u = Z * e[:, None]
-    S = u.T @ u
-    for k in range(1, lag + 1):
-        G = u[k:].T @ u[:-k]
-        S += (1.0 - k / (lag + 1.0)) * (G + G.T)
-    V = ZtZi @ S @ ZtZi
-    se = np.sqrt(np.clip(np.diag(V), 0.0, None))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = np.where(se > 0, b / se, np.nan)
-    ss = float(((y - y.mean()) ** 2).sum())
-    return {"n": int(n), "alpha": float(b[0]), "t_alpha": float(t[0]), "beta": [float(v) for v in b[1:]],
-            "t_beta": [float(v) for v in t[1:]], "r2": float(1.0 - (e @ e) / ss) if ss > 0 else float("nan")}
 
 
 def ledger_n(count_trials=None, extra: int = META_GEN3_TRIALS) -> dict:
@@ -246,17 +216,22 @@ def step_active_weights(ctx, r, el: np.ndarray) -> tuple[np.ndarray, np.ndarray,
     return rows, days, W
 
 
-def attribution_report(ctx, recs, fr, prep, eligible_of) -> dict:
+def attribution_report(ctx, recs, fr, prep, eligible_of, *, detail: bool = False, actual_atol: float = 0.05) -> dict:
     """스텝 능동수익(비용 전)을 core ``factor_attribution`` 으로 팩터·특이로 나눈다.
 
     - 날짜 d 비중 = 체결 뒤 비중의 표류(북) − 벤치 표류, 노출 = d−1 열, f·u = ``factor_returns`` (가드 뒤 수익, v4 와 같은 X).
     - 쥔 종목의 u 또는 노출이 그날 결측이면 그 종목-날은 비중 0 으로 두고 센다(정지·마스크 밖 — 그날 수익 없음).
     - 몫: 분산 몫 = var(s)/(var(φ)+var(s)) (공분산 따로), 평균 몫 = mean(s)/mean(φ+s). 묶음별 평균(시장·업종·스타일).
+    - ``detail``(새 연구용, 기본 끔은 B.json 재현): 스텝마다 ``check_attribution`` 으로 귀속 합을 실제 수익과 대조(``actual_atol``)하고, 부호 있는 평균 차와
+      실제 수익 기준 특이 몫을 더한다. 평균 몫의 분모는 귀속 합이라 실제 수익 기준과 다르다(B: 0.896 대 0.806).
+
+    **백테스트 전용이다.** 전진 모니터링 경로는 아직 없다(``docs/PIPELINE.md`` 11단계).
     """
     names = list(fr.names)
     groups = {"market": [n for n in names if n == "market"], "sector": [n for n in names if n not in prep["Xs"] and n != "market"],
               "style": [n for n in names if n in prep["Xs"]]}
     phi, spec, gross_act, tot_sum, zeroed = [], [], [], [], 0
+    frames = []
     gsum = {g: [] for g in groups}
     for r in recs:
         if r.f_next <= r.f:
@@ -278,10 +253,18 @@ def attribution_report(ctx, recs, fr, prep, eligible_of) -> dict:
         for g, cols in groups.items():
             gsum[g].append(float(a[cols].to_numpy().sum()) if cols else 0.0)
         gross_act.append(r.gross - r.bench)
+        if detail:
+            frames.append({"date": r.date, **{n: float(a[n].sum()) for n in names}, "specific": spec[-1], "total": tot_sum[-1]})
     phi, spec = np.array(phi), np.array(spec)
     vs, vf = float(np.var(spec, ddof=1)), float(np.var(phi, ddof=1))
     tot = phi + spec
-    return {"n_steps": int(phi.size), "specific_share_var": vs / (vs + vf) if vs + vf > 0 else float("nan"),
+    extra = {}
+    if detail:
+        check_attribution(pd.DataFrame(frames), names, gross_act, atol=1e-9, actual_atol=actual_atol)
+        act = float(np.mean(gross_act))
+        extra = {"mean_actual": act, "signed_gap_mean": float(np.mean(np.array(tot_sum) - np.array(gross_act))),
+                 "specific_share_of_actual": float(spec.mean() / act) if act != 0 else float("nan")}
+    return {**extra, "n_steps": int(phi.size), "specific_share_var": vs / (vs + vf) if vs + vf > 0 else float("nan"),
             "cov_phi_spec": float(np.cov(phi, spec, ddof=1)[0, 1]) if phi.size > 1 else float("nan"),
             "mean_factor": float(phi.mean()), "mean_specific": float(spec.mean()),
             "specific_share_mean": float(spec.mean() / tot.mean()) if tot.mean() != 0 else float("nan"),
@@ -292,20 +275,6 @@ def attribution_report(ctx, recs, fr, prep, eligible_of) -> dict:
 
 
 # ── PO-1.3 f_boot ─────────────────────────────────────────────────────────────
-
-
-def nw_t_rows(X: np.ndarray, lag: int = NW_LAG) -> np.ndarray:
-    """행마다 core ``newey_west_t`` 의 t(평균/HAC se). se=0 이면 NaN."""
-    X = np.asarray(X, dtype=np.float64)
-    n = X.shape[1]
-    mu = X.mean(axis=1)
-    d = X - mu[:, None]
-    var = (d * d).sum(axis=1) / n
-    for k in range(1, lag + 1):
-        var += 2.0 * (1.0 - k / (lag + 1.0)) * (d[:, k:] * d[:, :-k]).sum(axis=1) / n
-    se = np.sqrt(np.clip(var, 0.0, None) / n)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.where(se > 0, mu / se, np.nan)
 
 
 def max_ratio(paths: np.ndarray, looks=OBF_LOOKS, shape=OBF_SHAPE) -> np.ndarray:

@@ -37,9 +37,18 @@ __all__ = [
     "lookup_panel",
     "panel_pivot",
     "price_arrays",
+    "ffill_axis1",
     "resolve_signal",
     "yoy_panels",
 ]
+
+
+def ffill_axis1(C: np.ndarray) -> np.ndarray:
+    """가로(날짜) 방향 앞 채우기 — NaN 만 채우고 값은 복사한다. 앞머리 NaN 은 그대로다. core ``_ffill_axis1_nb`` 와 비트까지 같다."""
+    C = np.asarray(C, dtype=np.float64)
+    idx = np.where(~np.isnan(C), np.arange(C.shape[1]), 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    return C[np.arange(C.shape[0])[:, None], idx]
 
 
 def yoy_panels(earnings_panel, codes, dates):

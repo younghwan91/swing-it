@@ -386,9 +386,11 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
     Args:
         con: Open connection (sqlite3 or psycopg2).
         asof: Ceiling on ``knowledge_date`` — a single instant. ``None`` means
-            latest-known.
+            latest-known. ``YYYY-MM-DD`` 로 넘긴다 — sqlite 는 문자열로 비교하므로 ``20200601`` 은
+            틀린 결과를 내고 빈 문자열은 ``None`` 처럼 최신으로 읽힌다(Postgres 는 날짜로 비교한다).
         cols: Columns to return (default :data:`_EARNINGS_READ_COLS`).
-        all_versions: 접지 말고 모든 버전을 그대로 준다(``knowledge_date`` 포함).
+        all_versions: 접지 말고 모든 버전을 그대로 준다. 기본 ``cols`` 에는 ``knowledge_date`` 가 **없다** —
+            버전을 고르려면 ``cols`` 에 넣어 요청한다(:data:`swing_it.features.earnings_asof.YOY_COLS`).
 
             **백테스트는 이쪽을 써야 한다.** 스칼라 ``asof`` 는 "한 시점 기준"만
             표현할 수 있는데, 백테스트가 필요한 건 "각 바 t 시점 기준"이다. 버전
@@ -437,12 +439,27 @@ def read_earnings(con: Any, *, asof: str | None = None, cols: "tuple[str, ...] |
     return pd.read_sql_query(sql, con, params=params or None)
 
 
+def read_periodic_filings(con: Any, until: str):
+    """(code, period)별 정기보고서 첫 접수일 — 긴 형식 code·period·per. ``until`` 이하만 읽는다.
+
+    실적을 쓸 수 있는 첫날을 정하는 재료다(:mod:`swing_it.features.earnings_asof`).
+    """
+    import pandas as pd
+
+    ph = "%s" if _is_pg(con) else "?"
+    cur = con.cursor()
+    cur.execute(  # noqa: S608 — 자리표시자만 다르다
+        f"SELECT code, period, min(rcept_dt) FROM earnings_disclosures WHERE kind = 'periodic' AND rcept_dt <= {ph} "
+        "GROUP BY code, period", (until,))
+    return pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "period", "per"])
+
+
 PRICE_TABLE = "daily_bars_adjusted"   # 분할조정. 백테스트는 원자료(daily_bars) 금지.
 _PRICE_READ_COLS = ("code", "date", "open", "high", "low", "close", "volume", "trade_value")
 
 
 def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
-                table: str = PRICE_TABLE, require_delisted: bool = True):
+                table: str = PRICE_TABLE, require_delisted: bool = True, end: "str | None" = None):
     """백테스트용 가격 패널 — **상장폐지 종목 포함**을 로딩 시점에 검사한다.
 
     생존편향은 "가장 큰 숨은 인플레이터"인데(GUARDRAILS §3), 검증 스택은 넘겨받은
@@ -457,17 +474,66 @@ def read_prices(con: Any, *, cols: "tuple[str, ...] | None" = None,
         require_delisted: DB 에 폐지 종목 시세가 있는데 이 조회 결과엔 없으면
             ``AssertionError``. 유니버스를 좁히는 WHERE 를 붙였거나 폐지 백필이
             안 돌았다는 뜻이다. 폐지 시세가 DB 에 아예 없으면(신규 DB 등) 통과시킨다 —
-            없는 걸 요구할 수는 없고, 그 경우는 백필 자체가 선행 과제다.
+            없는 걸 요구할 수는 없고, 그 경우는 백필 자체가 선행 과제다. ``code`` 를 안 뽑으면
+            볼 수 없으니 거부한다. 폐지 백필이 없는 표(``daily_bars_raw``)도 명시해야 읽힌다.
+        end: 상한(포함). 2026-09-14 이상이면 :class:`~swing_it.pipeline.checks.CheckError` — 이 뒤의
+            고가·저가·종가·거래량은 애프터마켓이 섞였고 이 함수는 정규장 값을 만들지 못한다.
 
-    Returns: pandas DataFrame.
+            **기본값 정책.** ``None`` 은 옛 호출 그대로 표 전체다(오염 구간 포함). 옛 러너는 사전등록 창이 그 전에
+            끝나고, 결과를 바꾸지 않으려고 놔뒀다. 파이프라인을 선언한 새 러너는 린트 (k) 가 ``end=`` 를 요구한다.
+
+    ``volume`` 은 수정주가 표에서도 **조정되지 않는다**. 분할 앞뒤로 이어지지 않으니 ADV 는 ``trade_value`` 만 쓴다.
+
+    Returns: pandas DataFrame. ``end`` 를 주면 (code, date) 순서다. ``None`` 이면 표 전체라 정렬을 걸지 않는다(순서 보장 없음).
     """
     import pandas as pd
 
+    from swing_it.pipeline.checks import check_price_end  # noqa: PLC0415 — 가격 조정 마운트가 이 모듈을 안 끌어오게 부를 때 import
+
     sel = ", ".join(cols or _PRICE_READ_COLS)
-    df = pd.read_sql_query(f"SELECT {sel} FROM {table}", con)  # noqa: S608 — 컬럼·테이블은 모듈 상수
+    tail, params = "", None
+    if end is not None:
+        check_price_end(end)
+        tail, params = f" WHERE date <= {'%s' if _is_pg(con) else '?'} ORDER BY code, date", (end,)
+    df = pd.read_sql_query(f"SELECT {sel} FROM {table}{tail}", con, params=params)  # noqa: S608 — 컬럼·테이블은 모듈 상수
     if require_delisted:
-        _assert_universe_has_delisted(con, df, table=table)
+        _assert_universe_has_delisted(con, df, table=table, end=end)
     return df
+
+
+def read_seam_sources(con: Any, codes, dates, end: str):
+    """이음매 가드 재료 — ``([daily_bars_raw 종가, supply_demand 종가(절댓값)], corporate_actions 사건)``. 모두 [dates[0], end], 패널 좌표(code × date).
+
+    원주가는 대조에만 쓴다. 폐지 백필이 없는 표라 유니버스로 쓰지 않는다(:func:`read_prices` 의 가드).
+    """
+    import numpy as np
+    import pandas as pd
+
+    ph = "%s" if _is_pg(con) else "?"
+    lo = str(dates[0].date())
+    cidx = pd.Index([str(c) for c in codes])
+    didx = pd.DatetimeIndex(dates)
+    cur = con.cursor()
+    out = []
+    for sql in (f"SELECT code, date, close FROM daily_bars_raw WHERE date BETWEEN {ph} AND {ph} AND close > 0",  # noqa: S608 — 자리표시자만 다르다
+                f"SELECT code, date, abs(close) FROM supply_demand WHERE date BETWEEN {ph} AND {ph} "  # noqa: S608
+                "AND close IS NOT NULL AND close <> 0"):
+        cur.execute(sql, (lo, end))
+        df = pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "date", "close"])
+        day = pd.to_datetime(df["date"])
+        if len(df) and day.max() > pd.Timestamp(end):
+            raise AssertionError(f"이음매 재료에 end({end}) 뒤 날짜가 있다")
+        a = np.full((len(codes), len(dates)), np.nan)
+        i = cidx.get_indexer(df["code"].astype(str))
+        t = didx.get_indexer(day)
+        ok = (i >= 0) & (t >= 0)
+        a[i[ok], t[ok]] = df["close"].to_numpy(float)[ok]
+        out.append(a)
+    cur.execute(f"SELECT code, date FROM corporate_actions WHERE date BETWEEN {ph} AND {ph}", (lo, end))  # noqa: S608
+    ev = pd.DataFrame([tuple(r) for r in cur.fetchall()], columns=["code", "date"])
+    if len(ev) and pd.to_datetime(ev["date"]).max() > pd.Timestamp(end):
+        raise AssertionError(f"사건에 end({end}) 뒤 날짜가 있다")
+    return out, ev
 
 
 SUPPLY_TABLE = "supply_demand"
@@ -556,21 +622,10 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
 def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
     """조회 구간에 수급이 있는 폐지 종목이 결과에도 담겼는지 확인."""
     ph = "%s" if _is_pg(con) else "?"
-    where, params = ["source = " + ph], ["naver"]
-    if start is not None:
-        where.append(f"date >= {ph}")
-        params.append(start)
-    if end is not None:
-        where.append(f"date <= {ph}")
-        params.append(end)
+    where, params = _date_where(con, "date", start, end)
     sql = (f"SELECT DISTINCT code FROM {SUPPLY_TABLE} "  # noqa: S608 — 모듈 상수
-           f"WHERE {' AND '.join(where)}")
-    if _is_pg(con):
-        with con.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            expected = {r[0] for r in cur.fetchall()}
-    else:
-        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+           f"WHERE {' AND '.join([f'source = {ph}', *where])}")
+    expected = _fetch_codes(con, sql, ["naver", *params])
     if not expected:
         return  # 그 구간에 폐지 종목 수급이 아예 없다 — 요구할 수 없다.
     if "code" not in getattr(df, "columns", []):
@@ -588,6 +643,15 @@ INVESTOR_TREND_TABLE = "naver_investor_trend"
 _INVESTOR_TREND_COLS = ("code", "date", "foreign_net", "institution_net", "foreign_hold_ratio")
 RESEARCH_TABLE = "naver_research_reports"
 _RESEARCH_COLS = ("research_id", "code", "broker", "write_date", "goal_price")
+
+
+def _fetch_codes(con: Any, sql: str, params) -> set:
+    """첫 열의 값 집합 — 드라이버 차이(psycopg2 커서·sqlite 연결)를 한곳에서 받는다."""
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            return {r[0] for r in cur.fetchall()}
+    return {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
 
 
 def _date_where(con: Any, col: str, start, end) -> tuple[list[str], list]:
@@ -610,12 +674,7 @@ def _assert_table_has_delisted(con: Any, df, *, table: str, date_col: str, start
     where, params = _date_where(con, date_col, start, end)
     where.append("code IN (SELECT code FROM delisted_stocks)")
     sql = f"SELECT DISTINCT code FROM {table} WHERE {' AND '.join(where)}"  # noqa: S608 — 모듈 상수
-    if _is_pg(con):
-        with con.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            expected = {r[0] for r in cur.fetchall()}
-    else:
-        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+    expected = _fetch_codes(con, sql, params)
     if not expected or "code" not in getattr(df, "columns", []):
         return
     if not (expected & set(df["code"].astype(str))):
@@ -660,32 +719,30 @@ def read_research_reports(con: Any, *, cols: "tuple[str, ...] | None" = None,
     return df
 
 
-def _assert_universe_has_delisted(con: Any, df, *, table: str) -> None:
-    """조회 결과가 폐지 종목을 담고 있는지 확인(DB 에 있는 경우에 한해)."""
-    ph = "%s" if _is_pg(con) else "?"
-    sql = f"SELECT count(DISTINCT code) FROM {table} WHERE source = {ph}"  # noqa: S608 — 모듈 상수
-    if _is_pg(con):
-        with con.cursor() as cur:
-            cur.execute(sql, ("naver",))
-            in_db = cur.fetchone()[0]
-    else:
-        in_db = con.execute(sql, ("naver",)).fetchone()[0]
-    if not in_db:
-        return                      # DB 에 폐지 시세 자체가 없음 — 백필이 선행 과제
+def _assert_universe_has_delisted(con: Any, df, *, table: str, end: "str | None" = None) -> None:
+    """조회 결과가 폐지 종목을 담고 있는지 확인(``end`` 까지의 구간에 폐지 시세가 있는 경우에 한해)."""
+    def _codes(tbl: str) -> set:
+        where, params = _date_where(con, "date", None, end)
+        ph = "%s" if _is_pg(con) else "?"
+        sql = f"SELECT DISTINCT code FROM {tbl} WHERE {' AND '.join([f'source = {ph}', *where])}"  # noqa: S608 — 모듈 상수
+        return _fetch_codes(con, sql, ["naver", *params])
+
+    delisted = _codes(table)
+    if not delisted:
+        if table != PRICE_TABLE and _codes(PRICE_TABLE):
+            raise AssertionError(
+                f"{table} 에는 폐지 백필이 없는데 {PRICE_TABLE} 에는 있다 — 이 표를 읽으면 생존편향이 들어간다. "
+                f"의도한 것이면 read_prices(require_delisted=False) 로 명시하라."
+            )
+        return                      # 그 구간에 폐지 시세 자체가 없음 — 백필이 선행 과제
     if "code" not in df.columns:
-        return                      # code 를 안 뽑은 조회는 유니버스 판정 대상이 아님
-    loaded = set(df["code"].astype(str).unique())
-    ph2 = "%s" if _is_pg(con) else "?"
-    sql2 = f"SELECT DISTINCT code FROM {table} WHERE source = {ph2}"  # noqa: S608 — 모듈 상수
-    if _is_pg(con):
-        with con.cursor() as cur:
-            cur.execute(sql2, ("naver",))
-            delisted = {r[0] for r in cur.fetchall()}
-    else:
-        delisted = {r[0] for r in con.execute(sql2, ("naver",)).fetchall()}
-    if not (delisted & loaded):
         raise AssertionError(
-            f"{table} 에 상장폐지 종목 {in_db}개가 있는데 로딩된 유니버스에 하나도 없다 — "
+            f"code 를 뽑지 않아 폐지 종목 포함을 볼 수 없다({table}). cols 에 code 를 넣거나 "
+            f"read_prices(require_delisted=False) 로 명시하라."
+        )
+    if not (delisted & set(df["code"].astype(str).unique())):
+        raise AssertionError(
+            f"{table} 에 상장폐지 종목 {len(delisted)}개가 있는데 로딩된 유니버스에 하나도 없다 — "
             f"생존편향이 들어간다. 유니버스를 좁히는 WHERE 를 걷어내거나, "
             f"의도한 것이면 read_prices(require_delisted=False) 로 명시하라."
         )

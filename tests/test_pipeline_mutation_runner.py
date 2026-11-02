@@ -85,5 +85,6 @@ def test_every_declared_mutation_targets_a_real_anchor(runner):
     """앵커가 썩으면 CI 단계에서 실패하지만, 여기서 먼저 빠르게 본다."""
     import tomllib
 
-    for m in tomllib.loads((REPO / runner.SPEC).read_text(encoding="utf-8"))["mutation"]:
-        assert (REPO / m["file"]).read_text(encoding="utf-8").count(m["find"]) == 1, m["id"]
+    for spec in (runner.SPEC, "tests/pipeline_mutations_core.toml"):
+        for m in tomllib.loads((REPO / spec).read_text(encoding="utf-8"))["mutation"]:
+            assert (REPO / m["file"]).read_text(encoding="utf-8").count(m["find"]) == 1, m["id"]
