@@ -130,6 +130,43 @@ def test_only_a_newer_pass_of_that_stage_clears_a_fail(tmp_path):
     require_stage(STUDY, Stage.FORECAST, root=tmp_path)
 
 
+def test_a_skip_cannot_cover_a_fail(tmp_path):
+    """실패한 단계를 "일부러 안 썼다"로 바꿔 적어 게이트를 여는 길을 막는다."""
+    _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
+    record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", reason="IC 없음", root=tmp_path)
+    with pytest.raises(RecordRejected, match="skip 으로"):
+        record_stage(STUDY, Stage.ALPHA_VALIDATION, "skip", reason="안 쓰기로 함", root=tmp_path)
+    with pytest.raises(RecordRejected, match="skip 으로"):
+        record_stage(STUDY, Stage.ALPHA_VALIDATION, "skip", reason="안 쓰기로 함", backfill="2026-11-02", root=tmp_path)
+    with pytest.raises(StageGateError):
+        require_stage(STUDY, Stage.FORECAST, root=tmp_path)
+
+
+def test_a_fail_cannot_be_flipped_on_the_same_evidence(tmp_path):
+    """같은 산출물을 pass 로 다시 적는 것은 재검증이 아니다."""
+    _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
+    ev, rev = _doc(tmp_path, "r.md", "결과\n"), _verified(tmp_path)
+    record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", evidence=[ev], reviewer=rev, reason="IC 없음", root=tmp_path)
+    with pytest.raises(RecordRejected, match="같은 증거"):
+        record_stage(STUDY, Stage.ALPHA_VALIDATION, "pass", evidence=[ev], reviewer=rev, root=tmp_path)
+    new = _doc(tmp_path, "r2.md", "다시 돌린 결과\n")
+    with pytest.raises(RecordRejected, match="검증 문서"):
+        record_stage(STUDY, Stage.ALPHA_VALIDATION, "pass", evidence=[new], reviewer=rev, root=tmp_path)
+    rev2 = _doc(tmp_path, "R2_verified.md", "quant-reviewer 리뷰 2\n")
+    record_stage(STUDY, Stage.ALPHA_VALIDATION, "pass", evidence=[new], reviewer=rev2, root=tmp_path)
+    require_stage(STUDY, Stage.FORECAST, root=tmp_path)
+
+
+def test_flip_rule_looks_past_a_second_fail(tmp_path):
+    """fail 을 한 줄 더 끼워 넣어 비교를 피하지 못한다."""
+    _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
+    ev = _doc(tmp_path, "r.md", "결과\n")
+    record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", evidence=[ev], reason="IC 없음", root=tmp_path)
+    record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", reason="또 없음", root=tmp_path)
+    with pytest.raises(RecordRejected, match="같은 증거"):
+        record_stage(STUDY, Stage.ALPHA_VALIDATION, "pass", evidence=[ev], reviewer=_verified(tmp_path), root=tmp_path)
+
+
 def test_fail_needs_a_reason(tmp_path):
     with pytest.raises(RecordRejected, match="사유"):
         record_stage(STUDY, Stage.UNIVERSE, "fail", root=tmp_path)
@@ -525,6 +562,14 @@ def test_forged_line_out_of_order_is_rejected(tmp_path):
     _forge(tmp_path, stage=8, evidence=_forge_evidence(tmp_path))
     with pytest.raises(LedgerCorrupt, match="앞 단계"):
         require_stage(STUDY, Stage.BACKTEST, root=tmp_path)
+
+
+def test_forged_skip_over_a_fail_is_rejected(tmp_path):
+    _open_upto(tmp_path, Stage.ALPHA_VALIDATION)
+    record_stage(STUDY, Stage.ALPHA_VALIDATION, "fail", reason="IC 없음", root=tmp_path)
+    _forge(tmp_path, stage=4, status="skip", reason="안 쓰기로 함")
+    with pytest.raises(LedgerCorrupt, match="skip 으로"):
+        require_stage(STUDY, Stage.FORECAST, root=tmp_path)
 
 
 def test_forged_skip_without_reason_is_rejected(tmp_path):

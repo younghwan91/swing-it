@@ -224,6 +224,31 @@ def _event_problems(ev: dict[str, Any]) -> list[str]:
     return out
 
 
+def _flip_problem(ev: dict[str, Any], events: list[dict[str, Any]]) -> "str | None":
+    """fail 을 푸는 줄의 조건 — fail 은 **새 증거의** pass 로만 풀린다.
+
+    이게 없으면 실패한 단계를 skip("안 쓰기로 함")으로 다시 적거나, 같은 산출물을 pass 로 적어 게이트를 열 수 있다.
+    """
+    same_stage = [e for e in events if e["stage"] == ev["stage"]]
+    fails = []
+    for e in reversed(same_stage):                  # 마지막 pass·skip 뒤의 fail 전부
+        if e["status"] != "fail":
+            break
+        fails.append(e)
+    if not fails:
+        return None
+    if ev["status"] == "skip":
+        return "fail 은 새 pass 로만 풀린다 — skip 으로 덮을 수 없다"
+    if ev["status"] == "pass":
+        old = {r["sha256"] for e in fails for r in _refs(e)}
+        if old and {r["sha256"] for r in ev["evidence"]} <= old:
+            return "fail 과 같은 증거로 pass 를 적을 수 없다 — 새 증거가 필요하다"
+        reviewer = ev.get("reviewer")
+        if reviewer and reviewer["sha256"] in {e["reviewer"]["sha256"] for e in fails if e.get("reviewer")}:
+            return "fail 을 판정한 검증 문서로 pass 를 적을 수 없다 — 새 검증 문서가 필요하다"
+    return None
+
+
 def _is_verified_name(path: Any) -> bool:
     return isinstance(path, str) and bool(_VERIFIED_DOC.match(PurePosixPath(path).name))
 
@@ -299,6 +324,9 @@ def read_events(study: str, *, root: "Path | str | None" = None) -> list[dict[st
         problems = _shape_problems(ev) or _event_problems(ev)
         if problems:
             raise LedgerCorrupt(f"{study} 원장 손상 {where}: " + "; ".join(problems))
+        problem = _flip_problem(ev, events)
+        if problem:
+            raise LedgerCorrupt(f"{study} 원장 손상 {where}: {problem}")
         stage = Stage(ev["stage"])
         if ev["status"] in OPEN_STATUSES and ev.get("backfill") is None:
             shut = [st for st in _states(events, None) if st.stage < stage and not st.open]
@@ -434,6 +462,9 @@ def record_stage(
         "ts": datetime.now(_KST).isoformat(timespec="seconds"),
         "prev": events[-1]["sha"] if events else None,
     }
+    problem = _flip_problem(ev, events)
+    if problem:
+        raise RecordRejected(f"{study} {target.label} {status} 거부: {problem}")
     ev["sha"] = event_sha(ev)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
