@@ -515,13 +515,13 @@ def wide(df: pd.DataFrame, col: str, dates: np.ndarray, codes: list) -> np.ndarr
 
 def load_explore_panel(con) -> tuple:
     """탐색 절반 패널. 읽자마자 잠금 절반을 버리고 ``half==0`` 을 단언한다."""
-    from swing_it.storage import read_prices
-
-    df = read_prices(con, cols=("code", "date", "high", "low", "close", "volume", "trade_value", "raw_close", "factor", "source", "close_src"), table=V2,
-                     require_delisted=False)
+    # 잠금 절반은 메모리에도 안 올린다. 정문 read_prices 는 표 전체를 읽어 쓰지 않는다(폐지 포함은 아래에서 단언).
+    every = pd.read_sql_query(f"select distinct code from {V2} where date between %s and %s", con, params=(DATA_START, DATA_END))  # noqa: S608
+    want = explore_codes(every.code)
+    df = pd.read_sql_query(
+        f"select code,date,high,low,close,volume,trade_value,raw_close,factor,source,close_src from {V2} "  # noqa: S608
+        "where date between %s and %s and code = any(%s)", con, params=(DATA_START, DATA_END, want))
     df["date"] = pd.to_datetime(df["date"])
-    df = df[(df.date >= DATA_START) & (df.date <= DATA_END) & df.code.map(is_common)]
-    df = df[df.code.map(half_of) == 0].copy()
     assert_explore(df.code.unique())
     assert (df.source == "naver_adj").any(), "폐지 종목이 안 읽혔다(read_prices 가드는 naver_adj 를 못 본다)"
     df = df[df.close_src != "pre_listing"]
