@@ -609,8 +609,8 @@ id = "null-checks-the-wrong-rules"
 why = "비용 끈 널에 비용 불변식을, 다른 상한의 북에 기본 상한을 걸면 위반이 거짓이거나 안 보인다"
 guards = ["tests/test_book_units.py::test_permutation_null_passes_spec_max_weight_to_the_invariant"]
 file = "src/swing_it/book/nulls.py"
-find = "max_weight=spec.max_weight, spec=spec, costs=flags.costs)"
-replace = "spec=spec)"
+find = "check_invariants(recs, kind, cell, spec=spec, costs=flags.costs)"
+replace = "check_invariants(recs, kind, cell)"
 
 [[mutation]]
 id = "forecast-overlap-counts-weekdays"

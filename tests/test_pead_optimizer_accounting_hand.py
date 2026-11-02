@@ -47,7 +47,7 @@ def test_after_a_solver_failure_only_forced_sales_trade_and_drift_stays_consiste
     c = synthetic_ctx(0)
     n = [0]
 
-    def fake(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol, rank_sig, ic, sr, built, so, mw, spec):
+    def fake(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol, rank_sig, ic, sr, built, so, spec):
         n[0] += 1
         want = np.zeros(ctx.C.shape[0])
         if n[0] == 1:

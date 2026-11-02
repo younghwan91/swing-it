@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
 from swing_it.book.context import Ctx, StepRec, delisted
@@ -35,7 +37,8 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
     if not flags.drift:
         raise ValueError("표류 끈 규칙은 parity_book 이다")
     rank_sig = ctx.sig if rank_sig is None else rank_sig
-    mw = spec.max_weight if max_weight is None else max_weight
+    if max_weight is not None:
+        spec = replace(spec, max_weight=max_weight)
     C, Cff = ctx.C, ctx.Cff
     nN, nD = C.shape
     lag = flags.lag
@@ -119,7 +122,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             want = np.where(tradeable, want, 0.0)
         else:
             want, info = o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol,
-                                  rank_sig, ic_by_year, sigma_r, built, solver_opts, mw, spec)
+                                  rank_sig, ic_by_year, sigma_r, built, solver_opts, spec)
             for key, v in info.items():
                 setattr(rec, key, v)
             trade = rec.status == "optimal"
@@ -130,7 +133,7 @@ def simulate(ctx: Ctx, kind: str, cell: Cell = PRIMARY, flags: Flags = Flags(), 
             s = want[free].sum()
             new = np.where(frozen, w_f, 0.0)
             if s > 0:  # PO-9: O 는 상한을 지키며 채운다(넘치는 몫은 현금)
-                new[free] = capped_rescale(want[free], room, mw if kind == "O" else None)
+                new[free] = capped_rescale(want[free], room, spec.max_weight if kind == "O" else None)
                 renorm = abs(room - s)
             new_cash = 1.0 - new.sum()
         else:  # 최적화 실패 → 거래 안 함(강제 매도만, 대금은 현금)
@@ -195,10 +198,12 @@ def check_invariants(recs: list[StepRec], kind: str, cell: Cell = PRIMARY, max_w
     - 비용: cost1 ≥ 0, 회전이 있으면 cost1/회전 ∈ [1.5bp, 300bp](1배).
     - R: 예열 뒤(k ≥ n−1) 활성 트랜치 n.
     """
+    if max_weight is not None:
+        spec = replace(spec, max_weight=max_weight)
     out = []
     if len(recs) < min_steps:
         out.append(f"{kind}: 스텝 {len(recs)}개 < {min_steps} — 검사할 장부가 없다")
-    cap = spec.max_weight if max_weight is None else max_weight
+    cap = spec.max_weight
     lo_bp, hi_bp = COST_BP_PER_TURN
     for r in recs:
         tag = f"{kind}:{cell.name if kind == 'O' else 'R'} k={r.k} {r.date}"

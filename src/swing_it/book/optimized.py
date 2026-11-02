@@ -154,7 +154,7 @@ def match_lambda(solve, risk_of, target: float, *, lo: float = LAM_LO, hi: float
 
 
 def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, vol_all, rank_sig, ic_by_year,
-             sigma_r, built, solver_opts, max_weight=DEFAULT_SPEC.max_weight, spec: BookSpec = DEFAULT_SPEC):
+             sigma_r, built, solver_opts, spec: BookSpec = DEFAULT_SPEC):
     """O 의 목표 비중(§2·PO-6). 문제 종목 P = eligible(t) ∪ (보유 ∩ U_t ∩ 폐지 아님)."""
     opt = core_layer("krx_quant_core.portfolio.optimize")
     Constraints, CostParams, optimize = opt.Constraints, opt.CostParams, opt.optimize
@@ -184,7 +184,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
     no_trade = ~(tradeable[P] & costable[P]) | frozen[P]
     outside_frozen = frozen & ~np.isin(np.arange(nN), P)
     budget = 1.0 - float(w_t[outside_frozen].sum())
-    con = Constraints(budget=budget, long_only=True, max_weight=max_weight, sector=ctx.lab[P, t], benchmark=b,
+    con = Constraints(budget=budget, long_only=True, max_weight=spec.max_weight, sector=ctx.lab[P, t], benchmark=b,
                       sector_band=cell.band, max_turnover=spec.max_turnover if built else None, max_participation=spec.max_participation,
                       no_buy=~is_el, no_trade=no_trade)
     adv_won = np.where(costable[P], ctx.adv[P, t] * 1e6, 1e12)
@@ -206,7 +206,7 @@ def o_target(ctx, cell, t, f, el, w_t, held, in_u, tradeable, costable, frozen, 
     dw_sol = np.where(no_trade, 0.0, w_sol - w_prev)
     info["n_buy_outside"] = int(((dw_sol > BUY_EPS) & ~is_el).sum())    # 불변식 재료: 해가 no_buy·참여율을 지켰나
     info["max_part"] = float((np.abs(dw_sol) * cell.aum / adv_won).max())
-    w_clean, n_dust = clean_dust(w_sol, ctx.Cff[P, t], cell.aum, no_trade, cap=max_weight)  # PO-7 M2
+    w_clean, n_dust = clean_dust(w_sol, ctx.Cff[P, t], cell.aum, no_trade, cap=spec.max_weight)  # PO-7 M2
     want[P] = w_clean
     info.update({"n_dust": n_dust, "dust_mass": float(np.abs(w_clean - w_sol).sum()) / 2.0})
     info["est_cost"] = float(res.est_cost)

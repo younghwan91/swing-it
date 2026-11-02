@@ -52,7 +52,7 @@ def _perm_task(a):
     pi = keyed_rng("perm", r).permutation(ctx.sig.shape[0])
     recs = simulate(ctx, kind, cell, flags, rank_sig=ctx.sig[pi], ic_by_year=icy, sigma_r=sr, spec=spec)
     nan_share = float(np.nanmean([x.perm_nan_share for x in recs])) if kind == "O" else float("nan")
-    viol = check_invariants(recs, kind, cell, max_weight=spec.max_weight, spec=spec, costs=flags.costs)
+    viol = check_invariants(recs, kind, cell, spec=spec, costs=flags.costs)
     return r, kind, ir(oos(step_returns(recs, 2.0), window)["a"], ann), nan_share, viol
 
 
