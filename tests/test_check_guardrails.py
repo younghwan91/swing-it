@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -563,7 +564,7 @@ def test_missing_base_fails_in_ci_but_not_locally(lint, tmp_path, monkeypatch):
     assert lint.check_pipeline_ledgers_append_only() == []
     monkeypatch.setenv("CI", "true")
     out = lint.check_pipeline_ledgers_append_only()
-    assert len(out) == 1 and "fetch" in out[0], out
+    assert len(out) == 1 and "fetch-depth" in out[0], out
 
 
 def test_non_git_tree_is_not_checked(lint, tmp_path, monkeypatch):
@@ -600,12 +601,27 @@ def test_ci_runs_the_guardrail_lint_on_pull_requests():
     assert "run: python scripts/check_guardrails.py" in ci
 
 
-def test_ci_fetches_the_base_before_the_lint():
-    """체크아웃은 얕고 기준 ref 가 없다. 받지 않으면 잘라내기 검사가 CI 에서 실패한다."""
+def _ci_jobs(ci: str, *names: str) -> list[str]:
+    """ci.yml 을 잡 단위로 자른다(YAML 파서 없이 — 린트 시험은 표준 라이브러리만 쓴다)."""
+    out = []
+    for name in names:
+        start = ci.index(f"\n  {name}:\n")
+        following = re.search(r"\n  [a-z-]+:\n", ci[start + 1:])
+        out.append(ci[start:start + 1 + following.start()] if following else ci[start:])
+    return out
+
+
+def test_ci_checks_out_the_base_for_the_ledger_check():
+    """얕은 체크아웃에는 origin/main 이 없다. 없으면 잘라내기 검사가 CI 에서 실패한다."""
     ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    job = ci[ci.index("\n  test:\n"):]
-    fetch = job.find("origin main:refs/remotes/origin/main")
-    assert fetch != -1 and fetch < job.index("run: python scripts/check_guardrails.py")
+    for job in _ci_jobs(ci, "test", "pipeline-mutations"):
+        assert "fetch-depth: 0" in job, job
+
+
+def test_ci_has_no_shallow_git_command_in_a_run_step():
+    """pre-push 의 ci-local 이 run: 을 공유 .git 에서 돌린다. --depth·--shallow 를 넣으면 이 머신의 저장소가 shallow 가 된다(2026-11-02 사고)."""
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert not re.search(r"git\s+(fetch|pull|clone)\b[^\n]*--(depth|shallow)", ci)
 
 
 def test_ci_runs_the_pipeline_mutations():

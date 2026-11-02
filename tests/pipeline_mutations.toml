@@ -378,12 +378,20 @@ find = "        run: python scripts/check_guardrails.py"
 replace = "        run: \"true\""
 
 [[mutation]]
-id = "ci-drops-base-fetch"
-why = "기준이 없으면 잘라내기 검사가 CI 에서 실패한다"
-guards = ["tests/test_check_guardrails.py::test_ci_fetches_the_base_before_the_lint"]
+id = "ci-checkout-too-shallow"
+why = "얕은 체크아웃에는 origin/main 이 없어 잘라내기 검사가 CI 에서 실패한다"
+guards = ["tests/test_check_guardrails.py::test_ci_checks_out_the_base_for_the_ledger_check"]
 file = ".github/workflows/ci.yml"
-find = "        run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main\n      - name: Guardrails"
-replace = "        run: \"true\"\n      - name: Guardrails"
+find = "    steps:\n      - uses: actions/checkout@v7\n        with:\n          fetch-depth: 0\n      - uses: actions/setup-python@v7\n        with:\n          python-version: ${{ matrix.python-version }}"
+replace = "    steps:\n      - uses: actions/checkout@v7\n      - uses: actions/setup-python@v7\n        with:\n          python-version: ${{ matrix.python-version }}"
+
+[[mutation]]
+id = "ci-shallow-fetch-in-run-step"
+why = "ci-local 이 run: 을 공유 .git 에서 돌려 이 머신의 저장소가 shallow 가 된다"
+guards = ["tests/test_check_guardrails.py::test_ci_has_no_shallow_git_command_in_a_run_step"]
+file = ".github/workflows/ci.yml"
+find = "      - name: Guardrails\n"
+replace = "      - name: Fetch\n        run: git fetch --no-tags --depth=1 origin main\n      - name: Guardrails\n"
 
 [[mutation]]
 id = "ci-drops-mutations"

@@ -853,7 +853,7 @@ def check_pipeline_ledgers_append_only() -> list[str]:
         return []
     if _git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").returncode != 0:
         if os.environ.get("CI"):
-            return [f"[pipeline] 기준 {base} 가 없어 원장 잘라내기를 볼 수 없다 — CI 는 기준을 fetch 한다(.github/workflows/ci.yml)."]
+            return [f"[pipeline] 기준 {base} 가 없어 원장 잘라내기를 볼 수 없다 — CI 는 fetch-depth: 0 으로 받는다(.github/workflows/ci.yml)."]
         return []
     out = []
     listed = _git("ls-tree", "-r", "--name-only", base, "research/logs").stdout.splitlines()
