@@ -315,6 +315,8 @@ def run(args, log) -> int:
     run_md.append(f"- N2 3회 실측(후보·진단 6개, 작업자 3): 회당 약 {n2_s:.1f}s → 1,000회 / 작업자 {args.workers} 외삽 약 {n2_s * N2_REPS / args.workers / 60:.1f}분.")
     log(run_md[-1])
     run_md.append("- 로컬 외삽이 12시간을 훨씬 밑돈다 — Modal 불요(§10).")
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "RUN.md").write_text("\n".join(run_md) + "\n")  # 전체를 돌리기 전에 적는다(§10)
 
     # N1(§8) — 판정 전에 평가
     n1_means = []
@@ -400,8 +402,7 @@ def run(args, log) -> int:
     (OUT / "S1.json").write_text(json.dumps(res, ensure_ascii=False, indent=1, default=float))
     (OUT / "S1.md").write_text(render(json.loads((OUT / "S1.json").read_text())))
     run_md.append(f"- 1단계 전체 벽시계 {res['elapsed_s']:.0f}s.")
-    with open(OUT / "RUN.md", "w") as fh:
-        fh.write("\n".join(run_md) + "\n")
+    (OUT / "RUN.md").write_text("\n".join(run_md) + "\n")
     log(f"1단계 판정 {verdict}")
     return 0
 
