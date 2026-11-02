@@ -28,6 +28,8 @@ dependencies = [
 viz = ["matplotlib>=3.8"]
 pg = ["psycopg2-binary>=2.9"]
 dev = ["pytest>=8.0", "ruff==0.16.2", "matplotlib>=3.8"]
+# ML 수익률 예측(research/experiments/ml_forecast_*). 버전이 바뀌면 결정성이 깨진다 — 핀을 사전등록과 함께 고친다.
+ml = ["lightgbm==4.7.0"]
 
 [project.scripts]
 # 데이터 수집 CLI(kq-collect*)는 collectors/와 함께 quant-airflow로 이전됨.

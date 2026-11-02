@@ -102,26 +102,41 @@ def month_ends(dates, lo, last_index):  # validate_risk_model.py 그대로
     return idx
 
 
-def yoy_signal(codes, dates) -> tuple[np.ndarray, dict]:
+def yoy_signal(codes, dates, end: str = END, fallback: bool = True) -> tuple[np.ndarray, dict]:
     """분기 순이익 YoY 패널(code × date). 알게 된 날 = max(avail, 정기보고서 첫 rcept_dt) 다음 거래일
-    (fcs ``storage._attach_known_dates`` 와 같은 식). 정정 버전은 ``knowledge_col`` 로 날짜별 선택."""
-    from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
+    (fcs ``storage._attach_known_dates`` 와 같은 식). 정정 버전은 ``knowledge_col`` 로 날짜별 선택.
+
+    ``end``: 실적 행을 자르는 상한(기본 ``END`` — 기존 동작). ``fallback=False`` 면 정기보고서 접수일이 없는 분기를
+    avail_date 로 돌리지 않고 뺀다(ML 예측 사전등록 F1 MINOR f). 기본 ``True`` 는 기존 동작 그대로다."""
     from swing_it.storage import connect, db_default, read_earnings
 
     con = connect(db_default())
     con.set_session(readonly=True)
     cur = con.cursor()
     cur.execute("SET statement_timeout='60s'")
-    ea = read_earnings(con, all_versions=True, cols=(
+    ea = read_earnings(con, all_versions=True, until=None if fallback else end, cols=(
         "code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"))
     # 정기보고서 접수일은 END 뒤 것도 읽는다(날짜만). avail ≤ END 인데 정기보고서가 END 뒤에 나온 분기는
     # 그래야 "END 전에는 몰랐다"로 빠진다 — 자르면 avail 로 돌아가 미래 정보가 된다.
-    cur.execute(
-        "SELECT code, period, min(rcept_dt) FROM earnings_disclosures "
-        "WHERE kind = 'periodic' GROUP BY code, period")
+    # fallback=False 면 접수일 없는 분기는 어차피 빠지므로 END 에서 잘라도 결과가 같다(END 뒤 행을 읽지 않는다).
+    if fallback:
+        cur.execute(
+            "SELECT code, period, min(rcept_dt) FROM earnings_disclosures "
+            "WHERE kind = 'periodic' GROUP BY code, period")
+    else:
+        cur.execute(
+            "SELECT code, period, min(rcept_dt) FROM earnings_disclosures "
+            "WHERE kind = 'periodic' AND rcept_dt <= %s GROUP BY code, period", (str(pd.Timestamp(end).date()),))
     per = pd.DataFrame(cur.fetchall(), columns=["code", "period", "per"])
     con.close()
-    end = pd.Timestamp(END)
+    return yoy_wide(ea, per, codes, dates, end, fallback)
+
+
+def yoy_wide(ea: pd.DataFrame, per: pd.DataFrame, codes, dates, end, fallback: bool = True) -> tuple[np.ndarray, dict]:
+    """:func:`yoy_signal` 의 DB 뒤 부분(순수) — 실적 행 ``ea``·정기보고서 첫 접수일 ``per`` → (code × date 패널, 보고)."""
+    from swing_it.features.fundamentals import _yoy_vec, earnings_yoy_panel
+
+    end = pd.Timestamp(end)
     ea["avail_date"] = pd.to_datetime(ea["avail_date"])
     ea["knowledge_date"] = pd.to_datetime(ea["knowledge_date"])
     n_all = len(ea)
@@ -130,6 +145,9 @@ def yoy_signal(codes, dates) -> tuple[np.ndarray, dict]:
     per["code"] = per["code"].astype(str)
     per["per"] = pd.to_datetime(per["per"])
     ea = ea.merge(per, on=["code", "period"], how="left")
+    n_no_periodic = int(ea["per"].isna().sum())
+    if not fallback:
+        ea = ea[ea["per"].notna()].copy()
     known = ea[["avail_date", "per"]].max(axis=1).to_numpy(dtype="datetime64[ns]")
     days = pd.DatetimeIndex(dates)
     i = days.searchsorted(known, side="right")
@@ -144,6 +162,8 @@ def yoy_signal(codes, dates) -> tuple[np.ndarray, dict]:
     wide = wide.reindex(index=[str(c) for c in codes], columns=list(days.strftime("%Y-%m-%d")))
     info = {"earnings_rows_read": int(n_all), "earnings_rows_known_le_end": int(len(ea)),
             "periodic_rcept_missing_share": float(ea["per"].isna().mean())}
+    if not fallback:
+        info["dropped_no_periodic"] = n_no_periodic
     return wide.to_numpy(dtype=np.float64), info
 
 

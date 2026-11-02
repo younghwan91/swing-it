@@ -304,3 +304,34 @@ def test_identity_allows_github_merge_commits_but_not_other_addresses(lint, tmp_
                    "GIT_COMMITTER_EMAIL": "someone@corp.example.com"})
     out = lint.check_commit_identity()
     assert out and "corp.example.com" in out[0], f"사내 메일을 못 잡는다: {out}"
+
+
+# (j) ML 예측 피처 원천 ------------------------------------------------------------
+
+
+def _run_rule_j(lint, tmp_path, monkeypatch, name, source):
+    monkeypatch.setattr(lint, "REPO", tmp_path)
+    monkeypatch.setattr(lint, "EXPERIMENTS", tmp_path)
+    (tmp_path / name).write_text(source, encoding="utf-8")
+    return lint.check_ml_forecast_sources()
+
+
+@pytest.mark.parametrize("src", [
+    'cur.execute("SELECT code FROM credit_balance")\n',
+    'cur.execute("SELECT * FROM short_selling")\n',
+    'cur.execute("SELECT * FROM program_trading")\n',
+    'cur.execute("SELECT abs(close) FROM supply_demand")\n',
+    "from swing_it.storage import read_supply_demand\n",
+    "from swing_it.storage import INSTITUTION_DETAIL_COLS\n",
+    'cols = ("code", "invtrt")\n',
+])
+def test_rule_j_catches_forbidden_sources(lint, tmp_path, monkeypatch, src):
+    out = _run_rule_j(lint, tmp_path, monkeypatch, "ml_forecast_x.py", src)
+    assert len(out) == 1 and "[ml-source]" in out[0]
+
+
+def test_rule_j_scope_and_comments(lint, tmp_path, monkeypatch):
+    # 다른 러너는 대상이 아니고, 주석 줄은 세지 않는다
+    assert _run_rule_j(lint, tmp_path, monkeypatch, "pead_x.py", 'q = "FROM supply_demand"\n') == []
+    assert _run_rule_j(lint, tmp_path, monkeypatch, "ml_forecast_y.py", "# supply_demand 는 쓰지 않는다\n") == []
+    assert _run_rule_j(lint, tmp_path, monkeypatch, "ml_forecast_z.py", 'read_investor_trend(con)\n') == []
