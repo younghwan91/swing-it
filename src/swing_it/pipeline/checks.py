@@ -13,7 +13,7 @@ import pandas as pd
 
 #: 2026-09-14~ 일봉 고가·저가·종가·거래량에 애프터마켓 체결이 섞였다(레포 CLAUDE.md "데이터 함정").
 #: main 의 ``read_prices`` 에는 정규장 경로가 없어 이 구간을 받지 않는다.
-AFTERMARKET_FROM = "2026-09-14"
+from swing_it.price_adjust import AFTERMARKET_FROM
 
 
 class CheckError(ValueError):

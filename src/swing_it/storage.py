@@ -621,21 +621,10 @@ def read_supply_demand(con: Any, *, cols: "tuple[str, ...] | None" = None,
 def _assert_supply_has_delisted(con: Any, df, *, start, end) -> None:
     """조회 구간에 수급이 있는 폐지 종목이 결과에도 담겼는지 확인."""
     ph = "%s" if _is_pg(con) else "?"
-    where, params = ["source = " + ph], ["naver"]
-    if start is not None:
-        where.append(f"date >= {ph}")
-        params.append(start)
-    if end is not None:
-        where.append(f"date <= {ph}")
-        params.append(end)
+    where, params = _date_where(con, "date", start, end)
     sql = (f"SELECT DISTINCT code FROM {SUPPLY_TABLE} "  # noqa: S608 — 모듈 상수
-           f"WHERE {' AND '.join(where)}")
-    if _is_pg(con):
-        with con.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            expected = {r[0] for r in cur.fetchall()}
-    else:
-        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+           f"WHERE {' AND '.join([f'source = {ph}', *where])}")
+    expected = _fetch_codes(con, sql, ["naver", *params])
     if not expected:
         return  # 그 구간에 폐지 종목 수급이 아예 없다 — 요구할 수 없다.
     if "code" not in getattr(df, "columns", []):
@@ -653,6 +642,15 @@ INVESTOR_TREND_TABLE = "naver_investor_trend"
 _INVESTOR_TREND_COLS = ("code", "date", "foreign_net", "institution_net", "foreign_hold_ratio")
 RESEARCH_TABLE = "naver_research_reports"
 _RESEARCH_COLS = ("research_id", "code", "broker", "write_date", "goal_price")
+
+
+def _fetch_codes(con: Any, sql: str, params) -> set:
+    """첫 열의 값 집합 — 드라이버 차이(psycopg2 커서·sqlite 연결)를 한곳에서 받는다."""
+    if _is_pg(con):
+        with con.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            return {r[0] for r in cur.fetchall()}
+    return {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
 
 
 def _date_where(con: Any, col: str, start, end) -> tuple[list[str], list]:
@@ -675,12 +673,7 @@ def _assert_table_has_delisted(con: Any, df, *, table: str, date_col: str, start
     where, params = _date_where(con, date_col, start, end)
     where.append("code IN (SELECT code FROM delisted_stocks)")
     sql = f"SELECT DISTINCT code FROM {table} WHERE {' AND '.join(where)}"  # noqa: S608 — 모듈 상수
-    if _is_pg(con):
-        with con.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            expected = {r[0] for r in cur.fetchall()}
-    else:
-        expected = {r[0] for r in con.execute(sql, tuple(params)).fetchall()}
+    expected = _fetch_codes(con, sql, params)
     if not expected or "code" not in getattr(df, "columns", []):
         return
     if not (expected & set(df["code"].astype(str))):
@@ -727,18 +720,11 @@ def read_research_reports(con: Any, *, cols: "tuple[str, ...] | None" = None,
 
 def _assert_universe_has_delisted(con: Any, df, *, table: str, end: "str | None" = None) -> None:
     """조회 결과가 폐지 종목을 담고 있는지 확인(``end`` 까지의 구간에 폐지 시세가 있는 경우에 한해)."""
-    pg = _is_pg(con)
-    ph = "%s" if pg else "?"
-    upto = f" AND date <= {ph}" if end is not None else ""
-    params = ("naver", end) if end is not None else ("naver",)
-
     def _codes(tbl: str) -> set:
-        sql = f"SELECT DISTINCT code FROM {tbl} WHERE source = {ph}{upto}"  # noqa: S608 — 모듈 상수
-        if pg:
-            with con.cursor() as cur:
-                cur.execute(sql, params)
-                return {r[0] for r in cur.fetchall()}
-        return {r[0] for r in con.execute(sql, params).fetchall()}
+        where, params = _date_where(con, "date", None, end)
+        ph = "%s" if _is_pg(con) else "?"
+        sql = f"SELECT DISTINCT code FROM {tbl} WHERE {' AND '.join([f'source = {ph}', *where])}"  # noqa: S608 — 모듈 상수
+        return _fetch_codes(con, sql, ["naver", *params])
 
     delisted = _codes(table)
     if not delisted:

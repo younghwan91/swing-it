@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 from scipy import stats
 
-from swing_it.diagnostics.hac import nw_t_rows
+from swing_it.engine.metrics import newey_west_t
 from swing_it.engine.panels import ffill_axis1
 from swing_it.features.universe import RANK_BAND, RANK_BAND_ADV_FLOOR, rank_band_eligible
 from swing_it.validation.keys import keyed_rng
@@ -114,7 +114,7 @@ def ic_summary(days: np.ndarray, ics: np.ndarray, h: int) -> dict:
             last = d
     sel = ics[keep]
     icir = float(sel.mean() / sel.std(ddof=1)) if sel.size > 1 and sel.std(ddof=1) > 0 else float("nan")
-    nw = float(nw_t_rows(ics[None, :], lag=h)[0]) if ics.size > h + 1 else float("nan")
+    nw = newey_west_t(ics, h)[1]    # 관측이 lag + 2 보다 적으면 NaN
     return {"n_days": int(ics.size), "mean": float(ics.mean()), "nw_t": nw, "icir_nonoverlap": icir, "n_nonoverlap": int(sel.size)}
 
 

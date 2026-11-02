@@ -52,10 +52,13 @@ PRIMARY = Cell()
 
 @dataclass(frozen=True)
 class Flags:
-    """실제 규칙 스위치(PO-1.4 ①~⑥). 기본 = 실제 규칙 전부 켬. 전부 끈 것이 패리티 모드다(:func:`swing_it.book.parity.parity_book`)."""
+    """실제 규칙 스위치(PO-1.4 ①~⑥). 기본 = 실제 규칙 전부 켬. O 북은 기본만 받는다.
+
+    패리티 모드는 이 스위치의 조합이 아니라 따로 구현한 :func:`swing_it.book.parity.parity_book` 이다.
+    """
 
     lag: int = 1  # ① t+1 종가 체결
-    drift: bool = True  # ② 스텝 사이 매수 보유 표류(값 회계)
+    drift: bool = True  # ② 스텝 사이 매수 보유 표류(값 회계). ``simulate`` 는 끈 값을 거부한다
     forced_sale: bool = True  # ③ 위험모델 이탈 강제 매도
     delist_cash: bool = True  # ④ 폐지 대금 현금 → 다음 리밸런스 재투자
     no_trade: bool = True  # ⑤ 체결일 거래량 0·가격 없음 → 거래 불가
