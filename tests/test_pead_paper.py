@@ -378,3 +378,15 @@ def test_trade_cost_bp_formula():
     with pytest.raises(ValueError):
         PP.trade_cost_bp(np.array(["BUY"]), np.array([1e8]), np.array([20000.0]), np.array([0.02]), np.array(["KOSPI"], dtype=object), d,
                          half_spread_bp=np.array([5.0]))
+
+
+def test_yoy_tie_uses_later_period_regardless_of_input_order():
+    """정정 F1-2: 패널 시작 전 공시는 모두 첫날로 몰려 동률이 된다 — 늦은 분기를 쓰고, 입력 순서·길이에 따라 바뀌지 않는다."""
+    days = pd.bdate_range("2026-03-02", periods=6)
+    codes = np.array(["008770"])
+    rows = [("008770", "2016Q3", "2016-11-14", "2016-11-14", 3.0, 1.0), ("008770", "2017Q3", "2017-11-14", "2017-11-14", 1.17, 1.0)]
+    ea = pd.DataFrame(rows, columns=["code", "period", "avail_date", "knowledge_date", "netinc", "netinc_prior"])
+    per = pd.DataFrame(columns=["code", "period", "per"])
+    for frame in (ea, ea.iloc[::-1]):
+        out, _ = PP.yoy_from_frames(frame, per, codes, days)
+        assert np.allclose(out[0], 0.17)  # 2017Q3 (늦은 분기), 2016Q3 의 2.0 이 아니라

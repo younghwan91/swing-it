@@ -540,7 +540,8 @@ def yoy_from_frames(ea: pd.DataFrame, per: pd.DataFrame, codes: np.ndarray, days
     ea["knowledge_date"] = ea["knowledge_date"].dt.strftime("%Y-%m-%d")
     ea["yoy"] = _yoy_vec(ea["netinc"], ea["netinc_prior"])
     cols = list(days.strftime("%Y-%m-%d"))
-    panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), cols, avail_col="known_date", knowledge_col="knowledge_date")
+    panel = earnings_yoy_panel(ea.dropna(subset=["yoy"]), cols, avail_col="known_date", knowledge_col="knowledge_date",
+                               tie_col="period")  # 정정 F1-2 — 같은 날 알려진 두 분기는 늦은 분기
     wide = panel.pivot(index="code", columns="date", values="yoy").reindex(index=[str(c) for c in codes], columns=cols)
     return wide.to_numpy(dtype=np.float64), {"earnings_rows_le_end": int(n_read), "dropped_2019Q1plus_no_periodic": n_drop,
                                              "rows_used": int(len(ea))}
