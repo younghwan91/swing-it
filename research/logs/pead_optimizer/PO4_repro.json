@@ -1,0 +1,581 @@
+{
+ "mode": "repro",
+ "prereg": {
+  "PO-3": "4bdf40e",
+  "PO-3_result": "1c12207"
+ },
+ "core_ref": "13c56a7",
+ "end": "2023-12-28",
+ "window": [
+  "2019-07-31",
+  "2023-10-31"
+ ],
+ "n_asof": 52,
+ "data_end": "2023-12-28",
+ "fingerprint_before": [
+  2877771,
+  "2023-12-28",
+  6675565091165,
+  2316557639282
+ ],
+ "seam": {
+  "threshold": 0.2,
+  "cells_finite_ret": 3433098,
+  "cells_determinable": 3395880,
+  "cells_undeterminable": 37218,
+  "cells_undeterminable_abs_ret_gt_0.3": 72,
+  "cells_big_dev_explained_kept": 665,
+  "seam_cells": 185,
+  "seam_cells_adj_abs_ret_gt_0.3": 27,
+  "seam_cells_raw_abs_ret_gt_0.3": 79,
+  "seam_codes": 145,
+  "seam_top_dates": [
+   [
+    "2019-02-27",
+    34
+   ],
+   [
+    "2021-07-29",
+    31
+   ],
+   [
+    "2023-03-28",
+    3
+   ],
+   [
+    "2021-08-06",
+    3
+   ],
+   [
+    "2021-09-15",
+    2
+   ],
+   [
+    "2021-01-18",
+    2
+   ],
+   [
+    "2022-05-25",
+    2
+   ],
+   [
+    "2022-04-19",
+    1
+   ],
+   [
+    "2021-12-22",
+    1
+   ],
+   [
+    "2023-09-26",
+    1
+   ]
+  ],
+  "seam_top_codes": [
+   [
+    "052770",
+    5
+   ],
+   [
+    "037030",
+    4
+   ],
+   [
+    "092190",
+    4
+   ],
+   [
+    "035290",
+    3
+   ],
+   [
+    "064520",
+    3
+   ],
+   [
+    "101000",
+    3
+   ],
+   [
+    "106080",
+    3
+   ],
+   [
+    "005850",
+    2
+   ],
+   [
+    "012170",
+    2
+   ],
+   [
+    "019490",
+    2
+   ]
+  ],
+  "seam_cells_largest": [
+   {
+    "code": "025620",
+    "date": "2021-07-29",
+    "ret_adj": 15.3927,
+    "ret_raw": 0.01685
+   },
+   {
+    "code": "192410",
+    "date": "2020-08-18",
+    "ret_adj": 0.02295,
+    "ret_raw": 14.29412
+   },
+   {
+    "code": "131100",
+    "date": "2018-05-03",
+    "ret_adj": -0.09986,
+    "ret_raw": 10.18966
+   },
+   {
+    "code": "054220",
+    "date": "2020-07-15",
+    "ret_adj": 0.0,
+    "ret_raw": 6.98969
+   },
+   {
+    "code": "052770",
+    "date": "2020-01-17",
+    "ret_adj": 0.0,
+    "ret_raw": 4.54037
+   },
+   {
+    "code": "035290",
+    "date": "2022-04-26",
+    "ret_adj": 0.29757,
+    "ret_raw": 2.89272
+   },
+   {
+    "code": "012170",
+    "date": "2021-05-03",
+    "ret_adj": 0.17949,
+    "ret_raw": 2.53846
+   },
+   {
+    "code": "073010",
+    "date": "2019-05-10",
+    "ret_adj": -0.29953,
+    "ret_raw": 1.1014
+   },
+   {
+    "code": "106080",
+    "date": "2023-03-28",
+    "ret_adj": -0.29966,
+    "ret_raw": 1.03202
+   },
+   {
+    "code": "002420",
+    "date": "2021-12-22",
+    "ret_adj": 0.29958,
+    "ret_raw": 1.60552
+   },
+   {
+    "code": "950160",
+    "date": "2022-10-25",
+    "ret_adj": 0.29907,
+    "ret_raw": 1.603
+   },
+   {
+    "code": "121890",
+    "date": "2023-10-23",
+    "ret_adj": 0.29973,
+    "ret_raw": 1.59946
+   },
+   {
+    "code": "013000",
+    "date": "2021-09-27",
+    "ret_adj": 0.2996,
+    "ret_raw": 1.59919
+   },
+   {
+    "code": "168330",
+    "date": "2021-09-06",
+    "ret_adj": 0.29901,
+    "ret_raw": 1.59802
+   },
+   {
+    "code": "321260",
+    "date": "2021-07-13",
+    "ret_adj": 0.2987,
+    "ret_raw": 1.5974
+   },
+   {
+    "code": "101680",
+    "date": "2023-03-28",
+    "ret_adj": 0.29861,
+    "ret_raw": 1.59722
+   },
+   {
+    "code": "069330",
+    "date": "2021-05-18",
+    "ret_adj": 0.29858,
+    "ret_raw": 1.59716
+   },
+   {
+    "code": "083470",
+    "date": "2022-11-09",
+    "ret_adj": -0.3,
+    "ret_raw": 0.86978
+   },
+   {
+    "code": "307870",
+    "date": "2021-08-06",
+    "ret_adj": 0.0625,
+    "ret_raw": 1.125
+   },
+   {
+    "code": "168490",
+    "date": "2023-12-27",
+    "ret_adj": 0.3,
+    "ret_raw": -0.70527
+   },
+   {
+    "code": "331380",
+    "date": "2021-07-02",
+    "ret_adj": 0.29973,
+    "ret_raw": 1.25806
+   },
+   {
+    "code": "014100",
+    "date": "2021-03-15",
+    "ret_adj": -0.05483,
+    "ret_raw": 0.89035
+   },
+   {
+    "code": "064520",
+    "date": "2020-01-13",
+    "ret_adj": 0.0,
+    "ret_raw": -0.94211
+   },
+   {
+    "code": "008830",
+    "date": "2019-02-27",
+    "ret_adj": -0.89688,
+    "ret_raw": 0.0312
+   },
+   {
+    "code": "035290",
+    "date": "2021-01-18",
+    "ret_adj": 0.0,
+    "ret_raw": -0.88894
+   },
+   {
+    "code": "052400",
+    "date": "2020-10-19",
+    "ret_adj": -0.11877,
+    "ret_raw": 0.76245
+   },
+   {
+    "code": "001530",
+    "date": "2022-04-19",
+    "ret_adj": -0.02627,
+    "ret_raw": -0.90264
+   },
+   {
+    "code": "065420",
+    "date": "2022-05-03",
+    "ret_adj": 0.29717,
+    "ret_raw": 1.1518
+   },
+   {
+    "code": "115530",
+    "date": "2018-03-09",
+    "ret_adj": 0.06108,
+    "ret_raw": -0.78778
+   },
+   {
+    "code": "114190",
+    "date": "2022-05-25",
+    "ret_adj": -0.186,
+    "ret_raw": 0.628
+   }
+  ],
+  "secondary_min_abs_ret": 0.3,
+  "seam_cells_by_source": [
+   183,
+   2
+  ],
+  "candidates_by_source": [
+   183,
+   179
+  ],
+  "kept_secondary_undeterminable": 177,
+  "kept_secondary_abs_ret_gt_0.1": 30
+ },
+ "signal": {
+  "end": "2023-12-28",
+  "earnings_rows_read_le_end": 64630,
+  "dropped_2019Q1plus_no_periodic_le_end": 684,
+  "rows_used": 63946
+ },
+ "R0_noguard": {
+  "values": {
+   "random": 0.97428,
+   "capw": 1.00232,
+   "style:size": 1.01243,
+   "style:beta": 0.98684,
+   "style:momentum": 0.90762,
+   "style:resid_vol": 0.87297,
+   "style:liquidity": 0.83363,
+   "style:value": 0.90532
+  },
+  "diff": {
+   "random": 0.00028,
+   "capw": 0.00032,
+   "style:size": 0.00043,
+   "style:beta": -0.00016,
+   "style:momentum": -0.00038,
+   "style:resid_vol": -3e-05,
+   "style:liquidity": -0.00037,
+   "style:value": 0.00032
+  },
+  "max_abs_diff": 0.00043,
+  "match_0.005": true
+ },
+ "sigma_target": 0.04013,
+ "sigma_target_repr": "0.04013106325474894",
+ "ob": {
+  "ok": 10339,
+  "lam_fail": 61,
+  "solver_fail": 0,
+  "solves": 64255
+ },
+ "repro": {
+  "OB21": 1.00823,
+  "OB5": 1.04455,
+  "ob_ok": 10339,
+  "OB21_match": true,
+  "OB5_match": true,
+  "ob_ok_match": true,
+  "sigma_target_match": true,
+  "R0_match": true,
+  "R0_diff": {
+   "random": 0.0,
+   "capw": 0.0,
+   "style:size": 0.0,
+   "style:beta": 0.0,
+   "style:momentum": 0.0,
+   "style:resid_vol": 0.0,
+   "style:liquidity": 0.0,
+   "style:value": 0.0
+  },
+  "noguard_models_bit_same": true,
+  "v4_models_bit_same": true,
+  "nan_to_zero_all_match": true,
+  "sim_match": {
+   "band": true,
+   "detect": true,
+   "alpha": true
+  },
+  "all_ok": true
+ },
+ "fingerprint_after": [
+  2877771,
+  "2023-12-28",
+  6675565091165,
+  2316557639282
+ ],
+ "fingerprint_same": true,
+ "realized_v4": {
+  "S:size": 1.01795,
+  "S:beta": 0.99114,
+  "S:momentum": 0.90911,
+  "S:resid_vol": 0.86846,
+  "S:liquidity": 0.82741,
+  "S:value": 0.91637,
+  "P5": 0.96969,
+  "P50": 0.96302,
+  "P10B": 0.99766,
+  "HV": 0.84595,
+  "SM": 0.99904,
+  "IP:G10": 0.85184,
+  "IP:G15": 1.11851,
+  "IP:G20": 0.86636,
+  "IP:G25": 0.8249,
+  "IP:G30": 0.88352,
+  "IP:G35": 1.09243,
+  "IP:G40": 0.90962,
+  "IP:G45": 1.15125,
+  "IP:G50": 1.06489,
+  "IP:G55": 1.32817,
+  "IE:G10": 0.74342,
+  "IE:G15": 0.90832,
+  "IE:G20": 0.95502,
+  "IE:G25": 0.77367,
+  "IE:G30": 1.08287,
+  "IE:G35": 1.07674,
+  "IE:G40": 0.90834,
+  "IE:G45": 1.00206,
+  "IE:G50": 1.18615,
+  "IE:G55": 1.20746,
+  "capw": 1.01835,
+  "LO5": 0.97847,
+  "LO50": 0.97512,
+  "OB21": 1.00823,
+  "OB5": 1.04455
+ },
+ "nan_to_zero_all": {
+  "seam": 57,
+  "other": 431
+ },
+ "nan_to_zero_B": {
+  "seam": 5,
+  "other": 11,
+  "v2": 0
+ },
+ "spec_bias_median": 0.97269,
+ "spec_bias_n": 2180,
+ "exposure": {
+  "max_abs_sector_active": [
+   0.0712,
+   0.1,
+   0.1
+  ],
+  "sector_var_share": [
+   0.00481,
+   0.01304,
+   0.02594
+  ],
+  "factor_var_share": [
+   0.01696,
+   0.03912,
+   0.0754
+  ]
+ },
+ "tails": {
+  "CV_med": 0.32407,
+  "CV_med_q05_50_95": [
+   0.21401,
+   0.31604,
+   0.40386
+  ],
+  "CV_med_share_zero": 0.0,
+  "CV_split": 0.24402,
+  "CV_split_q05_50_95": [
+   0.17796,
+   0.23771,
+   0.3002
+  ],
+  "CV_split_share_zero": 0.0,
+  "CV_mean_raw_uncorrected": 0.2999,
+  "noise_share_med": 0.00333,
+  "nu_u": 4.5,
+  "nu_u_unclipped": 4.42001,
+  "kurt_u": 14.2854,
+  "n_u": 102994,
+  "nu_f": 9.44612,
+  "kurt_f": 1.1017,
+  "n_f": 832
+ },
+ "se_boot_T31": {
+  "OB21": 0.06039,
+  "OB5": 0.04132
+ },
+ "calibration_recomputed": {
+  "alpha": 0.06301,
+  "center": {
+   "OB21": 0.98621,
+   "OB5": 0.99467
+  },
+  "se_sim": {
+   "OB21": 0.05069,
+   "OB5": 0.03964
+  },
+  "kappa": {
+   "OB21": 1.1915,
+   "OB5": 1.0423
+  },
+  "band": {
+   "OB21": [
+    0.89288,
+    1.09959
+   ],
+   "OB5": [
+    0.9256,
+    1.0755
+   ]
+  },
+  "h": {
+   "OB21": [
+    0.09333,
+    0.11338
+   ],
+   "OB5": [
+    0.06907,
+    0.08083
+   ]
+  }
+ },
+ "band_fixed_PO3": {
+  "OB21": [
+   0.89288,
+   1.09959
+  ],
+  "OB5": [
+   0.9256,
+   1.0755
+  ]
+ },
+ "power_fixed_band": {
+  "correct": {
+   "family": 0.0659,
+   "primary": 0.0284,
+   "secondary": 0.0534,
+   "b21_median": 0.98621,
+   "b5_median": 0.99467
+  },
+  "Dx1.5": {
+   "family": 0.9995,
+   "primary": 0.973,
+   "secondary": 0.9994,
+   "b21_median": 1.19903,
+   "b5_median": 1.2092
+  },
+  "Dx0.67": {
+   "family": 0.9977,
+   "primary": 0.9678,
+   "secondary": 0.9972,
+   "b21_median": 0.81595,
+   "b5_median": 0.82274
+  },
+  "Dx1.2": {
+   "family": 0.6103,
+   "primary": 0.3194,
+   "secondary": 0.5941,
+   "b21_median": 1.07635,
+   "b5_median": 1.08559
+  },
+  "Dx0.83": {
+   "family": 0.694,
+   "primary": 0.4087,
+   "secondary": 0.6735,
+   "b21_median": 0.90237,
+   "b5_median": 0.91019
+  }
+ },
+ "Y_world": {
+  "scale": [
+   1.02233,
+   1.05014
+  ],
+  "family": 0.2241,
+  "primary": 0.0426,
+  "secondary": 0.2181,
+  "b21_median": 1.00823,
+  "b5_median": 1.04455
+ },
+ "X": 22,
+ "X_pair": [
+  1.5,
+  0.67
+ ],
+ "Y": 22,
+ "sentence_pass": "변동성 오차 약 22% 이상은 기각됐다. v4 가 맞게 보정됐다는 뜻은 아니다.",
+ "sentence_fail": "구창 표본 안 성적 그대로여도 약 22% 확률로 실패한다.",
+ "elapsed_s": 159.20133
+}

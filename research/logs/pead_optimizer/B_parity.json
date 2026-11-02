@@ -1,0 +1,53 @@
+{
+ "mode": "parity",
+ "core_ref": "13c56a7",
+ "end": "2023-12-28",
+ "table": "daily_bars_adjusted(실행 시점 표 — 수리 전후는 아래 지문으로 가린다)",
+ "fingerprint_before": [
+  2877771,
+  "2023-12-28",
+  6700381946099,
+  2316557639282
+ ],
+ "fingerprint_after": [
+  2877771,
+  "2023-12-28",
+  6700381946099,
+  2316557639282
+ ],
+ "fingerprint_same": true,
+ "grid": [
+  "2019-08-01",
+  "2023-12-15",
+  55
+ ],
+ "models_bit_same_PO3_common": false,
+ "models_common_n": 53,
+ "seam": {
+  "seam_cells": 103,
+  "seam_cells_by_source": [
+   101,
+   2
+  ]
+ },
+ "market": {
+  "market_unknown": 0,
+  "delisted_with_last_date": 489
+ },
+ "parity": {
+  "steps_harness": 54,
+  "steps_core": 54,
+  "same_steps": true,
+  "max_abs_diff_book": 0.0,
+  "max_abs_diff_bench": 2.7755575615628914e-17,
+  "nan_mismatch": 0,
+  "n_universe_same": true,
+  "first_date": "2019-08-01",
+  "last_date": "2023-11-17",
+  "pass": true,
+  "adv_bytes_same": true,
+  "eligible_same_all_grid": true
+ },
+ "elapsed_s": 32.71356415748596,
+ "note": "성과 숫자(book·bench·IR)는 계산 중에만 쓰고 출력·저장하지 않았다. 차이·개수만 적는다."
+}

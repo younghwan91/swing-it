@@ -1,0 +1,821 @@
+{
+ "mode": "new",
+ "prereg": {
+  "PO-3": "4bdf40e",
+  "PO-3_result": "1c12207",
+  "PO-4": "b38817a",
+  "PO-4_repro": "10f7a83"
+ },
+ "core_ref": "13c56a7",
+ "end": "2026-09-11",
+ "window": [
+  "2024-01-31",
+  "2026-07-31"
+ ],
+ "n_asof": 31,
+ "data_end": "2026-09-11",
+ "sectors": [
+  "G10",
+  "G15",
+  "G20",
+  "G25",
+  "G30",
+  "G35",
+  "G40",
+  "G45",
+  "G50",
+  "G55"
+ ],
+ "label": "D·최적화 바이어스 검정 — F·업종은 O 에 무관(사전 몫 약 6%), 검정 안 함",
+ "model": "v4 = vraoff_s0.1 (VRA 끔, spec_shrink 0.1) — 격자 경계(spec_shrink 최솟값 0.1)에서 골랐다, 고원이 아니다",
+ "sigma_target_fixed": 0.04013,
+ "band": {
+  "OB21": [
+   0.89288,
+   1.09959
+  ],
+  "OB5": [
+   0.9256,
+   1.0755
+  ]
+ },
+ "fingerprint_before": {
+  "daily_bars_adjusted": [
+   4591382,
+   "2026-09-11",
+   10597414827042,
+   3149933269582
+  ],
+  "daily_bars_adj_v2": [
+   4646424,
+   "2026-09-11",
+   10572205237338,
+   2507448075060
+  ]
+ },
+ "fingerprint_after": {
+  "daily_bars_adjusted": [
+   4591382,
+   "2026-09-11",
+   10597414827042,
+   3149933269582
+  ],
+  "daily_bars_adj_v2": [
+   4646424,
+   "2026-09-11",
+   10572205237338,
+   2507448075060
+  ]
+ },
+ "fingerprint_same": {
+  "daily_bars_adjusted": true,
+  "daily_bars_adj_v2": true
+ },
+ "recheck_old": {
+  "R0": {
+   "random": 0.97086,
+   "capw": 1.00167,
+   "style:size": 1.00989,
+   "style:beta": 0.98972,
+   "style:momentum": 0.91915,
+   "style:resid_vol": 0.836,
+   "style:liquidity": 0.84527,
+   "style:value": 0.90683
+  },
+  "R0_diff_vs_PO3": {
+   "random": -0.00342,
+   "capw": -0.00065,
+   "style:size": -0.00254,
+   "style:beta": 0.00288,
+   "style:momentum": 0.01153,
+   "style:resid_vol": -0.03697,
+   "style:liquidity": 0.01164,
+   "style:value": 0.00151
+  },
+  "R0_match": false,
+  "v4_models_checked": [
+   0,
+   17,
+   34,
+   51
+  ],
+  "v4_models_bit_same": false,
+  "ok": true,
+  "report_only": true,
+  "note": "수리된 표 — R0·모델 비트 불일치는 예상된 것(PO-5.2), 멈추지 않는다",
+  "old_seam_cells": 103,
+  "sigma_target_rebuilt": 0.04016,
+  "sigma_target_rebuilt_n": 51
+ },
+ "seam": {
+  "threshold": 0.2,
+  "cells_finite_ret": 5144448,
+  "cells_determinable": 5100829,
+  "cells_undeterminable": 43619,
+  "cells_undeterminable_abs_ret_gt_0.3": 125,
+  "cells_big_dev_explained_kept": 1204,
+  "seam_cells": 128,
+  "seam_cells_adj_abs_ret_gt_0.3": 12,
+  "seam_cells_raw_abs_ret_gt_0.3": 86,
+  "seam_codes": 109,
+  "seam_top_dates": [
+   [
+    "2023-03-28",
+    3
+   ],
+   [
+    "2021-08-06",
+    3
+   ],
+   [
+    "2021-09-15",
+    2
+   ],
+   [
+    "2021-01-18",
+    2
+   ],
+   [
+    "2026-05-04",
+    2
+   ],
+   [
+    "2022-05-25",
+    2
+   ],
+   [
+    "2022-04-01",
+    2
+   ],
+   [
+    "2022-04-19",
+    1
+   ],
+   [
+    "2025-06-24",
+    1
+   ],
+   [
+    "2026-07-30",
+    1
+   ]
+  ],
+  "seam_top_codes": [
+   [
+    "052770",
+    5
+   ],
+   [
+    "064520",
+    3
+   ],
+   [
+    "106080",
+    3
+   ],
+   [
+    "002210",
+    2
+   ],
+   [
+    "012170",
+    2
+   ],
+   [
+    "035290",
+    2
+   ],
+   [
+    "054220",
+    2
+   ],
+   [
+    "065150",
+    2
+   ],
+   [
+    "073010",
+    2
+   ],
+   [
+    "078590",
+    2
+   ]
+  ],
+  "seam_cells_largest": [
+   {
+    "code": "192410",
+    "date": "2020-08-18",
+    "ret_adj": 0.02295,
+    "ret_raw": 14.29412
+   },
+   {
+    "code": "131100",
+    "date": "2018-05-03",
+    "ret_adj": -0.09986,
+    "ret_raw": 10.18966
+   },
+   {
+    "code": "054220",
+    "date": "2020-07-15",
+    "ret_adj": 0.0,
+    "ret_raw": 6.98969
+   },
+   {
+    "code": "052770",
+    "date": "2020-01-17",
+    "ret_adj": 0.0,
+    "ret_raw": 4.54037
+   },
+   {
+    "code": "035290",
+    "date": "2022-04-26",
+    "ret_adj": 0.29757,
+    "ret_raw": 2.89272
+   },
+   {
+    "code": "012170",
+    "date": "2021-05-03",
+    "ret_adj": 0.17949,
+    "ret_raw": 2.53846
+   },
+   {
+    "code": "073010",
+    "date": "2019-05-10",
+    "ret_adj": -0.29953,
+    "ret_raw": 1.1014
+   },
+   {
+    "code": "106080",
+    "date": "2023-03-28",
+    "ret_adj": -0.29966,
+    "ret_raw": 1.03202
+   },
+   {
+    "code": "002420",
+    "date": "2021-12-22",
+    "ret_adj": 0.29958,
+    "ret_raw": 1.60552
+   },
+   {
+    "code": "950160",
+    "date": "2022-10-25",
+    "ret_adj": 0.29907,
+    "ret_raw": 1.603
+   },
+   {
+    "code": "121890",
+    "date": "2023-10-23",
+    "ret_adj": 0.29973,
+    "ret_raw": 1.59946
+   },
+   {
+    "code": "013000",
+    "date": "2021-09-27",
+    "ret_adj": 0.2996,
+    "ret_raw": 1.59919
+   },
+   {
+    "code": "168330",
+    "date": "2021-09-06",
+    "ret_adj": 0.29901,
+    "ret_raw": 1.59802
+   },
+   {
+    "code": "321260",
+    "date": "2021-07-13",
+    "ret_adj": 0.2987,
+    "ret_raw": 1.5974
+   },
+   {
+    "code": "101680",
+    "date": "2023-03-28",
+    "ret_adj": 0.29861,
+    "ret_raw": 1.59722
+   },
+   {
+    "code": "069330",
+    "date": "2021-05-18",
+    "ret_adj": 0.29858,
+    "ret_raw": 1.59716
+   },
+   {
+    "code": "083470",
+    "date": "2022-11-09",
+    "ret_adj": -0.3,
+    "ret_raw": 0.86978
+   },
+   {
+    "code": "219750",
+    "date": "2025-05-19",
+    "ret_adj": -0.18798,
+    "ret_raw": 0.95657
+   },
+   {
+    "code": "307870",
+    "date": "2021-08-06",
+    "ret_adj": 0.0625,
+    "ret_raw": 1.125
+   },
+   {
+    "code": "035890",
+    "date": "2026-05-04",
+    "ret_adj": 0.04688,
+    "ret_raw": 1.06408
+   },
+   {
+    "code": "168490",
+    "date": "2023-12-27",
+    "ret_adj": 0.3,
+    "ret_raw": -0.70527
+   },
+   {
+    "code": "331380",
+    "date": "2021-07-02",
+    "ret_adj": 0.29973,
+    "ret_raw": 1.25806
+   },
+   {
+    "code": "014100",
+    "date": "2021-03-15",
+    "ret_adj": -0.05483,
+    "ret_raw": 0.89035
+   },
+   {
+    "code": "064520",
+    "date": "2020-01-13",
+    "ret_adj": 0.0,
+    "ret_raw": -0.94211
+   },
+   {
+    "code": "002210",
+    "date": "2026-07-30",
+    "ret_adj": -0.07503,
+    "ret_raw": 0.84995
+   },
+   {
+    "code": "035290",
+    "date": "2021-01-18",
+    "ret_adj": 0.0,
+    "ret_raw": -0.88894
+   },
+   {
+    "code": "052400",
+    "date": "2020-10-19",
+    "ret_adj": -0.11877,
+    "ret_raw": 0.76245
+   },
+   {
+    "code": "001530",
+    "date": "2022-04-19",
+    "ret_adj": -0.02627,
+    "ret_raw": -0.90264
+   },
+   {
+    "code": "007610",
+    "date": "2026-04-29",
+    "ret_adj": 0.3,
+    "ret_raw": 1.16667
+   },
+   {
+    "code": "109070",
+    "date": "2025-03-26",
+    "ret_adj": 0.21772,
+    "ret_raw": -0.64805
+   }
+  ],
+  "secondary_min_abs_ret": 0.3,
+  "seam_cells_by_source": [
+   126,
+   2
+  ],
+  "candidates_by_source": [
+   126,
+   176
+  ],
+  "kept_secondary_undeterminable": 174,
+  "kept_secondary_abs_ret_gt_0.1": 38
+ },
+ "signal": {
+  "end": "2026-09-11",
+  "earnings_rows_read_le_end": 93851,
+  "dropped_2019Q1plus_no_periodic_le_end": 1472,
+  "rows_used": 92379
+ },
+ "ob": {
+  "ok": 6133,
+  "lam_fail": 67,
+  "solver_fail": 0,
+  "solves": 34905
+ },
+ "ob_ok_share": 0.98919,
+ "B_universe_size": [
+  80,
+  80
+ ],
+ "OB21": 1.0502,
+ "OB5": 1.06118,
+ "OB21_in_band": true,
+ "OB5_in_band": true,
+ "verdict": "통과",
+ "sentence": "변동성 오차 약 22% 이상은 기각됐다. v4 가 맞게 보정됐다는 뜻은 아니다.",
+ "factor_share_q10_50_90": [
+  0.02801,
+  0.05476,
+  0.09963
+ ],
+ "factor_share_alarm": false,
+ "factor_share_sentence": null,
+ "exposure": {
+  "max_abs_sector_active": [
+   0.07863,
+   0.1,
+   0.1
+  ],
+  "sector_var_share": [
+   0.01023,
+   0.02013,
+   0.03819
+  ],
+  "factor_var_share": [
+   0.02801,
+   0.05476,
+   0.09963
+  ]
+ },
+ "power_report": {
+  "correct": {
+   "family": 0.0659,
+   "primary": 0.0284,
+   "secondary": 0.0534,
+   "b21_median": 0.98621,
+   "b5_median": 0.99467
+  },
+  "Dx1.5": {
+   "family": 0.9995,
+   "primary": 0.973,
+   "secondary": 0.9994,
+   "b21_median": 1.19903,
+   "b5_median": 1.2092
+  },
+  "Dx0.67": {
+   "family": 0.9977,
+   "primary": 0.9678,
+   "secondary": 0.9972,
+   "b21_median": 0.81595,
+   "b5_median": 0.82274
+  },
+  "Dx1.2": {
+   "family": 0.6103,
+   "primary": 0.3194,
+   "secondary": 0.5941,
+   "b21_median": 1.07635,
+   "b5_median": 1.08559
+  },
+  "Dx0.83": {
+   "family": 0.694,
+   "primary": 0.4087,
+   "secondary": 0.6735,
+   "b21_median": 0.90237,
+   "b5_median": 0.91019
+  }
+ },
+ "X": 22,
+ "Y": 22,
+ "report_only": {
+  "realized": {
+   "S:size": 1.33556,
+   "S:beta": 1.10069,
+   "S:momentum": 1.18337,
+   "S:resid_vol": 1.05821,
+   "S:liquidity": 1.0052,
+   "S:value": 0.96742,
+   "P5": 0.99968,
+   "P50": 1.01427,
+   "P10B": 1.08974,
+   "HV": 0.87016,
+   "SM": 1.26058,
+   "IP:G10": 1.0909,
+   "IP:G15": 1.08179,
+   "IP:G20": 1.00017,
+   "IP:G25": 0.99259,
+   "IP:G30": 0.66851,
+   "IP:G35": 1.10552,
+   "IP:G40": 0.83339,
+   "IP:G45": 1.30101,
+   "IP:G50": 0.96361,
+   "IP:G55": 0.88548,
+   "IE:G10": 1.2193,
+   "IE:G15": 0.5917,
+   "IE:G20": 0.74824,
+   "IE:G25": 0.743,
+   "IE:G30": 1.03613,
+   "IE:G35": 0.9778,
+   "IE:G40": 0.7611,
+   "IE:G45": 1.05911,
+   "IE:G50": 0.99667,
+   "IE:G55": 0.73089,
+   "capw": 1.42518,
+   "LO5": 1.07946,
+   "LO50": 1.11807,
+   "KOSPI": 1.47433,
+   "OB21": 1.0502,
+   "OB5": 1.06118
+  },
+  "v3_same_ob": {
+   "OB21": 1.07934,
+   "OB5": 1.09043
+  },
+  "v2_same_ob": {
+   "OB21": 1.05021,
+   "OB5": 1.06118
+  },
+  "v2_read": {
+   "rows_read": 1769674,
+   "rows_on_grid": 1757689
+  },
+  "years": {
+   "2024": {
+    "v4": {
+     "OB21": 1.01284,
+     "OB5": 1.01569
+    },
+    "v3": {
+     "OB21": 1.05613,
+     "OB5": 1.05837
+    },
+    "v2": {
+     "OB21": 1.01284,
+     "OB5": 1.01569
+    }
+   },
+   "2025": {
+    "v4": {
+     "OB21": 0.98552,
+     "OB5": 1.04445
+    },
+    "v3": {
+     "OB21": 1.01906,
+     "OB5": 1.07946
+    },
+    "v2": {
+     "OB21": 0.98552,
+     "OB5": 1.04445
+    }
+   },
+   "2026-01~07": {
+    "v4": {
+     "OB21": 1.11934,
+     "OB5": 1.13003
+    },
+    "v3": {
+     "OB21": 1.11767,
+     "OB5": 1.12849
+    },
+    "v2": {
+     "OB21": 1.11934,
+     "OB5": 1.13003
+    }
+   },
+   "2026-07 제외": {
+    "v4": {
+     "OB21": 1.06042,
+     "OB5": 1.06856
+    },
+    "v3": {
+     "OB21": 1.09022,
+     "OB5": 1.09853
+    },
+    "v2": {
+     "OB21": 1.06042,
+     "OB5": 1.06856
+    }
+   }
+  },
+  "nan_to_zero_B": {
+   "seam": 0,
+   "other": 16,
+   "v2": 16
+  },
+  "nan_to_zero_all": {
+   "seam": 13,
+   "other": 655
+  },
+  "spec_bias_median": 0.9817,
+  "spec_bias_n": 2399,
+  "sector_direction": {
+   "IP:G55>1": false,
+   "IP:G25<1": true,
+   "IP:G10<1": false
+  },
+  "tails_post_hoc": {
+   "CV_med": 0.38753,
+   "CV_med_q05_50_95": [
+    0.24859,
+    0.37776,
+    0.46112
+   ],
+   "CV_med_share_zero": 0.0,
+   "CV_split": 0.28473,
+   "CV_split_q05_50_95": [
+    0.19443,
+    0.27628,
+    0.33241
+   ],
+   "CV_split_share_zero": 0.0,
+   "CV_mean_raw_uncorrected": 0.32418,
+   "noise_share_med": 0.00288,
+   "nu_u": 4.5,
+   "nu_u_unclipped": 4.18806,
+   "kurt_u": 31.90417,
+   "n_u": 71042,
+   "nu_f": 10.5789,
+   "kurt_f": 0.91201,
+   "n_f": 496
+  },
+  "v2_tables": {
+   "diff_table": {
+    "all": {
+     "pre_guard": {
+      "cells": 1709364,
+      ">1%": 40,
+      ">5%": 30,
+      ">20%": 16
+     },
+     "post_guard": {
+      "cells": 1709339,
+      ">1%": 28,
+      ">5%": 18,
+      ">20%": 4
+     }
+    },
+    "liquid_200eok": {
+     "pre_guard": {
+      "cells": 139481,
+      ">1%": 0,
+      ">5%": 0,
+      ">20%": 0
+     },
+     "post_guard": {
+      "cells": 139481,
+      ">1%": 0,
+      ">5%": 0,
+      ">20%": 0
+     }
+    },
+    "B_fwd21": {
+     "pre_guard": {
+      "cells": 50078,
+      ">1%": 0,
+      ">5%": 0,
+      ">20%": 0
+     },
+     "post_guard": {
+      "cells": 50078,
+      ">1%": 0,
+      ">5%": 0,
+      ">20%": 0
+     }
+    }
+   },
+   "cluster": {
+    "rule": "|ret_adj − ret_v2| > 0.10",
+    "all": 23,
+    "B_fwd21": 0,
+    "B_fwd21_guard_nan": 0,
+    "on_2024-01-08_all": 0,
+    "on_2024-01-08_B_fwd21": 0,
+    "top_dates_all": [
+     [
+      "2026-06-22",
+      2
+     ],
+     [
+      "2024-04-22",
+      1
+     ],
+     [
+      "2026-04-09",
+      1
+     ],
+     [
+      "2026-03-26",
+      1
+     ],
+     [
+      "2026-05-15",
+      1
+     ],
+     [
+      "2025-04-03",
+      1
+     ],
+     [
+      "2024-08-23",
+      1
+     ],
+     [
+      "2026-07-22",
+      1
+     ],
+     [
+      "2026-03-06",
+      1
+     ],
+     [
+      "2025-07-21",
+      1
+     ]
+    ],
+    "top_dates_B_fwd21": [],
+    "cells_B_fwd21": []
+   },
+   "erased_limit_down": {
+    "rule": "ret_v2 ≤ −0.29 ∧ ret_adj > −0.05",
+    "all": 3,
+    "B_fwd21": 0,
+    "cells_all": [
+     {
+      "code": "106520",
+      "date": "2026-06-22",
+      "ret_adj": 0.0,
+      "ret_v2": -0.94161,
+      "guard_nan": false
+     },
+     {
+      "code": "101390",
+      "date": "2026-06-22",
+      "ret_adj": 0.0,
+      "ret_v2": -0.88636,
+      "guard_nan": false
+     },
+     {
+      "code": "078130",
+      "date": "2025-07-21",
+      "ret_adj": 0.3,
+      "ret_v2": -0.30125,
+      "guard_nan": true
+     }
+    ],
+    "001380_2025-03-26_in_B_fwd21": false
+   },
+   "erased_limit_up": {
+    "rule": "ret_v2 ≥ 0.29 ∧ ret_adj < 0.05",
+    "all": 4,
+    "B_fwd21": 0,
+    "cells_all": [
+     {
+      "code": "065150",
+      "date": "2026-07-22",
+      "ret_adj": -0.26598,
+      "ret_v2": 0.46552,
+      "guard_nan": true
+     },
+     {
+      "code": "298000",
+      "date": "2026-06-15",
+      "ret_adj": -0.29306,
+      "ret_v2": 0.41388,
+      "guard_nan": true
+     },
+     {
+      "code": "149980",
+      "date": "2026-05-04",
+      "ret_adj": -0.15899,
+      "ret_v2": 0.43418,
+      "guard_nan": true
+     },
+     {
+      "code": "182400",
+      "date": "2025-08-06",
+      "ret_adj": 0.0,
+      "ret_v2": 0.34244,
+      "guard_nan": true
+     }
+    ]
+   }
+  }
+ },
+ "elapsed_s": 235.51979,
+ "repaired": {
+  "verdict_original": "통과",
+  "verdict_repaired": "통과",
+  "changed": false,
+  "label": null,
+  "B_opens": true,
+  "next": "라벨 없음. B 를 연다 — 수리된 표로 패리티를 다시 통과한 뒤(PO-5.2-4).",
+  "deployed_on": "2026-11-02",
+  "swing_it_sha": "5823d36",
+  "fingerprint_pre_repair": [
+   4591382,
+   "2026-09-11",
+   10568817328205,
+   3149933269582
+  ],
+  "fingerprint_differs_from_pre": true,
+  "sigma_target_fixed": 0.04013,
+  "sigma_target_rebuilt": 0.04016,
+  "OB21_original": 1.04957,
+  "OB5_original": 1.06088
+ }
+}

@@ -1,0 +1,7 @@
+{"config": {"cell": "H20_band0.05_aum3e+08", "core": "13c56a7", "stage": "B"}, "fingerprint": "6d629d44aeece5ba", "note": "B 민감도"}
+{"config": {"cell": "H20_band0.10_aum3e+08", "core": "13c56a7", "stage": "B"}, "fingerprint": "769094473986345e", "note": "B 민감도"}
+{"config": {"cell": "H20_band0.20_aum3e+08", "core": "13c56a7", "stage": "B"}, "fingerprint": "bdfe88f108a0f8b6", "note": "B 민감도"}
+{"config": {"cell": "H60_band0.05_aum3e+08", "core": "13c56a7", "stage": "B"}, "fingerprint": "a91ab473ac805c17", "note": "B 민감도"}
+{"config": {"cell": "H60_band0.20_aum3e+08", "core": "13c56a7", "stage": "B"}, "fingerprint": "e24700382df49ec6", "note": "B 민감도"}
+{"config": {"cell": "H60_band0.10_aum1e+10", "core": "13c56a7", "stage": "B"}, "fingerprint": "3404838d947037c2", "note": "B 민감도"}
+{"config": {"cell": "H60_band0.10_aum3e+08", "core": "13c56a7", "stage": "B"}, "fingerprint": "d90d4abc537032ba", "note": "B 1차"}
