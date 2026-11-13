@@ -2,7 +2,7 @@
 
 한국 주식(KOSPI·KOSDAQ) 리서치 레포. main = 알파 심사 프레임워크(공개, MIT). 섹터 수급 관측 화면·일일 리포트는 2026-11 별도 저장소로 옮겼다(`~/git/sector-flow`).
 사용자의 실제 연구(스윙·미너비니·진화 GA·모의매매)는 대부분 **`feature-combined-strategy`**(이하 **fcs**,
-워크트리 `~/git/swing-it-feature-combined-strategy`)에 있고 main 에 머지되지 않았다. 아래에서 "(fcs)" 표시 경로는 main 에 없다.
+워크트리 `~/git/.harness-wt/swing-it/feature-combined-strategy` — 07:43 모의매매 크론이 여기서 돈다)에 있고 main 에 머지되지 않았다. 아래에서 "(fcs)" 표시 경로는 main 에 없다.
 
 ## 명령 (검증됨)
 - 테스트: `uv run --extra dev pytest -q` — DB·네트워크 불요. fcs 는 `uv run --with numba --extra dev pytest -q`(약 3분).
@@ -16,6 +16,8 @@
 
 ## 브랜치·커밋
 - 커밋은 브랜치까지만. push·머지·실주문은 사용자가 명시할 때만.
+- `~/git/swing-it` 은 운영 체크아웃이다(quant-airflow 가 `/opt/swing-it:ro` 로 라이브 마운트해 `*_price_adjust` 가 돈다). main 에 두고
+  브랜치 작업은 `~/git/.harness-wt/` 아래 워크트리에서 한다 — 전역 가드가 main 이외 전환·브랜치 생성을 막는다.
 - **origin 은 PUBLIC 이다.** 배포북(재현 성적표·적합된 비중·유니버스 문턱처럼 따라 할 수 있는 레시피)은 공개 브랜치에 올리지 않는다
   (2026-08-27 결정, `docs/alpha-research.md` §8 끝 — 배포북을 공개 푸시했다가 회수·히스토리 재작성한 사고). fcs 를 main 에
   머지하기 전에 `docs/individual-trader-method.md`·`deploy/p1_satellite.json`·`research/paper/` 의 공개 여부를 사용자와 정한다.
@@ -38,6 +40,9 @@
   손절 폭을 좁혀서 얻은 개선은 의심한다. 갭과 호가 때문에 손절가 그대로 체결되지 않기 때문이다. 실제로 좁은 손절은 대장주를 다 털렸다(21세대 동기).
 - 체결 수가 하한에 못 미치면 VOID·판단 불가로 적는다. 거래를 줄여 거래당 숫자를 올리는 방향은 피한다 —
   사용자는 거래 수 × 거래당을 본다.
+- 보고·선택은 승률이 아니라 **손익비·기대값**으로 한다(사용자 "승률이 높은 건 중요하지 않아. 난 퀀트야"). 승률이 높은데 손익비 < 1 이면 승자를 일찍 자르는 청산부터 의심한다 — 손절을 좁혀 손익비를 만드는 것은 답이 아니다.
+- 비용은 정가로. 수수료 면제·할인·리베이트처럼 관계나 기간에 묶인 조건은 비용 가정에 넣지 않는다. 정가에서 살아남는 전략만 채택한다.
+- 브로커 API 동작 가설(파라미터명·체결·트리거 방식)은 문서·로그 추론만으로 실매매 코드에 넣지 않는다 — 실서버 조회 스모크(실주문은 사용자 승인)로 먼저 확인한다. 목 테스트는 파라미터명 오류를 못 잡는다.
 - 모의매매 팔(leader_A 등)은 도중에 규칙을 바꾸지 않는다. 바꾸려면 새 팔·새 장부로 사전등록한다.
 - 원장(`TRIALS.jsonl`·`RUNS.jsonl`·`research/paper/*.jsonl`)은 코드만 덧붙인다. 손으로 고치지 않는다(`.claude/settings.json` 의 `Edit` deny —
   편집 도구·`sed`·`>>` 리다이렉트를 막고, 파이썬 스크립트의 덧붙이기는 막지 않는다).
@@ -95,9 +100,17 @@
   원 DB 로 개별 재계산한다. 리뷰의 CRITICAL/MAJOR 를 반영하기 전에는 결론을 보고하지 않는다.
   스웜 프롬프트에는 그 엔진의 체결 규약(진입일 모호 처리, data_end, 손절 하한, 2023-01-25 호가 개편 등)을 미리 적는다.
   안 적으면 입자가 규약을 오류로 오판한다. 입자가 짚은 것은 캐시 배열로 직접 다시 확인한다.
+- 한 실험(세대) = 한 세션이 기본. 결정·결과는 원장(`evolution_ledger.json`·`META_EVOLUTION.md`(fcs))에 바로 적고 새 세션은 그 파일에서 출발한다. 컨텍스트가 60%를 넘으면 그 파일을 갱신한 뒤 새 세션을 제안한다.
 - 세대를 보고할 때는 연대기 표(세대별 숫자, 직전 세대 대비, 시장 대비)를 같이 보인다. 개선 없이 세대만 쌓지 않는다.
   2~3세대가 나아지지 않으면 축을 바꾸거나 멈춤 규칙을 쓴다(사용자 "진화가 아니라 퇴화를 하고 있네").
 - 질문으로 멈추지 않는다. 진단 → 계획 → 병렬 에이전트 → 통합까지 스스로 끝낸다. 먼저 기존 판정 문서를 읽어 닫힌 가설은 다시 열지 않는다.
+
+## 뉴스 LLM 판정 (`src/swing_it/news/`)
+- 모델은 `claude-haiku-5-5` 만. Haiku 4.5 는 쓰지 않는다(4.5 판정은 quant-airflow DB `legacy` 스키마·daytrade-it `data/legacy/` 보관분).
+- 프롬프트 캐싱 의무 — 고정 지시문은 `cache_control` 붙은 `system` 으로, 건마다 다른 부분(기사·종목·이력)만 user 로. 지시문을 기사 뒤에 두지 않는다. 걸렸는지는 `usage.cache_read_input_tokens` 로 확인(5.5 최소 접두 512토큰).
+- Batch API 의무 — 동기 `messages.create` 루프로 판정기를 만들지 않는다. 지연이 문제면 먼저 묻는다.
+- 5.5 는 thinking 기본 켜짐 → `thinking: {type: "disabled"}`, temperature 는 보내지 않는다.
+- `news/judge.py` 가 참고 구현이다(quant-airflow `collectors/news_judge.py` 도 같다 — 배치 원장, create 재시도 금지).
 
 ## 문서 위치
 - `docs/GUARDRAILS.md` — 연구 정석·완료 정의·사전등록 템플릿. 새 알파나 실험 전에 읽는다.
