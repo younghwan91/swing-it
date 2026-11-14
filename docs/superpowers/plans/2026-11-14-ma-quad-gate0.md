@@ -152,8 +152,9 @@ def test_bss_ci_cluster_resampling():             # 같은 군집 복제 시 CI 
 
 **Interfaces:**
 - Consumes: Task 1~4, `storage.read_prices_wide`, `korea.universe_mask`, `eps_asof.eps_ok`.
-- Produces: `load(con) -> dict`(days, codes, C, raw_close, tv, meta), `build_events(X, k) -> (ci, s)`(사전 후보: 유니버스 ∧ EPS↑ ∧ ¬aligned ∧ 0 < d ≤ 0.10 ∧ 2017-01-02 ≤ t ∧ t+k ≤ 2023-12-28 거래일),
+- Produces: `load(con) -> dict`(days, codes, C, raw_close, tv, meta), `build_events(X, k) -> (ci, s)`(사전 후보: 유니버스 ∧ EPS↑ ∧ ¬aligned ∧ 0 < d ≤ 0.10 ∧ **MQ-1: 종가 > MA200 ∧ MA200[t] > MA200[t−20]** ∧ 2017-01-02 ≤ t ∧ t+k ≤ 2023-12-28 거래일),
   `build_events_all(X, k)`(¬aligned 전부, 보고용), `run_cell(X, q, N, k) -> dict`(p, y, 연월, 연도 배열 저장 + `cell_verdict`), CLI `--smoke`(50 종목·2017 만, **모양·시간만 출력**), `--workers 16`, `--m-sens`(칸 q=2·N=20·k=5, 사건의 결정적 1% 표본에서 M=1,000 대 200 의 |Δp| 분포 — 보고만).
+- 보고(판정 무관, MQ-1): 템플릿 충족 부분집합(종가 > MA150 ∧ MA150 > MA200 ∧ MA50 > MA150 ∧ 종가 > MA50 ∧ 종가 ≥ 250일 최저×1.30 ∧ 종가 ≥ 250일 최고×0.75)의 같은 표, 200일선 거름 없는 원래 사전 후보의 같은 표.
 - 보고(판정 무관): 정배열 아닌 전체 종목-일(`build_events_all`)의 같은 표, 해상도 = P ≥ 0.5 구간 실현율 A·B0·B1 비교.
 - 출력: `research/logs/ma_quad/calib_results.json`(칸별 verdict + reliability 표 + q=1 대 B1 BSS 보고 + 사건 수 + git SHA + 데이터 구간), `research/logs/ma_quad/RESULTS.md`(표: 20칸 q=2 판정, 관문 판정, q=1 보고, 쌍별 P_up 보고), `TRIALS.jsonl` 에 파이썬으로 1행 덧붙이기(`{"trial":"gate0", "config":{…}, "verdict":…, "git":…}`).
 - 주봉 표는 이번 실행기에서 뺀다(보고 전용, 관문 1 계획에서 겹침과 함께 — 판정 무관).
