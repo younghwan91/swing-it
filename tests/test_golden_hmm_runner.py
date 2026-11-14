@@ -160,6 +160,10 @@ def test_train_set_uses_train_panel_only(small_fit):
     T = _panel(*R.TRAIN_DATA, seed=3)
     seqs, info = R.train_set(T)
     assert info["first_day"] >= R.TRAIN_DATA[0] and info["last_day"] <= R.TRAIN_DATA[1]
+    # 실제 쓴 관측의 첫·끝 날(유니버스 252일 + MA200 예열 뒤) — 패널 첫날이 아니다
+    days = T["days"]
+    assert info["first_obs_day"] > info["first_day"] and info["last_obs_day"] <= info["last_day"]
+    assert pd.Timestamp(info["first_obs_day"]) >= days[R.MIN_HISTORY - 1]
     assert info["n_seq"] >= 1 and all(len(q) >= R.TRAIN_MIN_LEN for q in seqs)
 
 
@@ -208,6 +212,32 @@ def test_pairing_drop_reasons():
 
 
 # --------------------------------------------------------------------------- 판정 규칙
+
+def test_q0_pool_info_per_month(J):
+    k = 10
+    ci, s = R.build_events(J, k)
+    p, nopool, info = R.q0_probs(J, k, ci, s)
+    days = J["days"]
+    ms = R.MQ.month_starts(days)
+    months = {f"{days[ms[np.searchsorted(ms, t, side='right') - 1]]:%Y-%m}" for t in s}
+    assert {r["month"] for r in info} == months
+    for r in info:
+        t_m = int(days.searchsorted(pd.Timestamp(r["month"] + "-01")))
+        pool = R.MQ.month_pool(days, R.MQ.forecast_z(J["y"], R.MQ.poly_forecast(J["y"], 1, k, 0), J["sigma"]), J["member"], t_m, k,
+                               years=R.POOL_YEARS, min_dates=R.POOL_MIN_DATES, return_origins=True)
+        if pool is None:
+            assert r["P"] == 0 and r["first_origin"] is None
+            continue
+        P, org = pool
+        assert r["P"] == len(P) and r["n_origin_dates"] == len(np.unique(org[:, 1]))
+        assert r["first_origin"] == f"{days[org[:, 1].min()]:%Y-%m-%d}" and r["first_origin"] >= R.JUDGE_DATA[0]
+    assert "q0_library" in R.RULINGS and "2007-11-22" in R.RULINGS["q0_library"]
+
+
+def test_config_uses_korea_min_history():
+    from swing_it.features.korea import MIN_HISTORY
+    assert R.config()["universe_min_history"] == MIN_HISTORY == R.MIN_HISTORY
+
 
 def test_cell_years_bar_is_6_of_8(monkeypatch):
     base = {"calib_ok": True, "skill_ok": True, "years_ok": True, "pass": True, "years_pos": 5, "n": 10}
@@ -278,9 +308,18 @@ def test_end_to_end_writes_once_and_refuses_rerun(tmp_path, monkeypatch, small_f
         assert set(c["reports"]) >= {"s1_vs_q0", "hmm_vs_s1", "gap_bins", "yearly_bss", "reliability"}
         assert c["drops"]["n_paired"] == c["n_events"]
     assert {"S", "bic_table", "fits", "selected", "s1", "train"} <= set(res["hmm"])
+    for f in res["hmm"]["fits"].values():
+        assert {"converged", "hit_cap", "n_iter", "tol", "delta_last"} <= set(f)
+    assert {"first_obs_day", "last_obs_day"} <= set(res["hmm"]["train"])
+    assert set(res["versions"]) == {"hmmlearn", "scikit-learn", "numpy", "numba"}
+    assert set(res["q0_pools"]) == {"5", "10", "15"}
+    row = res["q0_pools"]["10"][0]
+    assert set(row) == {"month", "P", "first_origin", "n_origin_dates"} and row["month"].startswith("2009-")
     assert res["m_sens"]["n_sample"] >= 1
     md = (logs / R.OUT_MD).read_text()
     assert "(검증 전)" in md
+    assert "상한 도달" in md and "q0 라이브러리 예열" in md and "| 2009-" in md
+    assert f"관측 {res['hmm']['train']['first_obs_day']} ~ {res['hmm']['train']['last_obs_day']}" in md
     lines = (logs / "TRIALS.jsonl").read_text().splitlines()
     assert len(lines) == 2 and lines[0] == '{"trial":"prereg"}' and json.loads(lines[1])["trial"] == "gate0"
     def _bad(c):

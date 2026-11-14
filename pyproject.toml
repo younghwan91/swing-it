@@ -61,3 +61,5 @@ testpaths = ["tests"]
 # repo 루트를 sys.path에 추가 → bare `pytest`도 research/ 모듈을 찾음(CI가 `python -m pytest`
 # 없이도 통과). numba/optuna는 옵셔널이라 미설치 환경에선 해당 테스트가 importorskip으로 스킵됨.
 pythonpath = ["."]
+# hmmlearn 0.3.3 이 NumPy 2.5 에서 내는 DeprecationWarning("Setting the shape …")만 끈다 — 모듈을 hmmlearn 으로 한정(다른 경고는 그대로).
+filterwarnings = ["ignore::DeprecationWarning:hmmlearn.*"]

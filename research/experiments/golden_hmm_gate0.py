@@ -10,7 +10,7 @@
   정지일(거래량 0·결측) 종가 NaN(ma_quad MQ-2), 1,000원 규칙 = 원 종가 없으면 수정 종가. 실적 ``eps_ok(source="earnings_dart_doc")``.
 - HMM 학습 패널: 같은 표 2016-09-01 ~ 2023-12-31(라벨 미사용 — 수익·이평선만), 같은 규약. 2024~ 는 읽지 않는다.
   학습 수열 = 유니버스 ∧ 관측 유한 연속 구간(길이 ≥ 60). 판정 패널은 학습에 들어가지 않는다(``check_windows``).
-- 사건: 유니버스(ADV20 ≥ 10억, 상장 252일) ∧ EPS↑ ∧ MA50 < MA200 ∧ 1 − MA50/MA200 ≤ 0.05 ∧ 2009-01-02 ≤ t ∧ t+k 거래일 ≤ 2016-08-31.
+- 사건: 유니버스(ADV20 ≥ 10억, 상장 korea.MIN_HISTORY = 252일) ∧ EPS↑ ∧ MA50 < MA200 ∧ 1 − MA50/MA200 ≤ 0.05 ∧ 2009-01-02 ≤ t ∧ t+k 거래일 ≤ 2016-08-31.
   라벨 = h ∈ 1..k 중 한 번이라도 MA50 > MA200(엄격), 창 NaN 이면 없음. 짝짓기 = HMM·q0 확률 ∧ 라벨이 모두 유한한 사건.
 - 상태 사후확률은 **순방향 필터만**(golden_hmm.forward_filter_panel). 경로 M = 200, 시드 = blake2b(code|date|k|"hmm").
 - 첫 실제 실행이 곧 판정 — 정본 ``research/logs/golden_hmm/`` 로만, ``research/ src/ tests/`` 가 깨끗한 트리에서만, 결과 파일이나 원장 gate0 줄이
@@ -47,7 +47,7 @@ from research.experiments import maquad_calib as MQC  # noqa: E402
 from research.signals import golden_hmm as GH  # noqa: E402
 from research.signals import ma_quad as MQ  # noqa: E402
 from research.signals import ma_quad_calib as CAL  # noqa: E402
-from swing_it.features.korea import universe_mask  # noqa: E402
+from swing_it.features.korea import MIN_HISTORY, universe_mask  # noqa: E402
 from swing_it.units import eok  # noqa: E402
 
 # --- 사전등록 고정값 ------------------------------------------------------------------------------------------
@@ -92,7 +92,11 @@ RULINGS = {
     "standardize": "HMM 은 학습 관측을 차원별 평균·표준편차로 표준화해 맞춘다(아핀 — BIC 순위·사후확률 불변). hmmlearn 의 min_covar 1e-3 이 "
                    "Δ5g(분산 ~1e-4)를 덮지 않게. 경로 z 주변분포는 원 단위로 되돌려 쓴다.",
     "filter_start": "필터는 종목의 첫 유한 관측 날 startprob 에서 시작, 관측 결측 날은 예측만(전이행렬), 첫 관측 전 사후 NaN.",
-    "tol": "hmmlearn 기본 tol=1e-2(총 로그우도) — n_iter ≤ 200 상한, 수렴 여부·반복 수를 fits 에 적는다.",
+    "tol": "hmmlearn 기본 tol=1e-2(총 로그우도) — n_iter ≤ 200 상한. hmmlearn monitor_.converged 는 상한 도달도 True 라 쓰지 않고, "
+           "converged = 마지막 개선폭 < tol(history 로 직접), hit_cap = (반복 = 상한)을 따로 적는다(리뷰 정정).",
+    "q0_library": "q0 의 3년 경험 라이브러리는 판정 패널이 2007-11-22 에 시작해 2009~2010 사건 달에서 3년을 다 채우지 못한다(원점은 패널 첫날 + "
+                  "σ 60일 예열 뒤부터). 코드 논리는 그대로(month_pool 의 3년 창 하한이 패널 앞이면 패널 첫날부터) — 사건 달·k 별 풀 크기 P, "
+                  "가장 이른 원점 날짜, 원점 날짜 수를 JSON q0_pools 에 적고 RESULTS.md 에 2009~2010 행을 보인다.",
     "bic_tie": "BIC 동률이면 작은 S.",
     "pairing": "칸 k 마다 HMM(선택 S)·q0 확률과 라벨이 모두 유한한 사건만. S=1 보고 열은 같은 사건 집합(유한하지 않으면 멈춘다).",
     "q0": "ma_quad q=0 절차 그대로 — poly_forecast(y,1,k,0)·forecast_z·month_pool(3년·원점 ≥120·u ≤ t_m−k)·member 상장 ≥ 70·"
@@ -188,7 +192,9 @@ def train_set(T: dict, code_mod: int = TRAIN_CODE_MOD):
     obs = GH.stack_obs(*GH.observations(C, SIGMA_W, SHORT, LONG))
     seqs, info = GH.train_sequences(obs, U, TRAIN_MIN_LEN)
     days = pd.DatetimeIndex(T["days"])
-    info |= {"first_day": str(days[0].date()), "last_day": str(days[-1].date()), "n_codes_panel": len(T["codes"]),
+    info |= {"first_day": str(days[0].date()), "last_day": str(days[-1].date()),
+             "first_obs_day": None if info["t_first"] is None else str(days[info["t_first"]].date()),
+             "last_obs_day": None if info["t_last"] is None else str(days[info["t_last"]].date()), "n_codes_panel": len(T["codes"]),
              "n_codes_used": int(U.any(axis=1).sum()), "code_mod": int(code_mod), "U_cells": int(U.sum())}
     return seqs, info
 
@@ -245,28 +251,33 @@ def labels(X: dict, ci, s, k: int) -> np.ndarray:
 # =============================================================================================== 확률
 
 def q0_probs(X: dict, k: int, ci, s, M: int = M_PATHS) -> tuple:
-    """(확률, 풀 없음) — ma_quad q=0 경험 라이브러리 경로의 교차 확률."""
+    """(확률, 풀 없음, 달별 풀 정보) — ma_quad q=0 경험 라이브러리 경로의 교차 확률. 풀 정보 = 사건 달마다 P·가장 이른 원점·원점 날짜 수."""
     ci = np.asarray(ci, dtype=np.int64)
     s = np.asarray(s, dtype=np.int64)
     days, codes = pd.DatetimeIndex(X["days"]), X["codes"]
     out = np.full(len(ci), np.nan)
     nopool = np.zeros(len(ci), dtype=bool)
+    pinfo: list = []
     if len(ci) == 0:
-        return out, nopool
+        return out, nopool, pinfo
     fc = MQ.poly_forecast(X["y"], 1, k, 0)
     z = MQ.forecast_z(X["y"], fc, X["sigma"])
     ms = MQ.month_starts(days)
     tm = ms[np.searchsorted(ms, s, side="right") - 1]
     for t_m in np.unique(tm):
         sel = np.flatnonzero(tm == t_m)
-        pool = MQ.month_pool(days, z, X["member"], int(t_m), k, years=POOL_YEARS, min_dates=POOL_MIN_DATES)
+        got = MQ.month_pool(days, z, X["member"], int(t_m), k, years=POOL_YEARS, min_dates=POOL_MIN_DATES, return_origins=True)
+        pool, org = got if got is not None else (None, None)
         if pool is None or len(pool) == 0:
+            pinfo.append({"month": f"{days[t_m]:%Y-%m}", "P": 0, "first_origin": None, "n_origin_dates": 0})
             nopool[sel] = True
             continue
+        pinfo.append({"month": f"{days[t_m]:%Y-%m}", "P": int(len(pool)), "first_origin": f"{days[int(org[:, 1].min())]:%Y-%m-%d}",
+                      "n_origin_dates": int(len(np.unique(org[:, 1])))})
         draws = {int(c): MQ.draw_index(codes[c], days[t_m], 0, 0, k, len(pool), M) for c in np.unique(ci[sel])}
         idx = np.stack([draws[int(c)] for c in ci[sel]])
         out[sel] = MQ.cross_probs(X["C"], fc, X["sigma"], pool, idx, ci[sel], s[sel], k, SHORT, LONG)
-    return out, nopool
+    return out, nopool, pinfo
 
 
 def hmm_probs(X: dict, model, post, k: int, ci, s, M: int = M_PATHS) -> np.ndarray:
@@ -278,10 +289,10 @@ def _task(args):
     X, ev = _G["X"], _G["EV"][k]
     t = time.time()
     if kind == "q0":
-        p, nopool = q0_probs(X, k, ev[0], ev[1])
+        p, nopool, pinfo = q0_probs(X, k, ev[0], ev[1])
     else:
-        p, nopool = hmm_probs(X, _G["models"][kind], _G["posts"][kind], k, ev[0], ev[1]), None
-    return kind, k, p, nopool, time.time() - t
+        p, nopool, pinfo = hmm_probs(X, _G["models"][kind], _G["posts"][kind], k, ev[0], ev[1]), None, None
+    return kind, k, p, (nopool, pinfo), time.time() - t
 
 
 def run_tasks(X: dict, EV: dict, models: dict, posts: dict, workers: int) -> dict:
@@ -294,14 +305,14 @@ def run_tasks(X: dict, EV: dict, models: dict, posts: dict, workers: int) -> dic
             _warmup()
             with mp.get_context("fork").Pool(min(workers, len(tasks)), maxtasksperchild=1) as pool:
                 it = pool.imap_unordered(_task, tasks)
-                for i, (kind, k, p, nopool, secs) in enumerate(it, 1):
-                    res[(kind, k)] = (p, nopool)
+                for i, (kind, k, p, extra, secs) in enumerate(it, 1):
+                    res[(kind, k)] = (p, *extra)
                     log(f"[{i}/{len(tasks)}] {kind} k={k}: 사건 {len(p):,} · 유한 {int(np.isfinite(p).sum()):,} · {secs:.1f}s "
                         f"(경과 {time.time() - t0:.0f}s)")
         else:
             for i, a in enumerate(tasks, 1):
-                kind, k, p, nopool, secs = _task(a)
-                res[(kind, k)] = (p, nopool)
+                kind, k, p, extra, secs = _task(a)
+                res[(kind, k)] = (p, *extra)
                 log(f"[{i}/{len(tasks)}] {kind} k={k}: 사건 {len(p):,} · 유한 {int(np.isfinite(p).sum()):,} · {secs:.1f}s")
     finally:
         _G.clear()
@@ -423,9 +434,21 @@ guard_rerun = MQC.guard_rerun
 git_sha = MQC.git_sha
 
 
+def versions() -> dict:
+    import hmmlearn
+    import sklearn
+
+    try:
+        import numba
+        nb = numba.__version__
+    except ImportError:  # pragma: no cover — numba 는 선택(ma_quad 규약)
+        nb = None
+    return {"hmmlearn": hmmlearn.__version__, "scikit-learn": sklearn.__version__, "numpy": np.__version__, "numba": nb}
+
+
 def config() -> dict:
     return {"ks": KS, "gate_k": GATE_K, "gate_min_cells": GATE_MIN_CELLS, "M": M_PATHS, "gap_max": GAP_MAX, "short": SHORT, "long": LONG,
-            "adv_floor_mn": ADV_FLOOR, "universe_min_history": 252, "member_hist_q0": MEMBER_HIST_Q0, "sigma_w": SIGMA_W,
+            "adv_floor_mn": ADV_FLOOR, "universe_min_history": MIN_HISTORY, "member_hist_q0": MEMBER_HIST_Q0, "sigma_w": SIGMA_W,
             "pool_years": POOL_YEARS, "pool_min_dates": POOL_MIN_DATES, "event_start": EVENT_START, "label_end": LABEL_END,
             "judge_data": JUDGE_DATA, "train_data": TRAIN_DATA, "table": PRICE_TABLE, "eps_source": EPS_SOURCE, "years": YEARS,
             "years_min_pos": YEARS_MIN_POS, "S_range": S_RANGE, "hmm_seed": HMM_SEED, "n_iter": N_ITER, "train_min_len": TRAIN_MIN_LEN,
@@ -471,16 +494,28 @@ def results_md(res: dict, meta: dict) -> str:
         L.append(f"| {k} | " + " | ".join("—" if yb.get(y) is None or not np.isfinite(yb.get(y, np.nan)) else f"{yb[y]:+.4f}" for y in YEARS)
                  + " |")
     h = res["hmm"]
-    L += ["", f"### HMM — 선택 S = {h['S']} (BIC 최소, 표준화 공간)", "", "| S | BIC | 반복 | 수렴 |", "|---|---|---|---|"]
+    L += ["", f"### HMM — 선택 S = {h['S']} (BIC 최소, 표준화 공간)", "",
+          "| S | BIC | 반복 | 수렴(마지막 개선 < tol) | 상한 도달 | 마지막 개선 |", "|---|---|---|---|---|---|"]
     for S, b in h["bic_table"].items():
         f = h["fits"][S]
-        L.append(f"| {S} | {b:,.1f} | {f['n_iter']} | {f['converged']} |")
+        L.append(f"| {S} | {b:,.1f} | {f['n_iter']}/{f['n_iter_max']} | {f['converged']} | {f['hit_cap']} | {f['delta_last']:.4g} |")
     L += ["", f"학습: 수열 {h['train']['n_seq']:,} · 관측 {h['train']['n_obs']:,} · 종목 {h['train']['n_codes_used']:,} "
-          f"({h['train']['first_day']} ~ {h['train']['last_day']}).", "",
+          f"(관측 {h['train']['first_obs_day']} ~ {h['train']['last_obs_day']}; 패널 {h['train']['first_day']} ~ {h['train']['last_day']}).", "",
           "### 짝짓기 탈락", "", "| k | 후보 | 라벨 NaN | HMM NaN | q0 풀 없음 | q0 NaN | 짝 |", "|---|---|---|---|---|---|---|"]
     for k in KS:
         d = res["cells"][k]["drops"]
         L.append(f"| {k} | {d['n_in']:,} | {d['label']:,} | {d['hmm_nan']:,} | {d['q0_nopool']:,} | {d['q0_nan']:,} | {d['n_paired']:,} |")
+    qp = res.get("q0_pools", {})
+    L += ["", "### q0 라이브러리 예열(2009~2010 사건 달 — 3년 창이 패널 시작 2007-11-22 에 잘림)", "",
+          "| 달 | " + " | ".join(f"k={k} P / 가장 이른 원점 / 원점 날짜" for k in KS) + " |", "|---|" + "---|" * len(KS)]
+    by = {k: {r["month"]: r for r in qp.get(k, [])} for k in KS}
+    months = sorted({m for k in KS for m in by[k] if m < "2011-01"})
+    for m in months:
+        cells_ = []
+        for k in KS:
+            r = by[k].get(m)
+            cells_.append("—" if r is None else f"{r['P']:,} / {r['first_origin'] or '—'} / {r['n_origin_dates']}")
+        L.append(f"| {m} | " + " | ".join(cells_) + " |")
     if "m_sens" in res:
         m = res["m_sens"]
         L += ["", f"M 민감도(k={m['k']}, 1% 표본 n={m['n']:,}): |Δp| 중앙 {m.get('q50', float('nan')):.4f} · 90% {m.get('q90', float('nan')):.4f} · "
@@ -563,9 +598,11 @@ def _smoke(con, eps_ok, args) -> int:
     t_hmm = time.time() - t
     log(f"탐침 hmm_cross_probs k={k} 전 사건: 유한 {int(np.isfinite(p).sum()):,} · {t_hmm:.1f}s")
     t = time.time()
-    q, nopool = q0_probs(X, k, *EV[k])
+    q, nopool, pinfo = q0_probs(X, k, *EV[k])
     t_q0 = time.time() - t
-    log(f"탐침 q0 k={k} 전 사건: 유한 {int(np.isfinite(q).sum()):,} · 풀 없음 {int(nopool.sum()):,} · {t_q0:.1f}s")
+    log(f"탐침 q0 k={k} 전 사건: 유한 {int(np.isfinite(q).sum()):,} · 풀 없음 {int(nopool.sum()):,} · {t_q0:.1f}s · "
+        f"사건 달 {len(pinfo)} · 첫 달 {pinfo[0]['month'] if pinfo else '—'} 풀 P {pinfo[0]['P'] if pinfo else 0:,}"
+        f"(가장 이른 원점 {pinfo[0]['first_origin'] if pinfo else '—'}, 원점 날짜 {pinfo[0]['n_origin_dates'] if pinfo else 0})")
     y = labels(X, *EV[k], k)
     _, drops = pair({"hmm": p, "q0": q, "hmm1": p}, nopool, y)
     log(f"탐침 짝짓기 k={k}: {drops}")
@@ -641,11 +678,12 @@ def main(argv=None) -> int:
     R = run_tasks(X, EV, models, posts, args.workers)
     cells, oks = {}, {}
     for k in KS:
-        probs = {kind: R[(kind, k)][0] for kind in ("hmm", "q0", "hmm1")}
+        probs = {kind: R[(kind, k)][0] for kind in ("hmm", "q0", "hmm1")}  # R[(kind, k)] = (확률, 풀 없음, 풀 정보)
         cells[k] = assemble_cell(X, k, EV[k], Y[k], probs, R[("q0", k)][1], out)
         oks[k], _ = pair(probs, R[("q0", k)][1], Y[k])
         log(f"칸 k={k} 조립 — 짝 {cells[k]['n_events']:,}")
-    res = {"gate": gate({k: cells[k]["verdict"].get("pass", False) for k in KS}), "cells": cells}
+    res = {"gate": gate({k: cells[k]["verdict"].get("pass", False) for k in KS}), "cells": cells,
+           "q0_pools": {k: R[("q0", k)][2] for k in KS}, "versions": versions()}
     res["m_sens"] = m_sens(X, models["hmm"], posts["hmm"], EV[MSENS["k"]], oks[MSENS["k"]])
     res["hmm"] = {"S": fit["S"], "bic_table": fit["bic_table"], "fits": fit["fits"], "selected": fit["model"].report(),
                   "s1": fit["models"][1].report(), "all": {S: m.report() for S, m in fit["models"].items()}, "train": tinfo}

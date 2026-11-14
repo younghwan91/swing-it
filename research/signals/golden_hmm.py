@@ -62,13 +62,18 @@ def train_sequences(X: np.ndarray, U: np.ndarray, min_len: int = 60):
     X = np.asarray(X, dtype=np.float64)
     ok = np.asarray(U, dtype=bool) & np.isfinite(X).all(axis=-1)
     seqs = []
+    t_first, t_last = None, None
     for c in range(ok.shape[0]):
         row = ok[c].astype(np.int8)
         d = np.diff(np.r_[0, row, 0])
         for a, b in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
             if b - a >= min_len:
                 seqs.append(np.ascontiguousarray(X[c, a:b]))
-    return seqs, {"n_seq": len(seqs), "n_obs": int(sum(len(q) for q in seqs)), "min_len": int(min_len)}
+                t_first = int(a) if t_first is None else min(t_first, int(a))
+                t_last = int(b - 1) if t_last is None else max(t_last, int(b - 1))
+    # t_first·t_last = 쓴 수열의 첫·끝 행(패널 행 번호) — 패널 끝이 아니라 실제 학습 관측 범위
+    return seqs, {"n_seq": len(seqs), "n_obs": int(sum(len(q) for q in seqs)), "min_len": int(min_len),
+                  "t_first": t_first, "t_last": t_last}
 
 
 # =============================================================================================== 모형
@@ -140,8 +145,13 @@ def _fit_one(S: int):
     hm = GaussianHMM(n_components=S, covariance_type="full", n_iter=n_iter, random_state=seed)
     hm.fit(Xs, lengths)
     bic = float(hm.bic(Xs, lengths))
-    info = {"n_iter": int(hm.monitor_.iter), "converged": bool(hm.monitor_.converged),
-            "loglik_std_space": float(hm.monitor_.history[-1]) if len(hm.monitor_.history) else float("nan"),
+    mon = hm.monitor_
+    h = list(mon.history)
+    # monitor_.converged 는 iter == n_iter(상한 도달)여도 True(hmmlearn base.py) — 수렴은 마지막 개선폭으로 직접, 상한 도달은 따로
+    delta = float(h[-1] - h[-2]) if len(h) >= 2 else float("nan")
+    info = {"n_iter": int(mon.iter), "n_iter_max": int(n_iter), "hit_cap": bool(mon.iter == n_iter),
+            "converged": bool(len(h) >= 2 and h[-1] - h[-2] < mon.tol), "tol": float(mon.tol), "delta_last": delta,
+            "loglik_std_space": float(h[-1]) if len(h) else float("nan"),
             "n_obs": int(len(Xs)), "n_seq": int(len(lengths)), "secs": time.time() - t}
     return S, (hm.startprob_, hm.transmat_, hm.means_, hm.covars_), bic, info
 

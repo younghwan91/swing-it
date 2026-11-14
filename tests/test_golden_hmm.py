@@ -279,3 +279,21 @@ def test_train_sequences_universe_runs():
     assert lens == [90, 120, 179]
     assert all(np.isfinite(q).all() for q in seqs)
     assert info["n_seq"] == 3 and info["n_obs"] == 389
+    assert info["t_first"] == 0 and info["t_last"] == 299        # 쓴 수열의 첫·끝 행(패널 끝이 아니라)
+    U[1] = False
+    _, info2 = GH.train_sequences(X, U, min_len=60)
+    assert info2["t_first"] == 10 and info2["t_last"] == 99
+    _, none = GH.train_sequences(X, np.zeros_like(U), min_len=60)
+    assert none["n_seq"] == 0 and none["t_first"] is None and none["t_last"] is None
+
+
+def test_fit_records_converged_and_cap_separately():
+    """hmmlearn monitor_.converged 는 반복 상한에 닿아도 True — 수렴은 history 로 직접, 상한 도달은 따로 적는다."""
+    X = _sample_two_regime(n_seq=6, T=200, seed=2)
+    cap = GH.fit_hmm(X, S_range=(2, 2), seed=0, n_iter=2)["fits"][2]
+    assert cap["n_iter"] == 2 and cap["hit_cap"] is True
+    assert cap["converged"] is False                              # 2 반복에선 개선폭이 tol 보다 크다
+    assert cap["delta_last"] >= cap["tol"]
+    free = GH.fit_hmm(X, S_range=(1, 1), seed=0, n_iter=200)["fits"][1]
+    assert free["converged"] is True and free["hit_cap"] is False and free["n_iter"] < 200
+    assert free["delta_last"] < free["tol"]
