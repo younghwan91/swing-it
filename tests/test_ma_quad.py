@@ -529,3 +529,67 @@ def test_cross_invalid_args():
         cross_probs(C, np.zeros((1, 300, 5)), np.zeros((1, 300)), np.zeros((2, 3)), np.zeros((1, 200), dtype=np.int64),
                     np.array([0]), np.array([250]), 5)         # pool 열 < k
     assert cross_realized(C, np.array([], dtype=np.int64), np.array([], dtype=np.int64), 5).shape == (0,)
+
+
+# ---------------------------------------------------------------- golden_bt: 데드 교차(dead=True) — 같은 함수, 부등호만 반대
+
+def _pd_dead(C, ci, s, k, short, long):
+    out = np.full(len(ci), np.nan)
+    for j, (c, t) in enumerate(zip(ci, s)):
+        if t + k >= C.shape[1]:
+            continue
+        a = pd.Series(C[c]).rolling(short, min_periods=short).mean().to_numpy()[t + 1 : t + k + 1]
+        b = pd.Series(C[c]).rolling(long, min_periods=long).mean().to_numpy()[t + 1 : t + k + 1]
+        if np.isnan(a).any() or np.isnan(b).any():
+            continue
+        out[j] = float((a < b).any())
+    return out
+
+
+@pytest.mark.parametrize("k", [1, 5, 10, 15])
+def test_dead_probs_zero_sigma_match_realized(k):
+    C = _crossing_panel(seed=5)
+    n = C.shape[1]
+    s = np.arange(200, n - k - 1, 3)
+    ci = np.arange(len(s)) % 3
+    fcl = np.full(C.shape + (k,), np.nan)
+    for c, t in zip(ci, s):
+        fcl[c, t] = np.log(C[c, t + 1 : t + k + 1])
+    args = (C, fcl, np.zeros(C.shape), np.zeros((2, k)), np.zeros((len(s), 200), dtype=np.int64), ci, s, k)
+    p = cross_probs(*args, dead=True)
+    exp = _pd_dead(C, ci, s, k, 50, 200)
+    assert np.array_equal(p, exp)
+    assert np.array_equal(cross_realized(C, ci, s, k, dead=True), exp)
+    assert 0 < exp.sum() < len(exp)
+    assert np.array_equal(cross_probs(*args), _pd_cross(C, ci, s, k, 50, 200))     # 기본값은 예전 그대로(골든)
+
+
+def test_dead_probs_path_arithmetic_and_tie():
+    k = 10
+    C = _crossing_panel(seed=6)
+    rng = np.random.default_rng(7)
+    pool = np.cumsum(rng.normal(size=(40, k)), axis=1)
+    sig = np.full(C.shape, 0.03)
+    idx = rng.integers(0, 40, (1, 200))
+    fracs = []
+    for c in range(3):
+        ma50 = pd.Series(C[c]).rolling(50).mean().to_numpy()
+        ma200 = pd.Series(C[c]).rolling(200).mean().to_numpy()
+        gap = ma50 / ma200 - 1                               # 골든 뒤 MA50 이 MA200 바로 위 — 데드가 0·1 아닌 비율로 나오는 자리
+        for t in np.flatnonzero((gap > 0) & (gap < 0.02) & (np.arange(len(gap)) >= 250) & (np.arange(len(gap)) < 650))[::10]:
+            fcl = np.full(C.shape + (k,), np.nan)
+            fcl[c, t] = np.log(C[c, t]) - 0.01 * np.arange(1, k + 1)
+            cnt = 0
+            for m in range(200):
+                ser = pd.Series(np.concatenate([C[c, : t + 1], np.exp(fcl[c, t] + sig[c, t] * pool[idx[0, m]])]))
+                a = ser.rolling(50).mean().to_numpy()[t + 1 :]
+                b = ser.rolling(200).mean().to_numpy()[t + 1 :]
+                cnt += bool((a < b).any())
+            p = cross_probs(C, fcl, sig, pool, idx, np.array([c]), np.array([t]), k, dead=True)
+            assert abs(p[0] - cnt / 200) < 1e-12
+            fracs.append(cnt / 200)
+    assert any(0 < f < 1 for f in fracs)
+    Cf = np.full((1, 400), 10.0)                          # 같음은 교차가 아니다(엄격)
+    p = cross_probs(Cf, np.full((1, 400, 5), np.log(10.0)), np.zeros((1, 400)), np.zeros((3, 5)), np.zeros((1, 200), dtype=np.int64),
+                    np.array([0]), np.array([250]), 5, dead=True)
+    assert p[0] == 0.0 and cross_realized(Cf, np.array([0]), np.array([250]), 5, dead=True)[0] == 0.0
