@@ -193,7 +193,7 @@ def stitch(parts: list) -> pd.Series:
     for s, x in parts:
         if len(s) == 0:
             continue
-        out.append(s / s.iloc[0] * base)
+        out.append(pd.Series(s.to_numpy(float) / float(s.iloc[0]) * base, index=s.index))     # attrs 없는 사본(조각 attrs 는 길이가 달라 concat 이 깨진다)
         ex.append(np.asarray(x, dtype=float))
         base = float(out[-1].iloc[-1])
     res = pd.concat(out)

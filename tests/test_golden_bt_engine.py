@@ -404,3 +404,10 @@ def test_trade_path_suspension_end_and_prob_add():
     r = E.trade_path(D, 0, 5, 20, "prob", 1.0, 39)
     assert r["ret"] == pytest.approx(100 * (1 - COST) / 100 - 1)
     assert r["R"] == pytest.approx(0.045 * r["ret"] / 0.0025)
+
+
+def test_trade_path_zero_weight_prob():
+    D = _lv(mk())
+    D["PG"][0, 5] = 0.0
+    r = E.trade_path(D, 0, 5, 10, "prob", 1.0, 39)
+    assert r["R"] == 0.0 and r["reason"] == "zero_weight"

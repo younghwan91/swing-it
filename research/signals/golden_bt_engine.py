@@ -225,6 +225,8 @@ def trade_path(D: dict, ci: int, dec: int, hold: int, sizing: str, cost_mult: fl
     o = float(O[ci, t0])
     base = min(W_CAP, RISK / (1.0 - stop / o))
     w = base * (pg0 if prob else 1.0)
+    if w <= 0:                                           # prob 에 P_g = 0 — 비중 0 인 체결(같은 비중 규칙 그대로, R = 0)
+        return {"ci": ci, "dec": dec, "t0": t0, "t1": t0, "R": 0.0, "ret": 0.0, "reason": "zero_weight"}
     qty, basis, last = w / o, w, o
     golden = False
     sell_at = t0 + max(int(hold), 1)
