@@ -27,7 +27,9 @@ dependencies = [
 [project.optional-dependencies]
 viz = ["matplotlib>=3.8"]
 pg = ["psycopg2-binary>=2.9"]
-dev = ["pytest>=8.0", "ruff==0.16.2", "matplotlib>=3.8"]
+# 연구 전용(research/ — src 는 import 하지 않는다): 골든 HMM 관문 0 의 가우시안 HMM(research/signals/golden_hmm.py).
+research = ["hmmlearn>=0.3.3"]
+dev = ["pytest>=8.0", "ruff==0.16.2", "matplotlib>=3.8", "hmmlearn>=0.3.3"]
 
 [project.scripts]
 # 데이터 수집 CLI(kq-collect*)는 collectors/와 함께 quant-airflow로 이전됨.
