@@ -550,6 +550,7 @@ def assemble(X1: dict, D1: dict, wf: dict, X2: dict, D2: dict, rep: dict, n2: di
         "exposure_mean": float(np.mean(eq2.attrs["expo"])), "kospi_cagr": W.cagr(kx2.dropna()) if kx2.notna().sum() > 1 else float("nan"),
         "yearly_return_x2": W.yearly_returns(eq2), "rsum_by_cfg": rep["rsum_all"].tolist(),
         "null1": _qs(rnull1), "null2": {**_qs(rnull2), "n_short_total": int(sum(r["n_short"] for r in n2["rep"]))},
+        "null2_holds_src": W.null2_holds(rep["trades"])[1],
         "skips": eq2.attrs["skips"], "index_cover": _index_cover(X2, s2, e2), "probs": P2info,
         "eval": [str(D2["days"][s2].date()), str(D2["days"][e2].date())],
     }
