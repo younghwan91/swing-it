@@ -365,11 +365,14 @@ def _lv(D):
     return D
 
 
+EQ = [(0, 1.0)]
+
+
 def test_trade_path_hold_exit():
     D = _lv(mk())
     D["C"][0, 9] = 103.0
     D["O"][0, 10] = 104.0
-    r = E.trade_path(D, 0, 5, 4, "eq", 1.0, 39)                       # 체결 6, 4 거래일째 시가 = 10
+    r = E.trade_path(D, 0, 5, 4, EQ, 1.0, 39)                         # 체결 6, 4 거래일째 시가 = 10
     w = w_eq(95.0, 100.0)
     assert r["t0"] == 6 and r["t1"] == 10 and r["reason"] == "hold"
     assert r["R"] == pytest.approx(w * (104 * (1 - COST) / 100 - 1) / 0.0025)
@@ -379,39 +382,72 @@ def test_trade_path_stop_first_and_fill_rules():
     D = _lv(mk())
     D["C"][0, 7] = 94.0
     D["O"][0, 8] = 90.0
-    r = E.trade_path(D, 0, 5, 10, "eq", 2.0, 39)
+    r = E.trade_path(D, 0, 5, 10, EQ, 2.0, 39)
     assert r["reason"] == "stop" and r["t1"] == 8
     assert r["ret"] == pytest.approx(90 * (1 - 2 * COST) / 100 - 1)
     D["O"][0, 6] = 129.0
-    assert E.trade_path(D, 0, 5, 10, "eq", 1.0, 39) is None
+    assert E.trade_path(D, 0, 5, 10, EQ, 1.0, 39) is None
     D["O"][0, 6] = 94.0
-    assert E.trade_path(D, 0, 5, 10, "eq", 1.0, 39) is None
-    D = _lv(mk())
-    assert E.trade_path(D, 0, 5, 10, "prob", 1.0, 39) is None           # prob 인데 P_g 없음
+    assert E.trade_path(D, 0, 5, 10, EQ, 1.0, 39) is None
+    with pytest.raises(ValueError):
+        E.trade_path(_lv(mk()), 0, 5, 10, [(2, 1.0)], 1.0, 39)
 
 
-def test_trade_path_suspension_end_and_prob_add():
+def test_trade_path_suspension_end_and_mult_path_adds():
     D = _lv(mk())
     D["O"][0, 10] = np.nan
     D["C"][0, 10] = np.nan
-    r = E.trade_path(D, 0, 5, 4, "eq", 1.0, 39)
+    r = E.trade_path(D, 0, 5, 4, EQ, 1.0, 39)
     assert r["t1"] == 11
-    r = E.trade_path(D, 0, 5, 100, "eq", 1.0, 20)
+    r = E.trade_path(D, 0, 5, 100, EQ, 1.0, 20)
     assert r["reason"] == "end" and r["t1"] == 20
     D = _lv(mk())
-    D["ma50"][0, 5] = 99.0
-    D["PG"][0, 5] = 0.5
-    D["PG"][0, 7] = 0.9
-    r = E.trade_path(D, 0, 5, 20, "prob", 1.0, 39)
+    D["ma50"][0, 5] = 99.0                                                # 기준 5%
+    r = E.trade_path(D, 0, 5, 20, [(0, 0.5), (2, 0.9)], 1.0, 39)          # 진입 2.5%, 체결 뒤 2일째(8) 원가 4.5% 까지
     assert r["ret"] == pytest.approx(100 * (1 - COST) / 100 - 1)
     assert r["R"] == pytest.approx(0.045 * r["ret"] / 0.0025)
+    r = E.trade_path(D, 0, 5, 1, [(0, 0.5), (2, 0.9)], 1.0, 39)           # 추가 날 전에 청산 → 추가 없음
+    assert r["R"] == pytest.approx(0.025 * r["ret"] / 0.0025)
+    D["O"][0, 8] = 129.1                                                  # 추가 체결일 상한가 → 그 추가 없음
+    r = E.trade_path(D, 0, 5, 20, [(0, 0.5), (2, 0.9)], 1.0, 39)
+    assert r["R"] == pytest.approx(0.025 * (100 * (1 - COST) / 100 - 1) / 0.0025)
 
 
-def test_trade_path_zero_weight_prob():
+def test_trade_path_ignores_own_pg():
+    """GB-2 C1: 무작위 종목 자신의 P_g(0 이든 NaN 이든)는 비중에 쓰지 않는다."""
     D = _lv(mk())
-    D["PG"][0, 5] = 0.0
-    r = E.trade_path(D, 0, 5, 10, "prob", 1.0, 39)
-    assert r["R"] == 0.0 and r["reason"] == "zero_weight"
+    D["ma50"][0, 5] = 99.0
+    for pg in (0.0, np.nan, 1.0):
+        D["PG"][0, :] = pg
+        r = E.trade_path(D, 0, 5, 20, [(0, 0.8)], 1.0, 39)
+        assert r["R"] == pytest.approx(0.04 * (100 * (1 - COST) / 100 - 1) / 0.0025)
+
+
+# ---------------------------------------------------------------------------------------------- 정정 GB-2: 불타기 = 원가 기준
+
+def test_gb2_no_add_when_pg_flat_and_price_falls():
+    """P_g 0.8 그대로, 가격만 100 → 97(손절 95 위): 시가 평가 비중은 줄지만 원가 비중은 그대로 → 추가 없음(물타기 금지)."""
+    D = mk(T=20)
+    enter(D, pg=0.8)
+    D["PG"][0, 6:12] = 0.8
+    D["C"][0, 6:] = 97.0
+    D["O"][0, 7:] = 97.0
+    tr, _ = run(D, {**CFG, "sizing": "prob"}, end=12)
+    r = tr.iloc[0]
+    assert r["n_adds"] == 0 and r["cost_basis"] == pytest.approx(r["w0"])
+
+
+def test_gb2_add_when_pg_rises_buys_cost_basis_difference():
+    D = mk(T=20)
+    enter(D, pg=0.5)
+    D["ma50"][0, 5] = 99.0                                                # 기준 5%, 진입 2.5%
+    D["C"][0, 6:] = 120.0                                                 # 가격이 올라 시가 평가 비중은 3% — 원가 비중 2.5% 로 비교
+    D["O"][0, 7:] = 120.0
+    D["PG"][0, 7] = 0.6                                                   # 목표 3% → 원가 차이 0.5%p 추가(시가 평가라면 추가 없음)
+    tr, _ = run(D, {**CFG, "sizing": "prob"}, end=15)
+    r = tr.iloc[0]
+    assert r["n_adds"] == 1 and r["cost_basis"] == pytest.approx(0.03)
+    assert r["fills"][1][0] == 8 and r["fills"][1][1] == pytest.approx(0.005)
 
 
 # ---------------------------------------------------------------------------------------------- 정정 GB-1: 정지일 창 대체 청산

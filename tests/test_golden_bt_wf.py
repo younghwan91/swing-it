@@ -109,9 +109,9 @@ def test_null2_matches_daily_counts():
     D["ma50"] = D["C"] * 0.9
     D["pool"][:] = False
     D["pool"][:, [10, 50, 90]] = True
-    plan = [(10, 3, "eq", 299), (50, 5, "prob", 299), (90, 1, "eq", 299)]
-    rng = np.random.default_rng(0)
-    r = W.null2_rep(D, plan, np.array([5, 10]), rng)
+    eq_, pr = [(0, 1.0)], [(0, 0.7), (3, 0.9)]
+    plan = [(10, [eq_] * 3, 299), (50, [pr] * 5, 299), (90, [eq_], 299)]
+    r = W.null2_rep(D, plan, np.array([5, 10]), np.random.default_rng(0))
     assert r["n_fill"] == 9 and r["n_short"] == 0 and np.isfinite(r["R_sum"])
     D["pool"][:, 50] = False
     D["pool"][:2, 50] = True                               # 그 날 풀이 2 뿐 → 모자람 3
@@ -119,13 +119,41 @@ def test_null2_matches_daily_counts():
     assert r["n_fill"] == 6 and r["n_short"] == 3
 
 
-def test_null2_plan_and_holds():
+def test_null2_pg_zero_pool_still_matches_strategy_sizing():
+    """GB-2 C1: 풀 종목 P_g 가 전부 0 이어도 무작위 쪽 비중 = 기준 × 짝 전략 거래의 진입 P_g — R 크기가 전략 규칙과 같다."""
+    T = 40
+    days = pd.bdate_range("2020-01-01", periods=T)
+    n = 10
+    C = np.full((n, T), 100.0)
+    C[:, 12:] = 110.0
+    D = {"days": days, "codes": [f"{i:06d}" for i in range(n)], "O": C.copy(), "C": C, "ma50": np.full((n, T), 99.0),
+         "ma200": np.full((n, T), 120.0), "pool": np.zeros((n, T), bool), "PG": np.zeros((n, T), np.float32),
+         "PD": np.full((n, T), np.nan, np.float32), "lu": np.full(T, 1.29), "cost": np.full((2, T), COST), "mkt": np.zeros(n, np.int64)}
+    D["last_valid"] = E.last_valid_index(C)
+    D["pool"][:, 5] = True                                  # 무작위 쪽 풀 — P_g 0
+    strat = pd.DataFrame({"dec_day": [days[5], days[5]], "pg_entry": [0.6, 0.9], "ci": [3, 4], "t0": [6, 6], "base_w": [0.05, 0.05],
+                          "e_ref": [1.0, 1.0], "fills": [[(6, 0.03, 100.0)], [(6, 0.045, 100.0)]], "reason": ["dead", "dead"], "hold": [20, 20]})
+    plan = W.null2_plan(strat, days, T - 1)
+    assert plan == [(5, [[(0, pytest.approx(0.9))], [(0, pytest.approx(0.6))]], T - 1)]   # 그날 순위 = 진입 P_g 내림차순
+    r = W.null2_rep(D, plan, np.array([20]), np.random.default_rng(1))
+    ret = 110 * (1 - 2 * COST) / 100 - 1                    # 기준 = 0.25%/(1 − 99/100) → 상한 5%
+    assert r["n_fill"] == 2 and r["R_sum"] == pytest.approx((0.05 * 0.9 + 0.05 * 0.6) * ret / 0.0025)
+
+
+def test_null2_plan_mult_path_from_fills_and_holds():
     days = pd.bdate_range("2020-01-01", periods=30)
-    tr = pd.DataFrame({"dec_day": [days[3], days[3], days[7]], "sizing": ["eq", "eq", "prob"], "reason": ["stop", "dead", "end"],
-                       "hold": [2, 9, 15]})
-    assert W.null2_plan(tr, days, 29) == [(3, 2, "eq", 29), (7, 1, "prob", 29)]
+    tr = pd.DataFrame({"dec_day": [days[3], days[3], days[7]], "pg_entry": [0.5, 0.7, 0.9], "ci": [1, 0, 2], "t0": [4, 4, 8],
+                       "base_w": [0.04, 0.05, 0.02], "e_ref": [1.0, 2.0, 1.0],
+                       "fills": [[(4, 0.02, 10.0), (9, 0.012, 11.0)], [(4, 0.07, 5.0)], [(8, 0.02, 3.0)]],
+                       "reason": ["stop", "dead", "end"], "hold": [2, 9, 15]})
+    plan = W.null2_plan(tr, days, 29)
+    assert [p[0] for p in plan] == [3, 7] and plan[0][2] == 29
+    a, b = plan[0][1]
+    assert a == [(0, pytest.approx(0.7))]                    # P_g 0.7 이 먼저(순위), 0.07 / (0.05 × 2)
+    assert b == [(0, pytest.approx(0.5)), (5, pytest.approx(0.8))]
+    assert plan[1][1] == [[(0, pytest.approx(1.0))]]
     h, src = W.null2_holds(tr)
-    assert list(h) == [9, 15] and src == "non_stop"
+    assert list(h) == [9] and src == "non_stop"             # 손절·끝 절단 제외
     h, src = W.null2_holds(tr.assign(reason="stop"))
     assert list(h) == [2, 9, 15] and src == "all_trades_fallback"
 

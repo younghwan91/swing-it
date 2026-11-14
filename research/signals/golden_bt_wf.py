@@ -114,42 +114,54 @@ def null1_folds(rsum_table, n: int = N_NULL, seed: int = 0) -> np.ndarray:
 
 
 def null2_rep(D: dict, plan: list, holds: np.ndarray, rng, cost_mult: float = COST_JUDGE) -> dict:
-    """널 ② 한 번: ``plan`` = [(판정일 행, 진입 수, sizing, end 행)] — 그 날 같은 풀(pool ∧ P_g 유한)에서 무작위로 같은 수를 산다
-    (그날 안 비복원, 못 사면 다음 후보로). 보유 기간은 ``holds`` 에서 복원 추출. 반환 R 합·체결 수·모자란 수."""
+    """널 ② 한 번: ``plan`` = [(판정일 행, [짝 전략 거래의 원가 배수 경로 — 그날 순위 순], end 행)]. 그날 같은 풀(pool ∧ P_g 유한)에서
+    무작위 종목(그날 안 비복원, 못 사면 다음 후보)을 사서 k 번째 체결을 k 번째 전략 거래와 짝지어 그 배수 경로로 산다(정정 GB-2 C1).
+    보유 기간은 ``holds`` 에서 복원 추출. 반환 R 합·체결 수·모자란 수."""
     pool, PG = D["pool"], D["PG"]
     total, n_fill, short = 0.0, 0, 0
-    for dec, cnt, sizing, end in plan:
+    for dec, paths, end in plan:
         with np.errstate(invalid="ignore"):
             cand = np.flatnonzero(pool[:, dec] & np.isfinite(PG[:, dec]))
         got = 0
         for ci in rng.permutation(cand):
-            if got >= cnt:
+            if got >= len(paths):
                 break
-            r = E.trade_path(D, int(ci), int(dec), int(holds[rng.integers(0, len(holds))]), sizing, cost_mult, int(end))
+            r = E.trade_path(D, int(ci), int(dec), int(holds[rng.integers(0, len(holds))]), paths[got], cost_mult, int(end))
             if r is None:
                 continue
             total += r["R"]
             got += 1
         n_fill += got
-        short += cnt - got
+        short += len(paths) - got
     return {"R_sum": total, "n_fill": n_fill, "n_short": short}
 
 
+def mult_path(row) -> list:
+    """전략 거래 하나의 원가 배수 경로 [(체결 뒤 거래일 수, 누적 매수 금액 ÷ (기준 비중 × 진입 자산))]."""
+    den = float(row["base_w"]) * float(row["e_ref"])
+    t0 = int(row["t0"])
+    out, cum = [], 0.0
+    for t, amt, _ in row["fills"]:
+        cum += float(amt)
+        out.append((int(t) - t0, cum / den))
+    return out
+
+
 def null2_plan(trades: pd.DataFrame, days, end: int) -> list:
-    """선택 설정 거래(체결된 것)의 판정일별 진입 수 → 널 ② 계획. ``trades`` 에 sizing 열."""
+    """선택 설정 거래(체결된 것)의 판정일별 배수 경로 목록(그날 순위 = 진입 P_g 내림차순, 같으면 종목 행 — 엔진 순서) → 널 ② 계획."""
     if trades.empty:
         return []
     d = pd.DatetimeIndex(days)
-    dec = d.get_indexer(pd.to_datetime(trades["dec_day"]))
-    g = pd.DataFrame({"dec": dec, "sizing": trades["sizing"].to_numpy()}).groupby(["dec", "sizing"]).size()
-    return [(int(a), int(c), str(b), int(end)) for (a, b), c in g.items()]
+    tr = trades.assign(_dec=d.get_indexer(pd.to_datetime(trades["dec_day"])))
+    tr = tr.sort_values(["_dec", "pg_entry", "ci"], ascending=[True, False, True], kind="stable")
+    return [(int(dec), [mult_path(r) for _, r in g.iterrows()], int(end)) for dec, g in tr.groupby("_dec", sort=True)]
 
 
 def null2_holds(trades: pd.DataFrame) -> "tuple[np.ndarray, str]":
-    """보유 기간 분포 = 손절이 아닌 청산의 체결 간 거래일 수. 없으면 전 거래(표시)."""
+    """보유 기간 분포 = 손절도 끝 절단(end)도 아닌 청산의 체결 간 거래일 수. 없으면 전 거래(표시)."""
     if trades.empty:
         return np.array([1]), "empty"
-    h = trades.loc[trades["reason"] != "stop", "hold"].to_numpy(int)
+    h = trades.loc[~trades["reason"].isin(("stop", "end")), "hold"].to_numpy(int)
     if len(h) == 0:
         return np.maximum(trades["hold"].to_numpy(int), 1), "all_trades_fallback"
     return np.maximum(h, 1), "non_stop"
@@ -182,7 +194,8 @@ def top_removed_mean(trades: pd.DataFrame, k: int = 5) -> "tuple[float, list]":
 
 
 def cagr(eq: pd.Series) -> float:
-    x = eq / eq.iloc[0]
+    """``attrs["base"]``(첫날 전 자산)가 있으면 그것을 시작 값으로 — 첫날 수익 포함."""
+    x = eq / float(eq.attrs.get("base", eq.iloc[0]))
     yrs = max((x.index[-1] - x.index[0]).days / 365.25, 1e-9)
     return float(x.iloc[-1] ** (1 / yrs) - 1) if x.iloc[-1] > 0 else -1.0
 
@@ -238,6 +251,7 @@ def oof_series(D: dict, trades: pd.DataFrame, start: int, end: int) -> pd.Series
     out = pd.Series(np.cumprod(1.0 + r), index=days[start : end + 1])
     out.attrs["expo"] = ex
     out.attrs["daily_ret"] = r
+    out.attrs["base"] = 1.0
     return out
 
 
@@ -254,7 +268,8 @@ def monthly(eq: pd.Series, kx: pd.Series, kq: pd.Series) -> pd.DataFrame:
     i0 = pd.DatetimeIndex([eq.index[0].to_period("M").to_timestamp() - pd.Timedelta(days=1)])
     k = kx.reindex(eq.index).ffill().to_numpy(float)
     q = kq.reindex(eq.index).ffill().to_numpy(float)
-    m = pd.DataFrame({"s": np.r_[eq.iloc[0], eq.to_numpy()], "k": np.r_[k[0], k], "q": np.r_[q[0], q]}, index=i0.append(eq.index))
+    s0 = float(eq.attrs.get("base", eq.iloc[0]))                            # 첫날 전 자산 — 첫날 수익 포함
+    m = pd.DataFrame({"s": np.r_[s0, eq.to_numpy()], "k": np.r_[k[0], k], "q": np.r_[q[0], q]}, index=i0.append(eq.index))
     return m.resample("ME").last().pct_change().dropna()
 
 
@@ -413,6 +428,8 @@ def report(D: dict, trades: pd.DataFrame, end: int) -> dict:
     out["by_entry_year"] = {int(y): _rstats(trades.loc[yr == y, "R"]) for y in sorted(yr.unique())}
     out["hold_days"] = {"median": float(trades["hold"].median()), "mean": float(trades["hold"].mean())}
     out["golden_share"] = float(trades["golden_day"].notna().mean())
+    dl = trades["reason"] == "delist"
+    out["delist"] = {"n": int(dl.sum()), "R_sum": float(trades.loc[dl, "R"].sum())}
     if "nan_dec" in trades:
         out["nan_prob"] = {"n_trades_any_nan_decision": int((trades["nan_dec"] > 0).sum()),
                            "n_fallback_exits": int((trades["reason"] == "ma200_fb").sum()),

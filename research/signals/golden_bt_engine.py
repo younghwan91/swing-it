@@ -13,8 +13,8 @@
 - 체결 불가: t+1 시가 NaN(정지), 시가 ≥ 전일 종가 × lu(상한가), 시가 ≤ 손절선(d_fill ≤ 0). 못 사면 그 주문은 버린다.
 - 손절선 = 진입 판정일 MA50(고정, 올리지 않음). d_fill = 1 − 손절선/체결 시가.
 - 비중: eq = min(5%, 0.25%/d_fill), prob = 그 값 × 판정일 P_g. prob 는 골든 전 판정일마다 목표 = 기준 × P_g(t) 가
-  시가 평가 비중(보유 가치/자산)보다 크면 차이만큼 다음 시가에 추가(같은 체결 조건). 목표 ≤ 기준 ≤ 5%.
-  금액 = 비중 × 전날 종가 자산, 현금이 모자라면 남은 현금까지.
+  원가 비중(Σ 매수 금액 ÷ 진입 때 자산)보다 크면 차이 × 진입 때 자산을 다음 시가에 추가(같은 체결 조건 — 정정 GB-2, 가격 하락만으로는
+  사지 않는다). 목표 ≤ 기준 ≤ 5%. 첫 매수 금액 = 비중 × 전날 종가 자산, 현금이 모자라면 남은 현금까지.
 - 청산(판정 t → t+1 시가): ① 종가 < 손절선 ② 골든 전 P_g < θ_out(예측 붕괴) ③ 골든 뒤 dead_p: P_d ≥ θ_d / ma200: 종가 < MA200.
   골든 = 진입 뒤 판정일 종가 기준 MA50 > MA200(엄격) 이 처음 된 날 — 그날부터 ③ 이 적용되고 ② 와 추가 매수는 멈춘다.
   골든 판정은 정지일을 건너뛴 이평선(``ma50v``·``ma200v`` — 유효 종가 마지막 50·200 개 평균, 없으면 ``ma50``·``ma200``)으로 한다.
@@ -132,7 +132,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
             for ci, aw in list(pend_add.items()):
                 p = pos[ci]
                 ok, _ = _fillable(D, ci, t, p["stop"])
-                amt = min(aw * e_prev, cash)
+                amt = min(aw * p["e_ref"], cash)                    # GB-2: 원가 비중 차이 × 진입 때 자산
                 if ok and amt > 0:
                     p["qty"] += amt / O[ci, t]
                     p["cost_basis"] += amt
@@ -190,7 +190,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
                     if pg < th_out:
                         pend_sell[ci] = "collapse"
                     elif prob:
-                        add = p["base"] * float(pg) - p["qty"] * c / e
+                        add = p["base"] * float(pg) - p["cost_basis"] / p["e_ref"]   # GB-2: 원가 비중 < 목표일 때만(불타기, 물타기 아님)
                         if add > 1e-12:
                             pend_add[ci] = add
                 else:
@@ -222,40 +222,43 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
         close(ci, pos[ci]["last_px"], end, "end")
     eq[-1] = cash
     out = pd.Series(eq, index=days[start : end + 1])
-    out.attrs.update(expo=expo, skips=skips, n_orders=n_orders)
+    out.attrs.update(expo=expo, skips=skips, n_orders=n_orders, base=1.0)          # base = 첫날 전 자산(첫날 수익 포함)
     tr = pd.DataFrame(trades, columns=list(TRADE_COLS))
     return tr, out
 
 
 # ============================================================================================ 널 ② — 거래 단위 경로
 
-def trade_path(D: dict, ci: int, dec: int, hold: int, sizing: str, cost_mult: float, end: int) -> "dict | None":
+def trade_path(D: dict, ci: int, dec: int, hold: int, mult_path, cost_mult: float, end: int) -> "dict | None":
     """널 ② 한 거래: 판정일 ``dec`` 의 종목 ``ci`` 를 dec+1 시가에 사고, 손절(엔진과 같은 고정 MA50) 또는 체결 뒤 ``hold`` 거래일째
-    시가(정지면 다음 가능일)에 판다. prob 는 엔진처럼 골든 전 추가 매수(자산 1 고정 — 거래 단위). 끝 ``end`` 보유분은 end 종가·비용.
-    체결 불가(정지·상한가·시가 ≤ 손절선·prob 에 P_g 없음)면 None. 반환 R = 손익 ÷ 0.25%(자산 1).
+    시가(정지면 다음 가능일)에 판다. 끝 ``end`` 보유분은 end 종가·비용. 자산 1 고정(거래 단위).
+
+    정정 GB-2(C1): 비중 = 이 종목의 기준 min(5%, 0.25%/d_fill) × **짝 전략 거래의 원가 배수 경로** ``mult_path`` =
+    [(체결 뒤 거래일 수, 누적 원가 ÷ (기준 × 진입 자산))] — 첫 원소(0, m0)가 진입, 뒤 원소는 같은 날짜 차이의 체결일에 원가가 기준 × m 이
+    되도록 추가(그날 체결 불가·이미 청산·손절 대기면 그 추가는 없다 — 엔진의 실패한 추가와 같다). eq 는 [(0, 1.0)](현금 부족 체결이면 < 1).
+    체결 불가(정지·상한가·시가 ≤ 손절선)면 None. 반환 R = 손익 ÷ 0.25%(자산 1).
     """
     O, C = D["O"], D["C"]  # noqa: E741
     t0 = dec + 1
     if t0 > end:
         return None
     stop = float(D["ma50"][ci, dec])
-    pg0 = float(D["PG"][ci, dec])
-    prob = sizing == "prob"
-    if prob and not np.isfinite(pg0):
-        return None
     ok, _ = _fillable(D, ci, t0, stop)
     if not ok:
         return None
+    path = sorted((int(a), float(m)) for a, m in mult_path)
+    if not path or path[0][0] != 0:
+        raise ValueError(f"배수 경로는 (0, m0) 로 시작해야 한다: {mult_path}")
     lv = int(D["last_valid"][ci]) if "last_valid" in D else int(last_valid_index(C[ci : ci + 1])[0])
     o = float(O[ci, t0])
     base = min(W_CAP, RISK / (1.0 - stop / o))
-    w = base * (pg0 if prob else 1.0)
-    if w <= 0:                                           # prob 에 P_g = 0 — 비중 0 인 체결(같은 비중 규칙 그대로, R = 0)
+    w = base * path[0][1]
+    if w <= 0:
         return {"ci": ci, "dec": dec, "t0": t0, "t1": t0, "R": 0.0, "ret": 0.0, "reason": "zero_weight"}
+    adds = {t0 + a: m for a, m in path[1:]}
     qty, basis, last = w / o, w, o
-    golden = False
     sell_at = t0 + max(int(hold), 1)
-    add, pend_stop = 0.0, False
+    pend_stop = False
     t = t0
     while True:
         if t > t0:
@@ -265,27 +268,19 @@ def trade_path(D: dict, ci: int, dec: int, hold: int, sizing: str, cost_mult: fl
             tradable = np.isfinite(ot) and ot > 0
             if tradable and (pend_stop or t >= sell_at):
                 return _tp_out(D, ci, qty * float(ot), basis, t, cost_mult, "stop" if pend_stop else "hold", t0, dec)
-            if add > 0:
+            if t in adds and not pend_stop:
+                amt = base * adds[t] - basis
                 ok, _ = _fillable(D, ci, t, stop)
-                if ok:
-                    qty += add / float(ot)
-                    basis += add
-                add = 0.0
+                if ok and amt > 1e-12:
+                    qty += amt / float(ot)
+                    basis += amt
         c = C[ci, t]
         if np.isfinite(c):
             last = float(c)
         if t >= end:
             return _tp_out(D, ci, qty * last, basis, end, cost_mult, "end", t0, dec)
-        if np.isfinite(c) and not pend_stop:
-            if not golden and D.get("ma50v", D["ma50"])[ci, t] > D.get("ma200v", D["ma200"])[ci, t]:
-                golden = True
-            if c < stop:
-                pend_stop = True
-            elif prob and not golden and t + 1 < sell_at:
-                pg = D["PG"][ci, t]
-                if np.isfinite(pg):
-                    a = base * float(pg) - qty * c
-                    add = a if a > 1e-12 else 0.0
+        if np.isfinite(c) and not pend_stop and c < stop:
+            pend_stop = True
         t += 1
 
 

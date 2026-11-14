@@ -77,6 +77,7 @@ LOGS = REPO / "research" / "logs" / "golden_bt"
 SCRATCH = Path.home() / ".cache" / "cc-swing" / "scratch" / "golden_bt"
 OUT_JSON, OUT_MD, OUT_TRIALS = "backtest.json", "RESULTS.md", "TRIALS.jsonl"
 TRIAL_NAME = "golden_bt"
+PREREG_CITE = "research/logs/golden_bt/PREREG.md (07f7ce9) + 정정 GB-1 (395017b) + 정정 GB-2 (0253b0b)"
 
 RULINGS = {
     "session": "read_prices_wide(table=daily_bars_adj_v2, session='raw') — 두 창 모두 2026-09-14 애프터마켓 오염 전. 2024~ 는 요청하지 않는다"
@@ -95,13 +96,15 @@ RULINGS = {
             "못 산 주문은 버린다(그날 다른 후보로 채우지 않는다).",
     "sizing_d": "비중의 d 는 체결 시가 기준 d_fill = 1 − 손절선/시가(손실 한도 0.25% 를 실제 진입가로 맞춘다). 사전 후보의 d ≤ 0.15 는 판정일 종가 기준, "
                 "d_fill 상한으로 따로 거르지 않는다(등록에 없는 거름을 더하지 않는다).",
-    "prob_topup": "prob: 기준 = min(5%, 0.25%/d_fill) 진입 때 고정. 골든 전 판정일마다 목표 = 기준 × P_g(t), 현재 비중 = 보유 가치/그날 종가 자산, "
-                  "목표 > 현재면 차이를 다음 시가에 추가(진입과 같은 체결 조건, 전날 종가 자산 기준 금액, 현금 한도). 줄이지 않는다. "
+    "prob_topup": "prob: 기준 = min(5%, 0.25%/d_fill) 진입 때 고정. 골든 전 판정일마다 목표 = 기준 × P_g(t), 현재 = 원가 비중(Σ 매수 금액 ÷ "
+                  "진입 때 자산 — 정정 GB-2, 시가 평가 비중이면 가격 하락만으로 사는 물타기가 된다), 목표 > 현재면 (차이 × 진입 때 자산)을 다음 시가에 "
+                  "추가(진입과 같은 체결 조건, 현금 한도). 줄이지 않는다. "
                   "골든 뒤에는 추가하지 않는다(P_g 가 사실상 1 이 되는 구간 — 보수 쪽). 폴드 진입 마감 뒤에도 보유 포지션의 추가는 규칙대로.",
     "golden": "골든 = 진입 뒤 판정일 종가 기준 MA50 > MA200(엄격)이 처음 된 날. 그날 판정부터 골든 뒤 규칙(dead_p·ma200)이 적용되고 "
               "예측 붕괴·추가 매수는 멈춘다. 손절은 앞뒤 모두.",
     "exit_priority": "같은 날 사유가 겹치면 손절 > (골든 전) 붕괴 / (골든 뒤) 데드·MA200 — 붕괴와 데드는 골든 전후로 배타.",
-    "nan_prob": "보유 중 그날 P 가 NaN 이면 붕괴·데드 판정을 건너뛴다(청산 사유 아님).",
+    "nan_prob": "정정 GB-1 그대로: 보유 중 그날 판정 신호가 NaN 이면 골든 전(P_g)은 붕괴 판정 없이 보유(손절만), 골든 뒤(dead_p 의 P_d·ma200 설정의 "
+                "MA200)는 정지일 건너뛴 MA200 대체 청산(ma200_fb) — 자세한 것은 gb1_fallback.",
     "slots": "슬롯 20 = 보유(매도 대기 포함) 수. 청산으로 빈 슬롯은 체결일 종가 판정부터 쓴다. 순위 P_g 내림차순, 같으면 종목 행 순. "
              "같은 종목 재진입은 청산 체결일 종가 판정부터(다음 시가).",
     "delist": "마지막 유한 종가 뒤(폐지·자료 끝)에는 그 다음 거래일에 마지막 가격으로 청산(사유 delist, 그날 비용).",
@@ -119,9 +122,12 @@ RULINGS = {
                  "범주 축이라 다른 값 전부. 선택 = 이웃 학습 점수 중앙값 최대, 동률이면 메뉴 순서 앞.",
     "null1": "널 ① = 300 회, 회마다 폴드마다 48 중 무작위 설정(복원, 시드 고정) 의 폴드 밖 R 합(비용 2배)을 더한다. 재현은 회마다 설정 하나.",
     "null2": "널 ② = 300 회, 선택 설정의 체결된 진입마다 같은 판정일 같은 풀(사전 후보 ∧ P_g 유한 — P_g 문턱 없음)에서 무작위 종목(그날 안 비복원, "
-             "체결 불가면 다음 후보, 풀이 모자라면 모자란 수 기록), 같은 체결·손절(판정일 MA50 고정)·비중(그 폴드 sizing, prob 는 골든 전 추가 포함) 규칙. "
-             "보유 기간 = 선택 설정 폴드 밖 거래 중 손절 아닌 청산(붕괴·데드·MA200·폐지·끝)의 체결 간 거래일 수 분포에서 복원 추출, 그 날짜 시가 매도"
-             "(정지면 미룸), 손절이 먼저면 손절. prob 에 무작위 종목 P_g = 0 이면 비중 0 체결(R 0, 진입 수에 셈). 거래 단위(자산 1 고정, 슬롯·현금 제약 없음 — 슬롯·현금 제약은 주 전략만 깎으므로 보수 쪽).",
+             "체결 불가면 다음 후보, 풀이 모자라면 모자란 수 기록), 같은 체결·손절(판정일 MA50 고정) 규칙. 정정 GB-2(C1): 비중 = 무작위 종목의 기준 "
+             "min(5%, 0.25%/d_fill) × 짝 전략 거래의 원가 배수 경로(그날 k 번째 무작위 체결 ↔ 그날 순위 k 번째 전략 거래 — 진입 P_g 내림차순·종목 행). "
+             "무작위 쪽 추가 매수는 끄지 않고 같은 배수 경로를 따른다: 전략 거래의 추가 체결일과 같은 '체결 뒤 거래일 수'에 원가가 기준 × 그 누적 배수가 "
+             "되도록 산다(그날 체결 불가·이미 청산·손절 대기면 없음). eq 는 배수 1(현금 부족 체결이면 그 비율). 무작위 종목 자신의 P_g 는 쓰지 않는다. "
+             "보유 기간 = 선택 설정 폴드 밖 거래 중 손절도 끝 절단(end)도 아닌 청산(붕괴·데드·MA200·대체·폐지)의 체결 간 거래일 수 분포에서 복원 추출"
+             "(정정 GB-2 Minor), 그 날짜 시가 매도(정지면 미룸), 손절이 먼저면 손절. 거래 단위(자산 1 고정, 슬롯·현금 제약 없음).",
     "bar2": "② 진입 연월 군집 복원 추출 2,000 회, 거래 R 평균의 2.5% 분위 > 0(ma_quad_calib.bss_ci 규약).",
     "bar3": "③ 종목별 R 합 상위 5 종목의 거래를 빼고 R 평균 > 0(거래 제거 — 재시뮬 아님).",
     "bar4": "④ 월 수익(첫 달 포함) ~ KOSPI + KOSDAQ + MOM(12-1) + SMB + LV + REV(1개월 반전, 직전 달 수익 하위 30% − 상위 30%) — "
@@ -137,6 +143,9 @@ RULINGS = {
     "cap": "시총은 SMB 팩터와 시장 가중에만. 주 창 shares_outstanding_history(asof = coalesce(knowledge_date, date)), 재현 창 earnings_dart_doc "
            "(indep30 규약) — 원 종가 × 주식수라 분할 직후 수개월 어긋날 수 있다(보고 품질, 판정 거래 R 과 무관).",
     "index": "KOSPI(001)·KOSDAQ(101)은 read_index(proxy=선언) — 창 안 거래일 95% 이상에 값이 없으면 멈춘다.",
+    "first_day": "정정 GB-2 Minor: 전략 월 수익·연복리는 첫날 전 자산(1.0)에서 시작해 첫날 수익을 넣는다. 지수 월 수익은 첫날 종가부터(그 전 종가 없음).",
+    "delist_report": "정정 GB-2(I2): 엔진은 그대로(마지막 유한 종가). delist 사유 거래 수·R 합을 보고 열로, 거래 CSV 에 delist 열(참/거짓) — 스웜이 원 DB 정리매매를 확인.",
+    "oof_gross": "합산 폴드 밖 자산은 폴드 장부가 겹쳐 총노출이 1 을 넘을 수 있다 — 그 연복리는 계좌 하나의 숫자가 아니다(MD 에 적는다).",
 }
 
 _G: dict = {}
@@ -643,7 +652,7 @@ def config() -> dict:
             "sigma_w": SIGMA_W, "pool_years": POOL_YEARS, "pool_min_dates": POOL_MIN_DATES, "lu_cut": LU_CUT, "lu": LU, "table": PRICE_TABLE,
             "slots": E.SLOTS, "w_cap": E.W_CAP, "risk": E.RISK, "cost_judge": W.COST_JUDGE, "min_trades": W.MIN_TRADES, "n_null": W.N_NULL,
             "seed": SEED, "dsr_n": DSR_N, "n_trials": N_TRIALS, "menu_axes": W.AXES,
-            "prereg": "research/logs/golden_bt/PREREG.md (07f7ce9)"}
+            "prereg": PREREG_CITE}
 
 
 def _f(x, fmt="{:+.3f}") -> str:
@@ -658,12 +667,14 @@ def results_md(res: dict, meta: dict) -> str:
     v, mn, rp = res["verdict"], res["main"], res["rep"]
     b, rb = mn["bars"], rp["bars"]
     L = ["# 골든 임박 자리 포지션 백테스트 결과 (검증 전)", "",
-         f"git `{meta['git']}` · 사전등록 `research/logs/golden_bt/PREREG.md`(07f7ce9) · 주 시험 {mn['eval'][0]} ~ {mn['eval'][1]}(폴드 "
+         f"git `{meta['git']}` · 사전등록 `{PREREG_CITE}` · 주 시험 {mn['eval'][0]} ~ {mn['eval'][1]}(폴드 "
          f"{', '.join(map(str, FOLD_YEARS))}) · 재현 {rp['eval'][0]} ~ {rp['eval'][1]} · 비용 2배 판정 · DSR N={N_TRIALS}", "",
          f"**주 시험:** {'VOID(체결 < 100)' if v['main_void'] else ('바 전부 통과' if v['main_pass'] else '바 미달')} · "
          f"**재현:** {'VOID(체결 < 100)' if v['rep_void'] else ('바 전부 통과' if v['rep_pass'] else '바 미달')} · "
          f"**둘 다:** {'통과 → 전진 모의매매 사전등록' if v['both_pass'] else '실패 → 이 셋업 종결(PREREG)'}", "",
-         "## 주 시험 바(폴드 밖·비용 2배)", "", "| 바 | 값 | 기준 | 통과 |", "|---|---|---|---|",
+         "## 주 시험 바(폴드 밖·비용 2배)", "",
+         "자산 기반 바(④⑤⑦)는 모든 폴드 밖 거래를 합산한 연속 자산(정정 GB-1)이다 — 폴드 장부가 겹쳐 총노출이 1 배를 넘을 수 있어 "
+         f"(최대 {_f(mn.get('exposure_max'), '{:.1%}')}) 그 연복리는 계좌 하나의 숫자가 아니다.", "", "| 바 | 값 | 기준 | 통과 |", "|---|---|---|---|",
          f"| 체결 | {b['n_trades']:,} | ≥ 100 | {'O' if not b['void'] else 'X'} |",
          f"| ① R 합 vs 널 | {_f(b['b1_nulls']['R_sum'], '{:+.1f}')} | > 널① p95 {_f(b['b1_nulls']['null1_p95'], '{:+.1f}')} ∧ 널② p95 "
          f"{_f(b['b1_nulls']['null2_p95'], '{:+.1f}')} | {_ox(b['b1_nulls'])} |",
@@ -708,7 +719,8 @@ def results_md(res: dict, meta: dict) -> str:
               f"{_f(part['cost']['x1']['cagr'], '{:+.2%}')} / 2배 {_f(part['cost']['x2']['cagr'], '{:+.2%}')} · 평균 노출 {_f(part['exposure_mean'], '{:.1%}')} "
               f"· 최대 노출 {_f(part['exposure_max'], '{:.1%}')} · KOSPI 보유 연복리 {_f(part['kospi_cagr'], '{:+.2%}')}",
               f"- 확률 NaN 판정일이 있던 거래 {rr.get('nan_prob', {}).get('n_trades_any_nan_decision', 0):,} · 대체 청산(ma200_fb) "
-              f"{rr.get('nan_prob', {}).get('n_fallback_exits', 0):,} (정정 GB-1)",
+              f"{rr.get('nan_prob', {}).get('n_fallback_exits', 0):,} (정정 GB-1) · 폐지(delist) 청산 {rr.get('delist', {}).get('n', 0):,} 건 "
+              f"R 합 {_f(rr.get('delist', {}).get('R_sum'), '{:+.1f}')} (정리매매 여부는 스웜이 원 DB 로 확인)",
               f"- 털기율(손절 뒤 20일 안 진입가 회복) {_f(rr.get('shakeout', {}).get('rate'), '{:.1%}')} (손절 {rr.get('shakeout', {}).get('n_stop', 0)}) · "
               f"골든 도달 {_f(rr.get('golden_share'), '{:.1%}')} · 보유 중앙 {_f(rr.get('hold_days', {}).get('median'), '{:.0f}')} 일",
               f"- 널 ① p50/p95 {_f(part['null1'].get('p50'), '{:+.1f}')} / {_f(part['null1'].get('p95'), '{:+.1f}')} · 널 ② "
@@ -787,7 +799,7 @@ def _smoke(Xs: dict, args) -> int:
         t_sim = time.time() - t
         n_sims = (48 * 8 + 4) if name == "main" else 49
         t = time.time()
-        plan = W.null2_plan(tr.assign(sizing="eq"), D["days"], e)
+        plan = W.null2_plan(tr, D["days"], e)
         W.null2_rep(D, plan, np.maximum(tr["hold"].to_numpy(int), 1) if len(tr) else np.array([10]), np.random.default_rng(0))
         t_n2 = time.time() - t
         t_tot = t_prob + n_sims * t_sim / args.workers + W.N_NULL * t_n2 / args.workers
@@ -839,7 +851,7 @@ def main(argv=None) -> int:
     res = pipeline(X1, D1, X2, D2, P1["info"], P2["info"], args.workers)
     final = res["main"]["selection"][-1]["cfg_i"]
     for tag in ("main", "rep"):
-        res["_trades"][tag].to_csv(scratch / f"trades_{tag}.csv", index=False)
+        res["_trades"][tag].assign(delist=res["_trades"][tag]["reason"].eq("delist")).to_csv(scratch / f"trades_{tag}.csv", index=False)
         res["_eq"][tag].to_frame("equity_x2").assign(expo=res["_eq"][tag].attrs["expo"]).to_csv(scratch / f"equity_{tag}.csv")
     out = {k: v for k, v in res.items() if not k.startswith("_")}
     meta = {"git": gs["sha"], "git_head": gs["sha"], "git_dirty": gs["dirty"], "git_clean_paths": MQC.WATCHED, "date": _dt.date.today().isoformat(),
