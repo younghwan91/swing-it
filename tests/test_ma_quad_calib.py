@@ -185,7 +185,7 @@ def test_gate_needs_block_of_8():
     cells = {(n, k) for n in NS[:3] for k in KS}
     g = C.gate_verdict(_grid(cells))
     assert g["n_pass"] == 12 and g["largest_block"] == 12 and g["pass"] is True
-    # 12 칸이지만 덩어리 최대 7: 체스판 식으로 쪼갠다
+    # 체스판 10 칸: 서로 이웃하지 않아 덩어리 1
     cells = {(n, k) for i, n in enumerate(NS) for j, k in enumerate(KS) if (i + j) % 2 == 0}
     assert len(cells) == 10
     g = C.gate_verdict(_grid(cells))
@@ -197,7 +197,7 @@ def test_gate_needs_block_of_8():
     assert g["n_pass"] == 12 and g["largest_block"] == 7 and g["pass"] is False
     # 덩어리 8 이 되도록 (15,10) 추가 대신 rest 일부를 교체: 13칸
     g = C.gate_verdict(_grid(block7 | {(15, 10)} | rest))
-    assert g["largest_block"] == 8 + 0 or g["largest_block"] >= 8
+    assert g["largest_block"] == 8
     assert g["n_pass"] == 13 and g["pass"] is True
 
 
@@ -212,3 +212,58 @@ def test_gate_key_mismatch_raises():
     d.pop((10, 3))
     with pytest.raises(ValueError):
         C.gate_verdict(d)
+
+
+# --- 경계 등호·입력 범위 (Task 4 리뷰 minor) -------------------------------------------
+
+def _mix(p_hi, n_hi, ones_hi, extra=()):
+    """높은 구간 덩어리 + ECE 를 묽히는 잘 보정된 저확률 덩어리(p=0.15, n=40000, 실현 0.15)."""
+    parts = [(p_hi, n_hi, ones_hi), (0.15, 40000, 6000), *extra]
+    p = np.concatenate([np.full(n, v) for v, n, _ in parts])
+    y = np.concatenate([np.r_[np.ones(o), np.zeros(n - o)] for _, n, o in parts])
+    m, yr = _months(len(p))
+    return p, y, m, yr
+
+
+def test_high_gap_exactly_005_passes():
+    p, y, m, yr = _mix(0.75, 10000, 7000)      # 0.75 − 0.70 = 0.05(부동소수 0.05000000000000004)
+    v = C.cell_verdict(p, np.full(len(p), y.mean()), y, m, yr)
+    assert v["calib_ok"] is True
+    p, y, m, yr = _mix(0.75, 10000, 6999)      # 0.0501
+    v = C.cell_verdict(p, np.full(len(p), y.mean()), y, m, yr)
+    assert v["calib_ok"] is False
+
+
+def test_ece_exactly_002_passes():
+    n = 10000
+    for ones, ok in ((7300, True), (7299, False)):  # 0.75 − 0.73 = 0.02 / 0.0201
+        p = np.full(n, 0.75)
+        y = np.r_[np.ones(ones), np.zeros(n - ones)]
+        m, yr = _months(n)
+        v = C.cell_verdict(p, np.full(n, 0.5), y, m, yr)
+        assert v["calib_ok"] is ok, (ones, v["ece"])
+
+
+def test_high_bin_n_299_ignored_300_counted():
+    for n_bad, ok in ((299, True), (300, False)):
+        # 잘 맞는 0.7 구간(n=1000) + 크게 어긋난 0.9 구간(p=0.95, 실현 0) n_bad
+        p, y, m, yr = _mix(0.75, 1000, 750, extra=((0.95, n_bad, 0),))
+        v = C.cell_verdict(p, np.full(len(p), y.mean()), y, m, yr)
+        hb = {round(b["lo"], 1): b for b in v["high_bins"]}
+        assert hb[0.9]["n"] == n_bad
+        assert v["ece"] <= 0.02
+        assert v["calib_ok"] is ok, n_bad
+
+
+def test_prob_and_label_range_rejected():
+    m, yr = np.array([201701, 201701]), np.array([2017, 2017])
+    with pytest.raises(ValueError):
+        C.cell_verdict(np.array([0.5, 1.01]), np.array([0.5, 0.5]), np.array([0.0, 1.0]), m, yr)
+    with pytest.raises(ValueError):
+        C.cell_verdict(np.array([0.5, 0.5]), np.array([-0.01, 0.5]), np.array([0.0, 1.0]), m, yr)
+    with pytest.raises(ValueError):
+        C.cell_verdict(np.array([0.5, 0.5]), np.array([0.5, 0.5]), np.array([0.0, 0.5]), m, yr)
+    with pytest.raises(ValueError):
+        C.reliability(np.array([1.5]), np.array([1.0]))
+    with pytest.raises(ValueError):
+        C.brier(np.array([0.5]), np.array([2.0]))

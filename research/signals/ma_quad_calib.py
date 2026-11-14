@@ -1,7 +1,13 @@
 """관문 0 보정·기술 지표와 관문 판정 (PREREG.md 관문 0 문턱 그대로).
 
-순수 numpy/pandas. 입력은 NaN 없는 1차원 배열(호출자가 NaN 사건을 미리 뺀다).
+순수 numpy/pandas. 입력은 NaN 없는 1차원 배열(호출자가 NaN 사건을 미리 뺀다). 확률은 [0, 1], 라벨은 {0, 1} 이 아니면 ValueError.
 `cell_verdict` 는 JSON 직렬화 가능한 파이썬 기본형만 돌려준다.
+
+**호출자 책임:** `cell_verdict` 의 사건은 `years` 창(기본 2017~2023) 안으로 미리 잘라 넘긴다 — 창 밖 사건은 보정·BSS 에는
+들어가고 연도 판정에서만 빠져 두 기준의 모집단이 달라진다.
+
+문턱 비교(≤ 5pp, ECE ≤ 2pp·≤ 기준율 20%, BSS ≥ 0.01)는 부동소수 오차 `_EPS` 만큼 너그럽다 — 0.75 − 0.70 = 0.05000000000000004 처럼
+십진 경계에 정확히 걸린 값이 표현 오차로 떨어지지 않게(등호 포함 = 사전등록 뜻). 하한 > 0 은 엄격 그대로.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ YEARS = tuple(range(2017, 2024))
 YEARS_MIN_POS = 5
 GATE_MIN_PASS = 12
 GATE_MIN_BLOCK = 8
+_EPS = 1e-12           # 부동소수 표현 오차만 흡수(문턱 해상도 1e-4 보다 훨씬 작다)
 
 
 def _edges(edges) -> np.ndarray:
@@ -35,11 +42,23 @@ def _check(*arrs):
             raise ValueError("NaN 이 있다")
 
 
+def _check_py(p_arrs, y):
+    """확률 ∈ [0, 1], 라벨 ∈ {0, 1}."""
+    for p in p_arrs:
+        p = np.asarray(p, dtype=float)
+        if len(p) and (np.nanmin(p) < 0.0 or np.nanmax(p) > 1.0):
+            raise ValueError("확률이 [0, 1] 밖이다")
+    y = np.asarray(y, dtype=float)
+    if len(y) and not np.isin(y[~np.isnan(y)], (0.0, 1.0)).all():
+        raise ValueError("라벨이 {0, 1} 이 아니다")
+
+
 def reliability(p, y, edges=np.linspace(0, 1, 11)) -> pd.DataFrame:
     """구간 [lo, hi), 마지막은 [., 1.0] 닫힘. 빈 구간은 n=0, 평균 NaN."""
     p = np.asarray(p, dtype=float)
     y = np.asarray(y, dtype=float)
     _check(p, y)
+    _check_py([p], y)
     e = _edges(edges)
     nb = len(e) - 1
     idx = np.searchsorted(e, p, side="right") - 1
@@ -68,6 +87,8 @@ def ece(p, y) -> float:
 def brier(p, y) -> float:
     p = np.asarray(p, dtype=float)
     y = np.asarray(y, dtype=float)
+    _check(p, y)
+    _check_py([p], y)
     return float(np.mean((p - y) ** 2))
 
 
@@ -85,6 +106,7 @@ def bss_ci(pA, pB, y, cluster, n_boot=2000, seed=0):
     y = np.asarray(y, dtype=float)
     cluster = np.asarray(cluster)
     _check(pA, pB, y, cluster)
+    _check_py([pA, pB], y)
     point = _bss(pA, pB, y)
     _, inv = np.unique(cluster, return_inverse=True)
     g = int(inv.max()) + 1 if len(inv) else 0
@@ -105,7 +127,7 @@ def bss_ci(pA, pB, y, cluster, n_boot=2000, seed=0):
 
 
 def _skill_ok(bss: float, bss_lo: float) -> bool:
-    return bool(bss >= BSS_MIN and bss_lo > 0)  # NaN 이면 False
+    return bool(bss >= BSS_MIN - _EPS and bss_lo > 0)  # NaN 이면 False
 
 
 def _quarter(month) -> np.ndarray:
@@ -120,6 +142,7 @@ def cell_verdict(pA, pB, y, month, year, years=YEARS) -> dict:
     month = np.asarray(month)
     year = np.asarray(year)
     _check(pA, pB, y, month, year)
+    _check_py([pA, pB], y)
 
     base = float(y.mean()) if len(y) else float("nan")
     e = ece(pA, y) if len(y) else float("nan")
@@ -133,8 +156,8 @@ def cell_verdict(pA, pB, y, month, year, years=YEARS) -> dict:
     big = [b for b in high_bins if b["n"] >= HIGH_MIN_N]
     calib_ok = bool(
         len(big) >= 1
-        and all(abs(b["p_mean"] - b["y_rate"]) <= HIGH_TOL for b in big)
-        and e <= ECE_ABS and e <= ECE_REL * base
+        and all(abs(b["p_mean"] - b["y_rate"]) <= HIGH_TOL + _EPS for b in big)
+        and e <= ECE_ABS + _EPS and e <= ECE_REL * base + _EPS
     )
 
     bss, lo, hi = bss_ci(pA, pB, y, month)
