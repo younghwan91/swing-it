@@ -379,3 +379,153 @@ def test_all_keys_pinned_to_pandas_zero_sigma():
         fc2 = fc.copy()
         p2 = event_probs(C2, fc2, np.zeros((1, 600)), np.zeros((2, k)), np.zeros((len(s), 200), dtype=np.int64), ci, s, k)
         assert p2["p_up_5_20"].shape == s.shape
+
+
+# ---------------------------------------------------------------- golden_hmm Task 1: 교차 확률 일반 함수
+
+from research.signals.ma_quad import cross_probs, cross_realized  # noqa: E402
+
+
+def _pd_cross(C, ci, s, k, short, long):
+    """pandas rolling 으로 ∃h∈1..k: MA_short(t+h) > MA_long(t+h) — NaN 창이면 NaN."""
+    out = np.full(len(ci), np.nan)
+    for j, (c, t) in enumerate(zip(ci, s)):
+        if t + k >= C.shape[1]:
+            continue
+        a = pd.Series(C[c]).rolling(short, min_periods=short).mean().to_numpy()[t + 1 : t + k + 1]
+        b = pd.Series(C[c]).rolling(long, min_periods=long).mean().to_numpy()[t + 1 : t + k + 1]
+        if np.isnan(a).any() or np.isnan(b).any():
+            continue
+        out[j] = float((a > b).any())
+    return out
+
+
+def _crossing_panel(n_days=700, seed=0):
+    """MA50 이 MA200 아래·위를 오가게 느린 파동 + 잡음."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(n_days)
+    rows = [np.log(100) + 0.15 * np.sin(2 * np.pi * t / (160 + 30 * i)) + np.cumsum(rng.normal(0, 0.01, n_days)) for i in range(3)]
+    return np.exp(np.array(rows))
+
+
+@pytest.mark.parametrize("k", [1, 5, 10, 15, 50, 199, 200, 210])
+def test_cross_probs_zero_sigma_match_realized(k):
+    """σ=0·경로 = 실제 미래 종가 → 확률(0/1) = 실현 = pandas. k ≥ long 경계 포함(경로만으로 MA_long)."""
+    C = _crossing_panel()
+    n = C.shape[1]
+    s = np.arange(200, n - k - 1, 3)
+    ci = np.arange(len(s)) % 3
+    fcl = np.full(C.shape + (k,), np.nan)
+    for c, t in zip(ci, s):
+        fcl[c, t] = np.log(C[c, t + 1 : t + k + 1])
+    p = cross_probs(C, fcl, np.zeros(C.shape), np.zeros((2, k)), np.zeros((len(s), 200), dtype=np.int64), ci, s, k)
+    r = cross_realized(C, ci, s, k)
+    exp = _pd_cross(C, ci, s, k, 50, 200)
+    assert np.isfinite(p).all() and set(np.unique(p)) <= {0.0, 1.0}
+    assert np.array_equal(r, exp)
+    assert np.array_equal(p, exp)
+    if k <= 50:
+        assert 0 < exp.sum() < len(exp)                      # 0·1 이 둘 다 나와야 시험이 된다
+    # 단조 하락 패널: 어느 h 에서도 MA50 < MA200 → 0(경로만으로 MA_long 이 되는 k ≥ long 포함)
+    D = 100 * np.exp(-0.003 * np.arange(n))[None, :]
+    sd = np.arange(200, n - k - 1, 7)
+    fd = np.full(D.shape + (k,), np.nan)
+    for t in sd:
+        fd[0, t] = np.log(D[0, t + 1 : t + k + 1])
+    zd = np.zeros(len(sd), dtype=np.int64)
+    pdn = cross_probs(D, fd, np.zeros(D.shape), np.zeros((2, k)), np.zeros((len(sd), 200), dtype=np.int64), zd, sd, k)
+    assert (pdn == 0).all() and (cross_realized(D, zd, sd, k) == 0).all()
+
+
+def test_cross_probs_general_windows_zero_sigma():
+    C = _crossing_panel(seed=3)
+    k, sh, lg = 7, 5, 20
+    s = np.arange(30, 600, 5)
+    ci = np.arange(len(s)) % 3
+    fcl = np.full(C.shape + (k,), np.nan)
+    for c, t in zip(ci, s):
+        fcl[c, t] = np.log(C[c, t + 1 : t + k + 1])
+    p = cross_probs(C, fcl, np.zeros(C.shape), np.zeros((2, k)), np.zeros((len(s), 200), dtype=np.int64), ci, s, k, short=sh, long=lg)
+    exp = _pd_cross(C, ci, s, k, sh, lg)
+    assert np.array_equal(p, exp) and np.array_equal(cross_realized(C, ci, s, k, short=sh, long=lg), exp)
+    assert 0 < exp.sum() < len(exp)
+
+
+def test_cross_probs_known_part_arithmetic():
+    """무작위 풀 경로 하나씩 pandas 로 MA 를 만들어 ∃h 교차 비율을 센다(여러 사건·추세 — 0·1 아닌 비율이 나와야 시험이 된다)."""
+    k = 15
+    C = _crossing_panel(seed=1)
+    rng = np.random.default_rng(2)
+    pool = np.cumsum(rng.normal(size=(60, k)), axis=1)
+    sig = np.full(C.shape, 0.03)
+    idx = rng.integers(0, 60, (1, 200))
+    fracs = []
+    for c in range(3):
+        ma50 = pd.Series(C[c]).rolling(50).mean().to_numpy()
+        ma200 = pd.Series(C[c]).rolling(200).mean().to_numpy()
+        gap = 1 - ma50 / ma200
+        for t in np.flatnonzero((gap > 0) & (gap < 0.02) & (np.arange(len(gap)) >= 250) & (np.arange(len(gap)) < 650))[::10]:
+            for drift in (-0.02, 0.0, 0.01):
+                fcl = np.full(C.shape + (k,), np.nan)
+                fcl[c, t] = np.log(C[c, t]) + drift * np.arange(1, k + 1)
+                cnt = 0
+                for m in range(200):
+                    fut = np.exp(fcl[c, t] + sig[c, t] * pool[idx[0, m]])
+                    ser = pd.Series(np.concatenate([C[c, : t + 1], fut]))
+                    a = ser.rolling(50).mean().to_numpy()[t + 1 :]
+                    b = ser.rolling(200).mean().to_numpy()[t + 1 :]
+                    cnt += bool((a > b).any())
+                p = cross_probs(C, fcl, sig, pool, idx, np.array([c]), np.array([t]), k)
+                assert abs(p[0] - cnt / 200) < 1e-12, (c, t, drift)
+                fracs.append(cnt / 200)
+    assert any(0 < f < 1 for f in fracs)
+
+
+def test_cross_tie_is_not_cross():
+    C = np.full((1, 400), 10.0)
+    k = 5
+    fcl = np.full((1, 400, k), np.log(10.0))
+    p = cross_probs(C, fcl, np.zeros((1, 400)), np.zeros((3, k)), np.zeros((1, 200), dtype=np.int64), np.array([0]), np.array([250]), k)
+    assert p[0] == 0.0
+    assert cross_realized(C, np.array([0]), np.array([250]), k)[0] == 0.0
+
+
+def test_cross_nan_rules():
+    """확률: 알려진 창 C[t−long+2..t]·σ·fc 가 유한해야. 실현: C[t−long+2..t+k] 유한 ∧ t+k < n_days."""
+    k = 10
+    C = _crossing_panel(n_days=500, seed=4)[:1]
+    t = 300
+    fcl = np.zeros((1, 500, k)) + np.log(C[0, t])
+    kw = dict(pool=np.zeros((3, k)), idx=np.zeros((1, 200), dtype=np.int64), ci=np.array([0]), s=np.array([t]), k=k)
+    sig = np.full((1, 500), 0.01)
+    assert np.isfinite(cross_probs(C, fcl, sig, **kw)[0])
+    Cb = C.copy()
+    Cb[0, t - 199] = np.nan                      # h=1 창 밖(창 = t−198..t+1) — 확률엔 무관
+    assert np.isfinite(cross_probs(Cb, fcl, sig, **kw)[0])
+    assert np.isfinite(cross_realized(Cb, np.array([0]), np.array([t]), k)[0])
+    Cb[0, t - 198] = np.nan                      # h=1 창 안 → NaN
+    assert np.isnan(cross_probs(Cb, fcl, sig, **kw)[0])
+    assert np.isnan(cross_realized(Cb, np.array([0]), np.array([t]), k)[0])
+    assert np.isnan(cross_probs(C, fcl, np.full((1, 500), np.nan), **kw)[0])
+    f2 = fcl.copy()
+    f2[0, t, k - 1] = np.nan
+    assert np.isnan(cross_probs(C, f2, sig, **kw)[0])
+    Cf = C.copy()
+    Cf[0, t + k] = np.nan                        # 미래 끝 NaN → 실현 NaN, 확률은 무관(t 까지만)
+    assert np.isnan(cross_realized(Cf, np.array([0]), np.array([t]), k)[0])
+    assert np.isfinite(cross_probs(Cf, fcl, sig, **kw)[0])
+    # 이력 부족(t − long + 2 < 0)·범위 밖
+    assert np.isnan(cross_probs(C, fcl, sig, pool=kw["pool"], idx=kw["idx"], ci=np.array([0]), s=np.array([197]), k=k)[0])
+    assert np.isnan(cross_realized(C, np.array([0, 0]), np.array([197, 495]), k)).all()
+
+
+def test_cross_invalid_args():
+    C = _crossing_panel(n_days=300)[:1]
+    with pytest.raises(ValueError):
+        cross_realized(C, np.array([0]), np.array([250]), 5, short=200, long=50)
+    with pytest.raises(ValueError):
+        cross_realized(C, np.array([0]), np.array([250]), 0)
+    with pytest.raises((ValueError, AssertionError)):
+        cross_probs(C, np.zeros((1, 300, 5)), np.zeros((1, 300)), np.zeros((2, 3)), np.zeros((1, 200), dtype=np.int64),
+                    np.array([0]), np.array([250]), 5)         # pool 열 < k
+    assert cross_realized(C, np.array([], dtype=np.int64), np.array([], dtype=np.int64), 5).shape == (0,)

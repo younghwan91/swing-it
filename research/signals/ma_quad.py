@@ -306,3 +306,131 @@ def realized(C, ci, s, k: int) -> dict[str, np.ndarray]:
     if n == 0:
         return {key: np.empty(0) for key in _PROB_KEYS}
     return {key: np.where(bad, np.nan, v.astype(np.float64)) for key, v in res.items()}
+
+
+# ---------------------------------------------------------------- 교차 확률(골든 HMM 관문 0) — 위 함수들은 그대로
+
+@_jit
+def _cross_kernel(C, ci, s, fcl, sg, pool, idx, k, short, long, out):
+    """사건 j 마다 M 경로 중 ∃h∈1..k: MA_short(t+h) > MA_long(t+h) 비율.
+
+    경로 종가 path[h] = exp(fcl[j, h−1] + sg[j]·pool[idx[j, m], h−1]). MA_w(t+h) = (알려진 C[t+h−w+1..t] 합 + 경로 1..h 중 창 안) / w.
+    알려진 쪽 최대 창은 h=1 의 long−1 칸 C[t−long+2..t] — 그 칸이 하나라도 비유한이거나 sg·fcl 이 비유한이면 NaN.
+    """
+    n_ev, M = idx.shape
+    n_days = C.shape[1]
+    ks = np.zeros(long)             # ks[n] = C[t−n+1..t] 합(n = 0..long−1)
+    pc = np.zeros(k + 1)            # pc[h] = 경로 1..h 합
+    for j in range(n_ev):
+        c = ci[j]
+        t = s[j]
+        ok = t - long + 2 >= 0 and t < n_days and np.isfinite(sg[j])
+        if ok:
+            for h in range(k):
+                if not np.isfinite(fcl[j, h]):
+                    ok = False
+                    break
+        if ok:
+            acc = 0.0
+            ks[0] = 0.0
+            for n in range(1, long):
+                v = C[c, t - n + 1]
+                if not np.isfinite(v):
+                    ok = False
+                    break
+                acc += v
+                ks[n] = acc
+        if not ok:
+            out[j] = np.nan
+            continue
+        cnt = 0
+        for m in range(M):
+            row = idx[j, m]
+            pc[0] = 0.0
+            for h in range(1, k + 1):
+                pc[h] = pc[h - 1] + np.exp(fcl[j, h - 1] + sg[j] * pool[row, h - 1])
+            hit = False
+            for h in range(1, k + 1):
+                if h < short:
+                    a = (ks[short - h] + pc[h]) / short
+                else:
+                    a = (pc[h] - pc[h - short]) / short
+                if h < long:
+                    b = (ks[long - h] + pc[h]) / long
+                else:
+                    b = (pc[h] - pc[h - long]) / long
+                if a > b:
+                    hit = True
+                    break
+            if hit:
+                cnt += 1
+        out[j] = cnt / M
+
+
+def _check_windows(k: int, short: int, long: int) -> None:
+    if k < 1 or short < 1 or long <= short:
+        raise ValueError(f"잘못된 (k, short, long) = ({k}, {short}, {long})")
+
+
+def cross_kernel_events(C, ci, s, fcl, sg, pool, idx, k: int, short: int = 50, long: int = 200) -> np.ndarray:
+    """사건별 입력판 — ``fcl`` (n_ev, k) 경로 기준 로그 가격, ``sg`` (n_ev,) 배율. :func:`cross_probs` 와 HMM 경로가 함께 쓴다."""
+    _check_windows(k, short, long)
+    ci = np.asarray(ci, dtype=np.int64)
+    s = np.asarray(s, dtype=np.int64)
+    idx = np.asarray(idx)
+    pool = np.asarray(pool)
+    fcl = np.asarray(fcl)
+    assert np.isfinite(pool).all(), "pool 에 비유한 값"
+    assert pool.ndim == 2 and pool.shape[1] >= k, "pool 열 < k"
+    assert idx.shape[0] == len(ci) == len(s) == len(fcl) == len(sg), "idx/ci/s/fcl/sg 길이 불일치"
+    assert fcl.ndim == 2 and fcl.shape[1] >= k, "fcl 열 < k"
+    assert len(ci) == 0 or (idx.min() >= 0 and idx.max() < len(pool)), "idx 범위 밖"
+    assert len(ci) == 0 or (s.min() >= 0 and s.max() < np.shape(C)[1] and ci.min() >= 0 and ci.max() < np.shape(C)[0]), "ci/s 범위 밖"
+    out = np.empty(len(ci), dtype=np.float64)
+    _cross_kernel(
+        np.ascontiguousarray(C, dtype=np.float64), ci, s,
+        np.ascontiguousarray(fcl[:, :k], dtype=np.float64), np.ascontiguousarray(sg, dtype=np.float64),
+        np.ascontiguousarray(pool[:, :k], dtype=np.float64), np.ascontiguousarray(idx, dtype=np.int64),
+        int(k), int(short), int(long), out,
+    )
+    return out
+
+
+def cross_probs(C, fc_log, sigma, pool, idx, ci, s, k: int, short: int = 50, long: int = 200) -> np.ndarray:
+    """(n_ev,) — 사건 (ci, s) 마다 M 경로에서 P(∃h≤k: MA_short(t+h) > MA_long(t+h))(엄격). 입력이 비유한이면 NaN.
+
+    경로 = exp(fc_log[c, t, h−1] + sigma[c, t]·pool[idx[j, m], h−1]) — :func:`event_probs` 와 같은 규약, 키만 교차.
+    """
+    ci = np.asarray(ci, dtype=np.int64)
+    s = np.asarray(s, dtype=np.int64)
+    fc_log = np.asarray(fc_log)
+    sigma = np.asarray(sigma)
+    assert fc_log.shape[2] >= k, "fc_log 열 < k"
+    assert len(ci) == 0 or (s.min() >= 0 and s.max() < np.shape(C)[1] and ci.min() >= 0 and ci.max() < np.shape(C)[0]), "ci/s 범위 밖"
+    return cross_kernel_events(C, ci, s, fc_log[ci, s, :k], sigma[ci, s], pool, idx, k, short, long)
+
+
+def cross_realized(C, ci, s, k: int, short: int = 50, long: int = 200, ma: "dict | None" = None) -> np.ndarray:
+    """(n_ev,) 0/1 — 실제 ∃h∈1..k: MA_short(t+h) > MA_long(t+h)(엄격, pandas rolling 평균 = :func:`ma_state` 와 같은 정의).
+
+    s+k ≥ n_days 이거나 h=1..k 의 MA 중 하나라도 NaN(창 C[t−long+2..t+k] 에 NaN)이면 NaN. ``ma`` = {short: 패널, long: 패널} 재사용(선택).
+    """
+    _check_windows(k, short, long)
+    C = np.asarray(C, dtype=np.float64)
+    ci = np.asarray(ci, dtype=np.int64)
+    s = np.asarray(s, dtype=np.int64)
+    if len(ci) == 0:
+        return np.empty(0)
+    if ma is None:
+        ma = {short: _rolling_mean(C, short), long: _rolling_mean(C, long)}
+    a_, b_ = ma[short], ma[long]
+    n_days = C.shape[1]
+    e = s[:, None] + np.arange(1, k + 1)[None, :]
+    valid = (e[:, -1] < n_days) & (s >= 0)
+    ee = np.where(valid[:, None], e, 0)
+    a = a_[ci[:, None], ee]
+    b = b_[ci[:, None], ee]
+    bad = ~valid | np.isnan(a).any(axis=1) | np.isnan(b).any(axis=1)
+    with np.errstate(invalid="ignore"):
+        hit = (a > b).any(axis=1)
+    return np.where(bad, np.nan, hit.astype(np.float64))
