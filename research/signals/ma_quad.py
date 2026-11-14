@@ -259,6 +259,15 @@ def _event_kernel(C, fc_log, sigma, pool, idx, ci, s, k, out):
 
 def event_probs(C, fc_log, sigma, pool, idx, ci, s, k: int) -> dict[str, np.ndarray]:
     """사건 (ci, s) 마다 M 개 경로에서 t+k 의 정배열·단기>장기 비율. 입력이 비유한이면 NaN."""
+    ci = np.asarray(ci, dtype=np.int64)
+    s = np.asarray(s, dtype=np.int64)
+    idx = np.asarray(idx)
+    pool = np.asarray(pool)
+    assert np.isfinite(pool).all(), "pool 에 비유한 값"
+    assert pool.shape[1] >= k, "pool 열 < k"
+    assert idx.shape[0] == len(ci) == len(s), "idx/ci/s 길이 불일치"
+    assert len(ci) == 0 or (idx.min() >= 0 and idx.max() < len(pool)), "idx 범위 밖"
+    assert len(ci) == 0 or (s.min() >= 0 and s.max() < np.shape(C)[1] and ci.min() >= 0 and ci.max() < np.shape(C)[0]), "ci/s 범위 밖"
     out = np.empty((4, len(ci)), dtype=np.float64)
     _event_kernel(
         np.ascontiguousarray(C, dtype=np.float64),
@@ -294,6 +303,6 @@ def realized(C, ci, s, k: int) -> dict[str, np.ndarray]:
         "p_up_20_60": m20 > m60,
         "p_up_60_120": m60 > m120,
     }
-    return {key: np.where(bad, np.nan, v.astype(np.float64)) for key, v in res.items()} if n else {
-        key: np.empty(0) for key in _PROB_KEYS
-    }
+    if n == 0:
+        return {key: np.empty(0) for key in _PROB_KEYS}
+    return {key: np.where(bad, np.nan, v.astype(np.float64)) for key, v in res.items()}

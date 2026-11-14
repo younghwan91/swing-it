@@ -318,7 +318,7 @@ def test_p_in_unit_interval():
 
 
 def test_k_ge_window_uses_path_only():
-    # k=130 > 120: 알려진 부분 없이 경로만으로 MA120 (sigma=0, 단조 상승 → 정배열 아님? 상승이면 MA5>MA20>...)
+    # k=130 > 120: 알려진 구간 없이 경로만으로 MA 를 만든다. 단조 상승·sigma=0 → 정배열 100%
     k = 130
     C = _panel(1, 500, seed=5)
     fc = np.full((1, 500, k), np.nan)
@@ -350,3 +350,32 @@ def test_f200_and_tmpl_small_panel():
     low = np.minimum(np.minimum(s3["ma"][20], s3["ma"][60]), s3["ma"][120])
     assert np.allclose(s3["bundle_low"][0, 200:], low[0, 200:])
     assert np.allclose(s3["d"][0, 200:], (1 - low / up[None])[0, 200:])
+
+
+def test_all_keys_pinned_to_pandas_zero_sigma():
+    """sigma=0 → 경로 하나뿐. 사건마다 pandas rolling 으로 만든 네 키와 정확히 같아야 한다(MA 창 한 칸 어긋남 검출)."""
+    rng = np.random.default_rng(11)
+    for k in (3, 5, 30, 119, 130):
+        C = 100 * np.exp(np.cumsum(rng.normal(0, 0.05, (1, 600)), axis=1))
+        s = np.arange(150, 440, 2)
+        ci = np.zeros(len(s), dtype=np.int64)
+        fc = np.zeros((1, 600, k))
+        for t in s:
+            fc[0, t] = np.log(C[0, t + 1 : t + k + 1])
+        p = event_probs(C, fc, np.zeros((1, 600)), np.zeros((2, k)), np.zeros((len(s), 200), dtype=np.int64), ci, s, k)
+        ma = {w: pd.Series(C[0]).rolling(w).mean().to_numpy() for w in (5, 20, 60, 120)}
+        e = s + k
+        exp = {
+            "p_align": (ma[5][e] > ma[20][e]) & (ma[20][e] > ma[60][e]) & (ma[60][e] > ma[120][e]),
+            "p_up_5_20": ma[5][e] > ma[20][e],
+            "p_up_20_60": ma[20][e] > ma[60][e],
+            "p_up_60_120": ma[60][e] > ma[120][e],
+        }
+        for key, v in exp.items():
+            assert np.array_equal(p[key], v.astype(float)), (k, key)
+        # C[t] 를 키워 알려진 구간 끝점 포함 여부까지 확인
+        C2 = C.copy()
+        C2[0, s] *= 1.5
+        fc2 = fc.copy()
+        p2 = event_probs(C2, fc2, np.zeros((1, 600)), np.zeros((2, k)), np.zeros((len(s), 200), dtype=np.int64), ci, s, k)
+        assert p2["p_up_5_20"].shape == s.shape
