@@ -1,14 +1,17 @@
-"""관문 0 실행기 — 이평선 q차식 외삽 정배열 확률의 보정·기술(PREREG.md 관문 0 + 정정 MQ-1, 결과 전 고정).
+"""관문 0 실행기 — 이평선 q차식 외삽 정배열 확률의 보정·기술(PREREG.md 관문 0 + 정정 MQ-1~MQ-4, 결과 전 고정).
 
 판정: q=2 의 N{10,15,20,30,40} × k{3,5,7,10} 20칸, 대 B0(q=0) — `ma_quad_calib.cell_verdict` → `gate_verdict`.
 보고(판정 무관): q=1 같은 20칸(대 B0), q=2 대 B1(q=1) BSS, 해상도(P ≥ 0.5 실현율), R1 200일선 거름 없는 원래 사전 후보,
 R2 템플릿 충족 부분집합, R3 정배열 아닌 유니버스 전 종목-일(결정적 20% 표본), 쌍별 P_up 3키.
 
-규정(.superpowers/sdd/2026-11-14-ma-quad-gate0/task-5-rulings.md):
+실행 규약(`research/logs/ma_quad/PREREG.md` — 정정 MQ-1 200일선 거름·템플릿 보고, MQ-2 정지일 결측·폐지 종목 가격·경계 여유,
+MQ-3 관문 1 단순화, MQ-4 라이브러리 모집단 q=0 상장 ≥ 70일·짝짓기·R3 20% 표본·session="raw"·실행 출처):
 - 같은 칸 (N, k) 의 q=2·1·0 은 **같은 사건 집합**(세 q 모두 확률 유한 ∧ 라벨 유한) — 빠진 수와 까닭을 적는다.
 - 사건 t: 2017-01-02 ≤ t, t+k 거래일 ≤ 2023-12-28(라벨이 2024 가격을 쓰지 않게). 사건이 쓰는 것은 전부 t 까지, 라벨만 t+k.
 - 라이브러리 모집단: 위생 ∧ ADV20 ≥ 10억 ∧ 이력 ≥ N+60(q=0 은 70). 풀은 달 첫 거래일 t_m 기준(ma_quad.month_pool).
-- 첫 실제 실행이 곧 판정이다 — 원장에 gate0 이 있으면 다시 돌지 않는다(`guard_rerun`). ``--smoke`` 는 모양·사건 수·시간만 출력한다.
+- 첫 실제 실행이 곧 판정이다 — 정본 ``research/logs/ma_quad/`` 로만, ``research/ src/ tests/`` 가 깨끗한 작업 트리(커밋된 코드)에서만,
+  결과 파일이나 원장 gate0 이 있으면 다시 돌지 않는다(`guard_rerun`). 출력은 메모리에서 다 만든 뒤 JSON → MD → 원장 순으로 쓴다.
+  ``--smoke`` 는 모양·사건 수·시간만 출력한다.
 
 사용(실제 실행은 컨트롤러가 한 번):
 ``set -a; . ~/git/quant-airflow/.env; set +a; NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1
@@ -314,7 +317,8 @@ def pair(probs: dict, y) -> tuple:
         P = probs[q]
         f = np.isfinite(P["p_align"])
         for key in KEYS[1:]:
-            assert np.array_equal(np.isfinite(P[key]), f), f"q{q} {key}: 유한 마스크가 p_align 과 다르다"
+            if not np.array_equal(np.isfinite(P[key]), f):
+                raise RuntimeError(f"q{q} {key}: 유한 마스크가 p_align 과 다르다")
         drops[f"q{q}_nopool"] = int(P["nopool"].sum())
         drops[f"q{q}_nan"] = int((~f & ~P["nopool"]).sum())
         ok &= f
@@ -345,7 +349,18 @@ def block(pq: dict, y, month, year) -> dict:
         "ece": {f"q{q}": CAL.ece(p, y) for q, p in zip(QS, (p2, p1, p0))},
         "reliability": {f"q{q}": CAL.reliability(p, y).to_dict("records") for q, p in zip(QS, (p2, p1, p0))},
         "resolution": {f"q{q}": _resolution(p, y) for q, p in zip(QS, (p2, p1, p0))},
+        "yearly_bss": {"2v0": _yearly(p2, p0, y, year), "2v1": _yearly(p2, p1, y, year)},   # 보고 전용 — 판정에 안 쓴다
     }
+
+
+def _yearly(pA, pB, y, year) -> dict:
+    """연도별 BSS(점추정) — 사건 없는 해는 NaN(→ JSON null)."""
+    year = np.asarray(year)
+    out = {}
+    for yr in CAL.YEARS:
+        m = year == yr
+        out[int(yr)] = CAL._bss(pA[m], pB[m], y[m]) if m.any() else float("nan")
+    return out
 
 
 def assemble_cell(X: dict, N: int, k: int, ev: dict, Y: dict, probs: dict, out_dir) -> dict:
@@ -356,7 +371,8 @@ def assemble_cell(X: dict, N: int, k: int, ev: dict, Y: dict, probs: dict, out_d
     month = year * 100 + np.asarray(days.month[s], dtype=np.int64)
     y = np.asarray(Y["p_align"], dtype=float)
     for key in KEYS[1:]:
-        assert np.array_equal(np.isfinite(Y[key]), np.isfinite(y)), "라벨 유한 마스크가 키마다 다르다"
+        if not np.array_equal(np.isfinite(Y[key]), np.isfinite(y)):
+            raise RuntimeError(f"라벨 유한 마스크가 {key} 와 p_align 에서 다르다")
     ok, _ = pair(probs, y)
     drops, cand, n_ev = {}, {}, {}
     for pop in POPS:
@@ -446,28 +462,77 @@ def write_json(obj, path) -> None:
 
 
 def append_trial(path, rec: dict) -> None:
-    """원장에 한 줄 덧붙이기(mode "a") — 기존 줄은 건드리지 않는다. 끝 줄바꿈이 없으면 멈춘다(두 줄이 붙는다)."""
+    """원장에 기록 한 줄 덧붙이기 — 기존 줄은 건드리지 않는다."""
+    append_line(path, trial_line(rec))
+
+
+OUT_JSON, OUT_MD, OUT_TRIALS = "calib_results.json", "RESULTS.md", "TRIALS.jsonl"
+
+
+def _already(logs_dir) -> list[str]:
+    """이미 있는 관문 0 출력(결과 JSON·MD 파일 — 반쯤 쓴 것 포함, 원장의 gate0 줄)."""
+    logs_dir = Path(logs_dir)
+    found = [n for n in (OUT_JSON, OUT_MD) if (logs_dir / n).exists()]
+    t = logs_dir / OUT_TRIALS
+    if t.exists():
+        for line in t.read_text(encoding="utf-8").splitlines():
+            if line.strip() and json.loads(line).get("trial") == "gate0":
+                found.append(f"{OUT_TRIALS}(gate0)")
+                break
+    return found
+
+
+def guard_rerun(logs_dir=LOGS) -> None:
+    """관문 0 은 한 번만 — 결과 파일(반쯤 쓴 것 포함)이나 원장 gate0 줄이 있으면 멈춘다."""
+    found = _already(logs_dir)
+    if found:
+        raise SystemExit(f"{logs_dir}: {found} 가 있다 — 관문 0 은 이미 돌았다(재실행 = 새 시도, 사전등록 필요)")
+
+
+def trial_line(rec: dict) -> str:
+    """원장 한 줄(엄격 JSON, 줄바꿈 없음)."""
+    return json.dumps(_clean(rec), allow_nan=False, ensure_ascii=False)
+
+
+def append_line(path, line: str) -> None:
+    """원장에 한 줄 덧붙이기(mode "a"). 끝 줄바꿈이 없으면 멈춘다(두 줄이 붙는다)."""
     path = Path(path)
+    if "\n" in line:
+        raise ValueError("원장 줄에 줄바꿈이 있다")
     if path.exists() and path.stat().st_size > 0:
         with open(path, "rb") as f:
             f.seek(-1, os.SEEK_END)
             if f.read(1) != b"\n":
                 raise ValueError(f"{path}: 끝 줄바꿈이 없다 — 덧붙이지 않는다")
-    line = json.dumps(_clean(rec), allow_nan=False, ensure_ascii=False)
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
-def guard_rerun(logs_dir=LOGS) -> None:
-    """관문 0 은 한 번만 — 결과 파일이나 원장 gate0 줄이 있으면 멈춘다."""
+def _write_new(path, text: str) -> None:
+    """새 파일로만 쓴다(``"x"`` — 있으면 FileExistsError). 열자마자 파일이 생기므로 도중 실패도 재실행을 막는다."""
+    with open(path, "x", encoding="utf-8") as f:
+        f.write(text)
+
+
+def write_outputs(logs_dir, json_text: str, md_text: str, trial: str) -> None:
+    """메모리에서 다 만든 세 출력을 JSON → MD → 원장(마지막) 순으로 쓴다. 이미 있으면 아무것도 쓰지 않고 멈춘다.
+    도중 실패는 이미 쓴 파일 목록과 함께 RuntimeError — 쓴 파일이 남아 재실행은 막힌다(손으로 확인)."""
     logs_dir = Path(logs_dir)
-    if (logs_dir / "calib_results.json").exists():
-        raise SystemExit(f"{logs_dir / 'calib_results.json'} 가 있다 — 관문 0 은 이미 돌았다(재실행 = 새 시도, 사전등록 필요)")
-    t = logs_dir / "TRIALS.jsonl"
-    if t.exists():
-        for line in t.read_text(encoding="utf-8").splitlines():
-            if line.strip() and json.loads(line).get("trial") == "gate0":
-                raise SystemExit(f"{t} 에 gate0 이 있다 — 관문 0 은 이미 돌았다")
+    found = _already(logs_dir)
+    if found:
+        raise RuntimeError(f"{logs_dir}: {found} 가 이미 있다 — 관문 0 출력을 쓰지 않는다(재실행 금지)")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    done: list[str] = []
+    try:
+        _write_new(logs_dir / OUT_JSON, json_text)
+        done.append(OUT_JSON)
+        _write_new(logs_dir / OUT_MD, md_text)
+        done.append(OUT_MD)
+        append_line(logs_dir / OUT_TRIALS, trial)
+        done.append(OUT_TRIALS)
+    except Exception as e:
+        raise RuntimeError(f"관문 0 출력 쓰기 실패 — 이미 쓴 것 {done}(그리고 실패한 파일이 반쯤 남았을 수 있다). "
+                           f"재실행은 막힌다 — {logs_dir} 를 손으로 확인하라") from e
 
 
 def _fmt(v: dict) -> str:
@@ -519,6 +584,19 @@ def results_md(res: dict, meta: dict) -> str:
     return "\n".join(L) + "\n"
 
 
+WATCHED = ("research", "src", "tests")
+
+
+def require_clean_tree(repo=REPO) -> None:
+    """실제 실행 출처(MQ-4): ``research/ src/ tests/`` 에 추적·미추적 변경이 있으면 멈춘다(.superpowers/ 는 gitignore)."""
+    r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", *WATCHED], cwd=repo,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"git status 실패: {r.stderr.strip()}")
+    if r.stdout.strip():
+        raise SystemExit("작업 트리가 깨끗하지 않다(실제 실행은 커밋된 코드로만):\n" + r.stdout.rstrip())
+
+
 def git_sha() -> dict:
     sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO, capture_output=True,
@@ -530,7 +608,8 @@ def config() -> dict:
     return {"Ns": NS, "ks": KS, "qs": QS, "M": M_PATHS, "d_max": D_MAX, "adv_floor_mn": ADV_FLOOR, "member_hist": "N+60 (q=0: 70)",
             "sigma_w": SIGMA_W, "pool_years": POOL_YEARS, "pool_min_dates": POOL_MIN_DATES, "event_start": EVENT_START,
             "label_end": LABEL_END, "data": DATA, "table": PRICE_TABLE, "eps_source": EPS_SOURCE, "years": CAL.YEARS,
-            "r3_sample": f"blake2b(code|date) % {R3_MOD} == 0", "prereg": "research/logs/ma_quad/PREREG.md + 정정 MQ-1"}
+            "r3_sample": f"blake2b(code|date) % {R3_MOD} == 0",
+            "prereg": "research/logs/ma_quad/PREREG.md + 정정 MQ-1·MQ-2·MQ-3·MQ-4"}
 
 
 # =============================================================================================== 병렬
@@ -674,6 +753,9 @@ def main(argv=None) -> int:
     scratch = Path(args.scratch)
     logs = Path(args.logs)
     if not args.smoke:
+        if logs.resolve() != LOGS.resolve():
+            raise SystemExit(f"실제 실행은 정본 {LOGS} 로만 — --logs 는 스모크에서만 바꾼다")
+        require_clean_tree()
         guard_rerun(logs)
     scratch.mkdir(parents=True, exist_ok=True)
     gs = git_sha()
@@ -710,15 +792,15 @@ def main(argv=None) -> int:
             cells[(N, k)] = assemble_cell(X, N, k, ev, Y, probs, out)
             log(f"칸 N={N} k={k} 조립 — 짝 {cells[(N, k)]['n_events']['judged']:,}")
     res = summarize(cells)
-    meta = {"git": gs["sha"], "git_dirty": gs["dirty"], "date": _dt.date.today().isoformat(), "data": X["info"],
-            "config": config(), "rulings": RULINGS}
+    meta = {"git": gs["sha"], "git_head": gs["sha"], "git_dirty": gs["dirty"], "git_clean_paths": WATCHED,
+            "date": _dt.date.today().isoformat(), "data": X["info"], "config": config(), "rulings": RULINGS}
     if args.m_sens:
         res["m_sens"] = m_sens(X, EV[5])
-    logs.mkdir(parents=True, exist_ok=True)
-    write_json({**meta, **res}, logs / "calib_results.json")
-    (logs / "RESULTS.md").write_text(results_md(res, meta), encoding="utf-8")
-    append_trial(logs / "TRIALS.jsonl", {"trial": "gate0", "date": meta["date"], "config": config(),
-                                         "verdict": res["gate"], "git": gs["sha"]})
+    # 세 출력을 메모리에서 다 만든 뒤 쓴다(직렬화 실패는 쓰기 전에 난다)
+    json_text = json.dumps(_clean({**meta, **res}), allow_nan=False, ensure_ascii=False, indent=1) + "\n"
+    md_text = results_md(res, meta)
+    trial = trial_line({"trial": "gate0", "date": meta["date"], "config": config(), "verdict": res["gate"], "git": gs["sha"]})
+    write_outputs(logs, json_text, md_text, trial)
     log(f"관문 판정: {_gate_line(res['gate'])} → {logs}")
     return 0
 

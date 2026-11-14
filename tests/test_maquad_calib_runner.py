@@ -1,5 +1,6 @@
 """관문 0 실행기 — 합성 패널만(DB 없음). research/experiments/maquad_calib.py."""
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -172,7 +173,7 @@ def test_pairing_rejects_key_mismatch():
     n = 3
     probs = {q: {key: np.full(n, 0.4) for key in R.KEYS} | {"nopool": np.zeros(n, bool)} for q in R.QS}
     probs[2]["p_up_5_20"][0] = np.nan  # p_align 는 유한한데 다른 키만 NaN — 커널 규약 위반
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError):
         R.pair(probs, np.ones(n))
 
 
@@ -353,3 +354,127 @@ def test_m_sens_default_on_for_real_run_off_for_smoke(monkeypatch, tmp_path):
         with pytest.raises(SystemExit):
             R.main(argv + ["--scratch", str(tmp_path / "s"), "--logs", str(tmp_path / "l")])
         assert seen["ns"].m_sens is exp, argv
+
+
+# --------------------------------------------------------------------------- 실행 출처·재실행 방지(리뷰)
+
+def test_block_has_yearly_bss_report(cell):
+    c, _ = cell
+    for blk in (c["judged"], c["reports"]["r1"], c["p_up"]["p_up_5_20"]):
+        assert set(blk["yearly_bss"]) == {"2v0", "2v1"}
+        for pair_ in ("2v0", "2v1"):
+            assert set(blk["yearly_bss"][pair_]) == set(range(2017, 2024))
+    # 판정과 무관: verdict 의 키는 그대로
+    assert "yearly_bss" not in c["verdict"]
+
+
+def test_rerun_guard_refuses_partial_outputs(tmp_path):
+    for name in ("calib_results.json", "RESULTS.md"):
+        d = tmp_path / name.split(".")[0]
+        d.mkdir()
+        (d / name).write_text("")
+        with pytest.raises(SystemExit):
+            R.guard_rerun(d)
+
+
+def _outs():
+    return '{"a": 1}\n', "# md\n", R.trial_line({"trial": "gate0", "verdict": {"pass": False}})
+
+
+def test_write_outputs_order_trials_last(tmp_path, monkeypatch):
+    order = []
+    real_new, real_app = R._write_new, R.append_line
+    monkeypatch.setattr(R, "_write_new", lambda p, txt: (order.append(Path(p).name), real_new(p, txt)))
+    monkeypatch.setattr(R, "append_line", lambda p, ln: (order.append(Path(p).name), real_app(p, ln)))
+    (tmp_path / "TRIALS.jsonl").write_text('{"trial":"other"}\n')
+    R.write_outputs(tmp_path, *_outs())
+    assert order == ["calib_results.json", "RESULTS.md", "TRIALS.jsonl"]
+    lines = (tmp_path / "TRIALS.jsonl").read_text().splitlines()
+    assert lines[0] == '{"trial":"other"}' and json.loads(lines[1])["trial"] == "gate0"
+    with pytest.raises(SystemExit):
+        R.guard_rerun(tmp_path)
+
+
+def test_write_outputs_partial_failure_is_visible_and_blocks_rerun(tmp_path, monkeypatch):
+    real_new = R._write_new
+
+    def boom(p, txt):
+        if Path(p).name == "RESULTS.md":
+            raise OSError("disk full")
+        real_new(p, txt)
+
+    monkeypatch.setattr(R, "_write_new", boom)
+    with pytest.raises(RuntimeError, match="calib_results.json"):
+        R.write_outputs(tmp_path, *_outs())
+    assert not (tmp_path / "TRIALS.jsonl").exists()      # 원장은 마지막 — 앞이 실패하면 안 쓴다
+    with pytest.raises(SystemExit):
+        R.guard_rerun(tmp_path)                           # 반쯤 쓴 뒤에도 재실행 막음
+
+
+def test_write_outputs_refuses_if_anything_exists(tmp_path):
+    (tmp_path / "RESULTS.md").write_text("old")
+    with pytest.raises(RuntimeError, match="RESULTS.md"):
+        R.write_outputs(tmp_path, *_outs())
+    assert not (tmp_path / "calib_results.json").exists()
+    assert (tmp_path / "RESULTS.md").read_text() == "old"
+    d = tmp_path / "t"
+    d.mkdir()
+    R.append_trial(d / "TRIALS.jsonl", {"trial": "gate0"})
+    with pytest.raises(RuntimeError, match="gate0"):
+        R.write_outputs(d, *_outs())
+    assert not (d / "calib_results.json").exists()
+
+
+def test_trial_line_is_strict_single_line():
+    ln = R.trial_line({"trial": "gate0", "x": np.nan, "s": "a\nb"})
+    assert "\n" not in ln and json.loads(ln)["x"] is None
+
+
+def test_real_run_refuses_noncanonical_logs(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(R, "_connect", lambda: called.append(1) or (_ for _ in ()).throw(AssertionError("DB 에 붙으면 안 된다")))
+    monkeypatch.setattr(R, "require_clean_tree", lambda *a, **kw: None)
+    with pytest.raises(SystemExit, match="정본"):
+        R.main(["--logs", str(tmp_path), "--scratch", str(tmp_path / "s")])
+    assert not called
+
+
+def _git(repo, *args):
+    import subprocess
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def test_require_clean_tree(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "x.md").write_text("x")               # 지켜보는 경로 밖 — 통과
+    R.require_clean_tree(repo)
+    (repo / "research").mkdir()
+    (repo / "research" / "new.py").write_text("x")         # 추적 안 된 파일 → 멈춤
+    with pytest.raises(SystemExit, match="research/new.py"):
+        R.require_clean_tree(repo)
+    _git(repo, "add", "research/new.py")                    # 추적(스테이징) 변경 → 멈춤
+    with pytest.raises(SystemExit):
+        R.require_clean_tree(repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("x")
+    with pytest.raises(SystemExit, match="src/a.py"):
+        R.require_clean_tree(repo)
+
+
+def test_real_run_requires_clean_tree_before_db(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(R, "require_clean_tree", lambda *a, **kw: seen.append("clean") or (_ for _ in ()).throw(SystemExit("dirty")))
+    monkeypatch.setattr(R, "_connect", lambda: seen.append("db"))
+    monkeypatch.setattr(R, "guard_rerun", lambda *a, **kw: None)
+    with pytest.raises(SystemExit, match="dirty"):
+        R.main(["--scratch", str(tmp_path / "s")])
+    assert seen == ["clean"]
+
+
+def test_config_and_doc_reference_prereg_corrections():
+    assert "MQ-1" in R.config()["prereg"] and "MQ-4" in R.config()["prereg"]
+    assert "MQ-4" in R.__doc__
+    assert "task-5-rulings" not in Path(R.__file__).read_text()
