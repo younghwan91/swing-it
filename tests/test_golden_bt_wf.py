@@ -246,3 +246,65 @@ def test_report_and_shakeout():
     assert r["by_reason"]["stop"]["n"] == 1 and r["all"]["payoff"] == pytest.approx(2.0)
     assert r["by_d_fill"]["0.00-0.05"]["n"] == 1 and r["by_d_fill"]["0.10-0.15"]["n"] == 1
     assert r["golden_share"] == 0.5
+
+
+# --------------------------------------------------------------------------------------------- 정정 GB-1: 폴드 밖 연속 자산
+
+def _flat_D(T=60):
+    days = pd.bdate_range("2020-12-01", periods=T)
+    C = np.full((2, T), 100.0)
+    D = {"days": days, "codes": ["000000", "000001"], "O": C.copy(), "C": C, "ma50": np.full((2, T), 95.0), "ma200": np.full((2, T), 98.0),
+         "pool": np.zeros((2, T), bool), "PG": np.full((2, T), np.nan, np.float32), "PD": np.full((2, T), np.nan, np.float32),
+         "lu": np.full(T, 1.29), "cost": np.full((2, T), COST), "mkt": np.zeros(2, np.int64)}
+    D["last_valid"] = E.last_valid_index(C)
+    return D
+
+
+def test_oof_series_trade_spans_fold_boundary():
+    """폴드 2020 에 들어가 2021 에 나간 거래의 손익은 2021 자산에도 들어간다(해 구간만 잇던 예전 정의와 다름)."""
+    D = _flat_D()
+    days = D["days"]
+    t_dec = int(days.searchsorted(pd.Timestamp("2020-12-28")))
+    D["pool"][0, t_dec] = True
+    D["PG"][0, t_dec] = 0.8
+    y21 = int(days.searchsorted(pd.Timestamp("2021-01-04")))
+    D["C"][0, y21 + 3 :] = 110.0                                          # 2021 에 오른다
+    D["C"][0, y21 + 10] = 94.0                                            # 손절 → 다음 시가 청산
+    D["O"][0, y21 + 11] = 105.0
+    tr, _ = E.simulate(D, {"th_in": 0.5, "th_out": 0.2, "sizing": "eq", "exit": "dead_p", "th_d": 0.5}, 2.0, 1, len(days) - 1,
+                       entry_end=y21 - 1)
+    assert len(tr) == 1 and pd.Timestamp(tr.iloc[0]["entry_day"]).year == 2020 and pd.Timestamp(tr.iloc[0]["exit_day"]).year == 2021
+    tr = tr.assign(fold=2020)
+    eq = W.oof_series(D, tr, 1, len(days) - 1)
+    r = eq.attrs["daily_ret"]
+    w = tr.iloc[0]["cost_basis"] / tr.iloc[0]["e_ref"]
+    assert r.sum() == pytest.approx(tr.iloc[0]["pnl"] / tr.iloc[0]["e_ref"])  # 거래 손익 = 일별 기여 합
+    i21 = y21 - 1
+    assert r[i21:].sum() == pytest.approx(r.sum())                         # 손익이 전부 2021 날짜에(2020 은 평평)
+    assert eq.loc[days[y21 + 3]] / eq.loc[days[y21 + 2]] - 1 == pytest.approx(w * 0.10)
+    ex = eq.attrs["expo"]
+    assert ex.max() == pytest.approx(w * 1.10) and ex[-1] == 0.0
+    assert W.yearly_returns(eq)[2021] != 0.0
+
+
+def test_oof_series_sums_overlapping_folds_and_topups():
+    D = _flat_D()
+    D["pool"][0, 3] = True
+    D["PG"][0, 3] = 0.5
+    D["ma50"][0, 3] = 99.0
+    D["PG"][0, 6] = 0.9                                                   # 7 시가 추가
+    D["pool"][1, 10] = True
+    D["PG"][1, 10] = 0.9
+    D["C"][:, 20:] = 120.0
+    cfg = {"th_in": 0.5, "th_out": 0.2, "sizing": "prob", "exit": "dead_p", "th_d": 0.5}
+    a, _ = E.simulate(D, cfg, 2.0, 1, 59, entry_end=8)
+    b, _ = E.simulate(D, cfg, 2.0, 9, 59)
+    tr = pd.concat([a.assign(fold=1), b.assign(fold=2)], ignore_index=True)
+    assert len(tr) == 2 and tr.iloc[0]["n_adds"] == 1
+    eq = W.oof_series(D, tr, 1, 59)
+    r = eq.attrs["daily_ret"]
+    assert r.sum() == pytest.approx((tr["pnl"] / tr["e_ref"]).sum())
+    ex = eq.attrs["expo"]
+    assert ex[25 - 1] == pytest.approx((tr["cost_basis"] / tr["e_ref"] * 1.2).sum())   # 두 폴드 거래가 같은 날 겹친다
+    with pytest.raises(ValueError):
+        W.oof_series(D, tr, 5, 59)

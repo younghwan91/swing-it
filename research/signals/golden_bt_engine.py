@@ -17,7 +17,10 @@
   금액 = 비중 × 전날 종가 자산, 현금이 모자라면 남은 현금까지.
 - 청산(판정 t → t+1 시가): ① 종가 < 손절선 ② 골든 전 P_g < θ_out(예측 붕괴) ③ 골든 뒤 dead_p: P_d ≥ θ_d / ma200: 종가 < MA200.
   골든 = 진입 뒤 판정일 종가 기준 MA50 > MA200(엄격) 이 처음 된 날 — 그날부터 ③ 이 적용되고 ② 와 추가 매수는 멈춘다.
-  확률이 NaN 인 날은 ②·③(dead_p) 판정을 건너뛴다(사유 아님), 종가가 NaN(정지)인 날은 아무 판정도 하지 않는다.
+  골든 판정은 정지일을 건너뛴 이평선(``ma50v``·``ma200v`` — 유효 종가 마지막 50·200 개 평균, 없으면 ``ma50``·``ma200``)으로 한다.
+  정정 GB-1: 보유 중 그날 판정 신호(골든 전 P_g, 골든 뒤 dead_p 의 P_d·ma200 의 MA200)가 NaN 이면 — 골든 전은 보유(손절만),
+  골든 뒤는 대체 청산 종가 < ``ma200v`` → 다음 시가(사유 ma200_fb). 그런 판정일 수를 거래별 ``nan_dec`` 로 센다.
+  종가가 NaN(정지)인 날은 아무 판정도 하지 않는다.
 - 매도 대기 중 정지(시가 NaN)면 다음 체결 가능일로 미룬다. 마지막 유한 종가 뒤(폐지)에는 마지막 가격으로 그날 청산(delist).
 - 비용: 청산일 왕복 비용 × cost_mult 를 매도 대금에서 뺀다. 끝(end) 보유분은 end 종가(없으면 마지막 가격)·비용 포함으로 청산(end).
 - R = 손익 ÷ (0.25% × 첫 매수 때 쓴 자산). 자산은 1.0 에서 시작, 보유는 종가로 평가(마지막 날만 비용 뺀 순가치).
@@ -30,10 +33,10 @@ import pandas as pd
 SLOTS = 20
 W_CAP = 0.05
 RISK = 0.0025
-REASONS = ("stop", "collapse", "dead", "ma200", "delist", "end")
+REASONS = ("stop", "collapse", "dead", "ma200", "ma200_fb", "delist", "end")
 
 TRADE_COLS = ("code", "ci", "dec_day", "entry_day", "exit_day", "entry_px", "exit_px", "stop", "d_fill", "base_w", "w0", "pg_entry",
-              "n_adds", "cost_basis", "proceeds", "ret", "pnl", "e_ref", "R", "reason", "golden_day", "hold")
+              "n_adds", "cost_basis", "proceeds", "ret", "pnl", "e_ref", "R", "reason", "golden_day", "hold", "nan_dec", "t0", "t1", "fills")
 
 
 def last_valid_index(C: np.ndarray) -> np.ndarray:
@@ -41,6 +44,18 @@ def last_valid_index(C: np.ndarray) -> np.ndarray:
     f = np.isfinite(C)
     n = C.shape[1]
     return np.where(f.any(axis=1), n - 1 - np.argmax(f[:, ::-1], axis=1), -1)
+
+
+def valid_ma(C: np.ndarray, w: int) -> np.ndarray:
+    """정지일(NaN)을 건너뛴 이동평균 — 종목별 유효 종가 마지막 ``w`` 개 평균(유효 종가 < w 면 NaN). 종가 NaN 칸은 NaN(정정 GB-1)."""
+    C = np.asarray(C, dtype=np.float64)
+    out = np.full(C.shape, np.nan)
+    for i in range(C.shape[0]):
+        f = np.flatnonzero(np.isfinite(C[i]))
+        if len(f) >= w:
+            cs = np.cumsum(np.r_[0.0, C[i, f]])
+            out[i, f[w - 1 :]] = (cs[w:] - cs[:-w]) / w
+    return out
 
 
 def _fillable(D: dict, ci: int, t: int, stop: float) -> "tuple[bool, str]":
@@ -63,6 +78,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
     """
     O, C, PG, PD = D["O"], D["C"], D["PG"], D["PD"]  # noqa: E741
     ma50, ma200, pool = D["ma50"], D["ma200"], D["pool"]
+    g50, g200 = D.get("ma50v", ma50), D.get("ma200v", ma200)
     cost, mkt, days, codes = D["cost"], D["mkt"], D["days"], D["codes"]
     n_days = C.shape[1]
     if not (1 <= start <= end < n_days):
@@ -100,7 +116,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
                        "entry_px": p["px0"], "exit_px": float(px), "stop": p["stop"], "d_fill": p["d_fill"], "base_w": p["base"],
                        "w0": p["w0"], "pg_entry": p["pg"], "n_adds": p["n_adds"], "cost_basis": p["cost_basis"], "proceeds": proceeds,
                        "ret": proceeds / p["cost_basis"] - 1.0, "pnl": pnl, "e_ref": p["e_ref"], "R": pnl / (RISK * p["e_ref"]),
-                       "reason": why, "golden_day": days[p["golden_t"]] if p["golden_t"] >= 0 else pd.NaT, "hold": t - p["t0"]})
+                       "reason": why, "golden_day": days[p["golden_t"]] if p["golden_t"] >= 0 else pd.NaT, "hold": t - p["t0"],
+                       "nan_dec": p["nan_dec"], "t0": p["t0"], "t1": t, "fills": list(p["fills"])})
 
     for t in range(start - 1, end + 1):
         if t >= start:
@@ -120,6 +137,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
                     p["qty"] += amt / O[ci, t]
                     p["cost_basis"] += amt
                     p["n_adds"] += 1
+                    p["fills"].append((t, amt, float(O[ci, t])))
                     cash -= amt
             pend_add.clear()
             for b in pend_buy:
@@ -137,7 +155,8 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
                     skips["no_cash"] += 1
                     continue
                 pos[ci] = {"qty": amt / o, "cost_basis": amt, "px0": o, "t0": t, "dec": b["dec"], "stop": b["stop"], "d_fill": d_fill,
-                           "base": base, "w0": w, "pg": b["pg"], "e_ref": e_prev, "n_adds": 0, "golden_t": -1, "last_px": o}
+                           "base": base, "w0": w, "pg": b["pg"], "e_ref": e_prev, "n_adds": 0, "golden_t": -1, "last_px": o,
+                           "nan_dec": 0, "fills": [(t, amt, o)]}
                 cash -= amt
             pend_buy = []
             # 2) 종가 평가
@@ -161,7 +180,7 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
             c = C[ci, t]
             if not np.isfinite(c):
                 continue
-            if p["golden_t"] < 0 and ma50[ci, t] > ma200[ci, t]:
+            if p["golden_t"] < 0 and g50[ci, t] > g200[ci, t]:
                 p["golden_t"] = t
             if c < p["stop"]:
                 pend_sell[ci] = "stop"
@@ -174,12 +193,18 @@ def simulate(D: dict, cfg: dict, cost_mult: float, start: int, end: int, entry_e
                         add = p["base"] * float(pg) - p["qty"] * c / e
                         if add > 1e-12:
                             pend_add[ci] = add
-            elif dead:
-                pdv = PD[ci, t]
-                if np.isfinite(pdv) and pdv >= th_d:
-                    pend_sell[ci] = "dead"
-            elif np.isfinite(ma200[ci, t]) and c < ma200[ci, t]:
-                pend_sell[ci] = "ma200"
+                else:
+                    p["nan_dec"] += 1                                  # GB-1: 골든 전 P_g NaN → 보유(손절만)
+            else:
+                sig = PD[ci, t] if dead else ma200[ci, t]
+                if np.isfinite(sig):
+                    if (dead and sig >= th_d) or (not dead and c < sig):
+                        pend_sell[ci] = "dead" if dead else "ma200"
+                else:
+                    p["nan_dec"] += 1                                  # GB-1: 골든 뒤 신호 NaN → 정지일 건너뛴 MA200 대체
+                    fb = g200[ci, t]
+                    if np.isfinite(fb) and c < fb:
+                        pend_sell[ci] = "ma200_fb"
         if t + 1 <= ee:
             free = SLOTS - len(pos)
             if free > 0:
@@ -252,7 +277,7 @@ def trade_path(D: dict, ci: int, dec: int, hold: int, sizing: str, cost_mult: fl
         if t >= end:
             return _tp_out(D, ci, qty * last, basis, end, cost_mult, "end", t0, dec)
         if np.isfinite(c) and not pend_stop:
-            if not golden and D["ma50"][ci, t] > D["ma200"][ci, t]:
+            if not golden and D.get("ma50v", D["ma50"])[ci, t] > D.get("ma200v", D["ma200"])[ci, t]:
                 golden = True
             if c < stop:
                 pend_stop = True

@@ -90,6 +90,7 @@ def test_stop_next_open_gap_below_stop_and_never_raised():
     D = mk()
     enter(D)
     D["ma50"][0, 6:] = 99.5                                               # 진입 뒤 MA50 상승 — 손절선은 95 그대로
+    D["ma200"][0, 6:] = 101.0                                             # 골든은 없게(MA50 < MA200)
     D["C"][0, 8] = 97.0                                                   # 새 MA50 아래지만 95 위 → 청산 없음
     D["C"][0, 10] = 94.0
     D["O"][0, 11] = 80.0                                                  # 갭 하락: 시가 그대로 체결
@@ -411,3 +412,62 @@ def test_trade_path_zero_weight_prob():
     D["PG"][0, 5] = 0.0
     r = E.trade_path(D, 0, 5, 10, "prob", 1.0, 39)
     assert r["R"] == 0.0 and r["reason"] == "zero_weight"
+
+
+# ---------------------------------------------------------------------------------------------- 정정 GB-1: 정지일 창 대체 청산
+
+def test_valid_ma_skips_nan_days():
+    C = np.array([[1.0, 2.0, np.nan, 3.0, 4.0, np.nan, 5.0]])
+    v = E.valid_ma(C, 3)
+    assert np.isnan(v[0, :3]).all() and v[0, 3] == pytest.approx(2.0) and v[0, 4] == pytest.approx(3.0)
+    assert np.isnan(v[0, 5]) and v[0, 6] == pytest.approx(4.0)
+
+
+def test_gb1_nan_prob_before_golden_holds_with_stop():
+    D = mk()
+    enter(D)
+    D["PG"][0, 6:] = np.nan                                               # 골든 전 확률 NaN — 보유
+    tr, _ = run(D)
+    assert tr.iloc[0]["reason"] == "end" and tr.iloc[0]["nan_dec"] > 0
+    D["C"][0, 12] = 94.0                                                  # 손절은 그대로
+    tr, _ = run(D)
+    r = tr.iloc[0]
+    assert r["reason"] == "stop" and r["exit_day"] == D["days"][13] and r["nan_dec"] == 12 - 6
+
+
+def test_gb1_nan_after_golden_falls_back_to_valid_ma200():
+    for cfg in (CFG, {**CFG, "exit": "ma200"}):
+        D = mk()
+        enter(D)
+        D["ma50"][0, :] = np.nan                                          # 정지일이 창에 낀 정규 MA — NaN
+        D["ma200"][0, 7:] = np.nan
+        D["ma50v"] = np.full_like(D["C"], 95.0)
+        D["ma200v"] = np.full_like(D["C"], 98.0)
+        D["ma50v"][0, 7:] = 99.0                                          # 건너뛴 MA 로 골든 감지(7)
+        D["C"][0, 10] = 97.0                                              # 건너뛴 MA200(98) 아래, 손절(95) 위
+        D["ma50"][0, 5] = 95.0                                            # 진입 판정일 손절선
+        tr, _ = run(D, cfg)
+        r = tr.iloc[0]
+        assert r["golden_day"] == D["days"][7]
+        assert r["reason"] == "ma200_fb" and r["exit_day"] == D["days"][11] and r["nan_dec"] == 1 + (10 - 7 + 1)   # 6(골든 전 P_g NaN) + 7..10
+    D = mk()                                                              # 신호가 있으면 대체를 쓰지 않는다
+    enter(D)
+    D["ma50"][0, 7:] = 99.0
+    D["PG"][0, 6] = 0.8
+    D["PD"][0, 7:] = 0.1
+    D["ma200v"] = D["ma200"].copy()
+    D["ma50v"] = D["ma50"].copy()
+    D["C"][0, 10] = 97.0
+    tr, _ = run(D)
+    assert tr.iloc[0]["reason"] == "end" and tr.iloc[0]["nan_dec"] == 0
+
+
+def test_fills_ledger_sums_to_cost_basis():
+    D = mk()
+    enter(D, pg=0.5)
+    D["ma50"][0, 5] = 99.0
+    D["PG"][0, 7] = 0.9
+    tr, _ = run(D, {**CFG, "sizing": "prob"})
+    r = tr.iloc[0]
+    assert [f[0] for f in r["fills"]] == [6, 8] and sum(f[1] for f in r["fills"]) == pytest.approx(r["cost_basis"])
+    assert r["t0"] == 6 and r["t1"] == len(D["days"]) - 1

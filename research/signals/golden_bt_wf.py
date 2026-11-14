@@ -201,6 +201,46 @@ def stitch(parts: list) -> pd.Series:
     return res
 
 
+def oof_series(D: dict, trades: pd.DataFrame, start: int, end: int) -> pd.Series:
+    """정정 GB-1: 폴드 밖 일별 포트폴리오 = 모든 폴드 밖 거래의 (비중 × 그날 수익, 청산일 비용 포함) 합 — 폴드 Y 진입은 Y+1 에도
+    자기 설정대로 기여한다. 거래별 그날 손익 ÷ e_ref(첫 매수 때 쓴 자산) 를 더하고 복리로 잇는다(자산 1.0 시작).
+    매수 체결일 손익 = 그날 종가 평가 − 매수 금액, 청산일 = 매도 대금(비용 뺀) − 전날 평가. 평가는 엔진과 같다(종가 NaN 이면 마지막 가격).
+    ``attrs``: expo(그날 종가 총노출 = Σ 보유 가치 ÷ e_ref; end 청산 거래는 끝날 종가 가치 포함)."""
+    days = pd.DatetimeIndex(D["days"])
+    n = end - start + 1
+    r, ex = np.zeros(n), np.zeros(n)
+    C = D["C"]
+    for row in trades.itertuples(index=False):
+        ci, t0, t1, e_ref = int(row.ci), int(row.t0), int(row.t1), float(row.e_ref)
+        if t0 < start or t1 > end:
+            raise ValueError(f"거래 {row.code} [{t0}, {t1}] 가 [{start}, {end}] 밖")
+        buys: dict = {}
+        for t, amt, px in row.fills:
+            a_, q_ = buys.get(int(t), (0.0, 0.0))
+            buys[int(t)] = (a_ + amt, q_ + amt / px)
+        qty, last, v_prev = 0.0, float(row.fills[0][2]), 0.0
+        for t in range(t0, t1 + 1):
+            inflow, dq = buys.get(t, (0.0, 0.0))
+            qty += dq
+            c = C[ci, t]
+            if np.isfinite(c) and (t < t1 or row.reason == "end"):
+                last = float(c)
+            if t == t1:
+                pnl = float(row.proceeds) - v_prev - inflow
+                if row.reason == "end":
+                    ex[t - start] += qty * last / e_ref
+            else:
+                v = qty * last
+                pnl = v - v_prev - inflow
+                ex[t - start] += v / e_ref
+                v_prev = v
+            r[t - start] += pnl / e_ref
+    out = pd.Series(np.cumprod(1.0 + r), index=days[start : end + 1])
+    out.attrs["expo"] = ex
+    out.attrs["daily_ret"] = r
+    return out
+
+
 def expo_market(eq: pd.Series, cw_by_day: pd.Series) -> pd.Series:
     """노출 맞춘 시장: 전날 노출 × 시총 가중 시장 일수익(첫날 0) 복리."""
     expo = np.asarray(eq.attrs["expo"], dtype=float)
@@ -373,6 +413,10 @@ def report(D: dict, trades: pd.DataFrame, end: int) -> dict:
     out["by_entry_year"] = {int(y): _rstats(trades.loc[yr == y, "R"]) for y in sorted(yr.unique())}
     out["hold_days"] = {"median": float(trades["hold"].median()), "mean": float(trades["hold"].mean())}
     out["golden_share"] = float(trades["golden_day"].notna().mean())
+    if "nan_dec" in trades:
+        out["nan_prob"] = {"n_trades_any_nan_decision": int((trades["nan_dec"] > 0).sum()),
+                           "n_fallback_exits": int((trades["reason"] == "ma200_fb").sum()),
+                           "n_nan_decision_days": int(trades["nan_dec"].sum())}
     return out
 
 

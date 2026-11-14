@@ -210,6 +210,12 @@ def test_pipeline_assembles_strict_json_and_md(full, tmp_path):
     back = json.loads(text)
     assert set(back["verdict"]) == {"main_pass", "main_void", "rep_pass", "rep_void", "both_pass"}
     assert len(back["main"]["selection"]) == 4 and back["rep"]["cfg_i"] == back["main"]["selection"][-1]["cfg_i"]
+    assert back["main"]["exposure_max"] >= back["main"]["exposure_mean"] >= 0                        # 정정 GB-1 노출 보고
+    assert set(back["main"]["report"]["nan_prob"]) == {"n_trades_any_nan_decision", "n_fallback_exits", "n_nan_decision_days"}
+    eq = full["_eq"]["main"]                                                                         # 폴드 밖 연속 자산 = 거래 합
+    tr0 = full["_trades"]["main"]
+    assert eq.index[0] == pd.Timestamp("2020-01-01") and eq.index[-1] == pd.Timestamp("2023-12-28")       # 합성 달력(bdate) 첫 거래일
+    assert eq.attrs["daily_ret"].sum() == pytest.approx((tr0["pnl"] / tr0["e_ref"]).sum())
     md = R.results_md(out, meta)
     assert md.startswith("# 골든 임박 자리 포지션 백테스트 결과 (검증 전)")
     tr = full["_trades"]["main"]

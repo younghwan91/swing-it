@@ -81,8 +81,12 @@ TRIAL_NAME = "golden_bt"
 RULINGS = {
     "session": "read_prices_wide(table=daily_bars_adj_v2, session='raw') — 두 창 모두 2026-09-14 애프터마켓 오염 전. 2024~ 는 요청하지 않는다"
                "(주 창 끝 2023-12-31, 주식수·실적 원천 행도 창 끝 뒤 as-of 는 쓰지 않는다). 2024~ 보고 열은 내지 않는다(조회하지 않음).",
-    "suspension": "정지일(거래량 0·결측) 시가·종가·원 종가 NaN(MQ-2) — 그날 체결 불가, 판정 없음. 창에 정지일이 끼면 MA50·MA200·P_g·P_d 가 NaN 이라 "
-                  "그 기간 골든·확률 청산 판정이 없다(손절은 종가가 있으면 그대로). 매도 대기 중 정지면 다음 체결 가능일 시가.",
+    "suspension": "정지일(거래량 0·결측) 시가·종가·원 종가 NaN(MQ-2) — 그날 체결 불가, 판정 없음. 매도 대기 중 정지면 다음 체결 가능일 시가. "
+                  "확률·사전 후보의 MA 는 창에 NaN 이 있으면 NaN 그대로(GB-1 에서도 바꾸지 않음).",
+    "gb1_fallback": "정정 GB-1(컨트롤러, 결과 전): 골든 판정은 정지일을 건너뛴 MA50·MA200(유효 종가 마지막 50·200 개 평균, E.valid_ma)으로 한다. "
+                    "보유 중 그날 판정 신호가 NaN 이면 — 골든 전(P_g NaN): 보유, 손절만. 골든 뒤(dead_p 의 P_d 또는 ma200 설정의 MA200 이 NaN): "
+                    "종가 < 건너뛴 MA200 → 다음 시가(사유 ma200_fb). 신호가 유한하면 원래 규칙. 거래별 NaN 판정일 수(nan_dec)·대체 청산 수를 보고한다. "
+                    "ma200 설정에도 같은 대체를 쓴다(그 설정의 신호가 정규 MA200 이라 같은 결함). 널 ② 의 골든(추가 매수 정지)도 건너뛴 MA.",
     "pool": "사전 후보 = 유니버스(위생·ADV20 ≥ 10억·상장 252일) ∧ EPS↑ ∧ 0 < 1 − MA50/MA200 ≤ 0.05 ∧ 0 < d = 1 − MA50/종가 ≤ 0.15, 판정일 창 안.",
     "probs": "P_g·P_d = golden_hmm q0 절차 그대로(poly_forecast(y,1,10,0)·σ60·month_pool 3년·원점 ≥ 120·u ≤ t_m−k·모집단 상장 ≥ 70·"
              "draw_index(code, 달, 0, 0, 10) M=200) → ma_quad.cross_probs(k=10, 50/200), P_d 는 dead=True(같은 경로·같은 색인, 부등호만 반대). "
@@ -107,8 +111,10 @@ RULINGS = {
                    "Y 가격은 엔진에 들어가지 않는다.",
     "oos": "폴드 Y 시험 = 빈 장부, Y 첫 거래일 체결부터 Y 말 체결까지 새 진입, 보유는 진입 설정대로 2023-12-28 종가까지(끝 보유분 비용 포함 평가). "
            "폴드 밖 거래 = 네 폴드 거래를 이어 붙인 것(체결 수·R·바 ①②③⑥).",
-    "oos_equity": "자산 기반 바(④ 팩터 알파·⑤ 연복리·⑦ DSR)의 폴드 밖 자산 = 각 폴드 Y 시험 자산의 Y 해 안 구간을 이어 붙인 것(폴드 넘어 보유분의 "
-                  "다음 해 손익은 자산 곡선에 없고 거래 R 에는 있다). 노출도 같은 구간을 잇는다.",
+    "oos_equity": "정정 GB-1(컨트롤러, 결과 전): 자산 기반 바(④ 팩터 알파·⑤ 연복리·⑦ DSR)와 월 팩터 회귀의 폴드 밖 자산 = 모든 폴드 밖 거래의 "
+                  "(비중 × 그날 수익) 합(거래별 그날 손익 ÷ 첫 매수 때 자산, 청산일 비용 포함)을 2020 첫 거래일 ~ 2023-12-28 에 복리로 이은 것 "
+                  "(W.oof_series) — 폴드 Y 진입은 Y+1 에도 자기 설정대로 기여한다. 총노출 = Σ 보유 가치 ÷ 첫 매수 때 자산(폴드가 겹치면 1 을 넘을 수 있다), "
+                  "평균·최대를 보고하고 노출 맞춘 시장도 이 노출로. 재현은 단일 시뮬 자산 그대로.",
     "neighbors": "이웃 = 자기 + 한 축만 다른 설정: θ_in 은 순서 축 한 칸(0.3↔0.5↔0.7↔0.9), θ_out·sizing·exit(dead_p 0.5·dead_p 0.7·ma200) 은 "
                  "범주 축이라 다른 값 전부. 선택 = 이웃 학습 점수 중앙값 최대, 동률이면 메뉴 순서 앞.",
     "null1": "널 ① = 300 회, 회마다 폴드마다 48 중 무작위 설정(복원, 시드 고정) 의 폴드 밖 R 합(비용 2배)을 더한다. 재현은 회마다 설정 하나.",
@@ -276,7 +282,7 @@ def prepare(X: dict, eps_fn) -> dict:
     if len(ci):
         eps[ci, s] = np.asarray(eps_fn(ci, s), dtype=bool)
     mk = X["meta"]["market"].reindex(pd.Index(X["codes"]))
-    X.update(days=days, C=C, y=y, sigma=sigma, ma50=ma50, ma200=ma200, gap=gap, U=U, member=member, base=base, pool=base & eps,
+    X.update(days=days, C=C, y=y, sigma=sigma, ma50=ma50, ma200=ma200, ma50v=E.valid_ma(C, SHORT), ma200v=E.valid_ma(C, LONG), gap=gap, U=U, member=member, base=base, pool=base & eps,
              mkt=np.asarray(mk.eq("KOSDAQ").to_numpy(), dtype=np.int64), cost=cost_table(days), lu=lu_array(days),
              last_valid=E.last_valid_index(C), bounds=(s0, e0))
     return X
@@ -366,7 +372,7 @@ def prob_panels(X: dict, workers: int, months: "list | None" = None) -> dict:
 
 
 def sim_data(X: dict, P: dict) -> dict:
-    keys = ("days", "codes", "O", "C", "ma50", "ma200", "pool", "lu", "cost", "mkt", "last_valid")
+    keys = ("days", "codes", "O", "C", "ma50", "ma200", "ma50v", "ma200v", "pool", "lu", "cost", "mkt", "last_valid")
     return {**{k: X[k] for k in keys}, "PG": P["PG"], "PD": P["PD"]}
 
 
@@ -443,16 +449,15 @@ def walk_forward(D: dict, workers: int) -> dict:
             "nbr_median": [W.neighbor_medians(score[:, f]).tolist() for f in range(len(folds))]}
 
 
-def oos_selected(wf: dict, cost1: bool = False) -> tuple:
-    """선택 설정의 폴드 밖 거래(열 fold·cfg·sizing 추가)와 폴드-해 구간을 이은 자산."""
-    trs, parts = [], []
+def oos_selected(wf: dict, D: dict, cost1: bool = False) -> tuple:
+    """선택 설정의 폴드 밖 거래(열 fold·cfg·sizing 추가)와 정정 GB-1 폴드 밖 연속 자산(거래 합 — W.oof_series)."""
+    trs = []
     for f, fo in enumerate(wf["folds"]):
         i = wf["sel"][f]
-        tr, eq = wf["oos_cost1"][f] if cost1 else wf["oos"][(i, f)]
+        tr, _ = wf["oos_cost1"][f] if cost1 else wf["oos"][(i, f)]
         trs.append(tr.assign(fold=fo["year"], cfg=i, sizing=wf["menu"][i]["sizing"]))
-        m = eq.index.year == fo["year"]
-        parts.append((eq[m], np.asarray(eq.attrs["expo"])[m]))
-    return pd.concat(trs, ignore_index=True), W.stitch(parts)
+    tr = pd.concat(trs, ignore_index=True)
+    return tr, W.oof_series(D, tr, wf["folds"][0]["test"][0], wf["folds"][-1]["test"][1])
 
 
 def replicate(D: dict, cfg_i: int, workers: int) -> dict:
@@ -503,8 +508,8 @@ def require_index(X: dict, s: int, e: int) -> None:
 def assemble(X1: dict, D1: dict, wf: dict, X2: dict, D2: dict, rep: dict, n2: dict, P1info: dict, P2info: dict) -> dict:
     """주 시험·재현 바와 보고 열. 널 ② 결과 ``n2`` = {main|rep: [회별 dict]}."""
     s1, e1 = sim_bounds(D1["days"], MAIN)
-    tr, eq = oos_selected(wf)
-    tr1, eq1 = oos_selected(wf, cost1=True)
+    tr, eq = oos_selected(wf, D1)
+    tr1, eq1 = oos_selected(wf, D1, cost1=True)
     cw1 = market_cw(X1)
     mk_eq = W.expo_market(eq, cw1)
     m = W.monthly(eq, X1["kx"], X1["kq"])
@@ -524,7 +529,7 @@ def assemble(X1: dict, D1: dict, wf: dict, X2: dict, D2: dict, rep: dict, n2: di
         "report": W.report(D1, tr, e1),
         "cost": {"x2": {"R_sum": W.r_sum(tr), "n": int(len(tr)), "cagr": W.cagr(eq)},
                  "x1": {"R_sum": W.r_sum(tr1), "n": int(len(tr1)), "cagr": W.cagr(eq1)}},
-        "exposure_mean": float(np.mean(eq.attrs["expo"])),
+        "exposure_mean": float(np.mean(eq.attrs["expo"])), "exposure_max": float(np.max(eq.attrs["expo"])),
         "kospi_cagr": W.cagr(kx.dropna()) if kx.notna().sum() > 1 else float("nan"),
         "yearly_return_x2": W.yearly_returns(eq), "fold_R_sum": dict(zip(FOLD_YEARS, fold_rs, strict=True)),
         "null1": _qs(null1), "null2": {**_qs(null2), "n_short_total": int(sum(r["n_short"] for r in n2["main"])),
@@ -547,7 +552,7 @@ def assemble(X1: dict, D1: dict, wf: dict, X2: dict, D2: dict, rep: dict, n2: di
         "bars": rbars, "cfg_i": rep["cfg"], "cfg": W.menu()[rep["cfg"]], "report": W.report(D2, rep["trades"], e2),
         "cost": {"x2": {"R_sum": W.r_sum(rep["trades"]), "n": int(len(rep["trades"])), "cagr": W.cagr(eq2)},
                  "x1": {"R_sum": W.r_sum(rep["trades_cost1"]), "n": int(len(rep["trades_cost1"])), "cagr": W.cagr(rep["eq_cost1"])}},
-        "exposure_mean": float(np.mean(eq2.attrs["expo"])), "kospi_cagr": W.cagr(kx2.dropna()) if kx2.notna().sum() > 1 else float("nan"),
+        "exposure_mean": float(np.mean(eq2.attrs["expo"])), "exposure_max": float(np.max(eq2.attrs["expo"])), "kospi_cagr": W.cagr(kx2.dropna()) if kx2.notna().sum() > 1 else float("nan"),
         "yearly_return_x2": W.yearly_returns(eq2), "rsum_by_cfg": rep["rsum_all"].tolist(),
         "null1": _qs(rnull1), "null2": {**_qs(rnull2), "n_short_total": int(sum(r["n_short"] for r in n2["rep"]))},
         "null2_holds_src": W.null2_holds(rep["trades"])[1],
@@ -579,7 +584,7 @@ def pipeline(X1: dict, D1: dict, X2: dict, D2: dict, P1info: dict, P2info: dict,
     """워크포워드 → 재현(폴드 2023 선택) → 널 ② → 바·보고."""
     wf = walk_forward(D1, workers)
     rep = replicate(D2, wf["sel"][-1], workers)
-    tr_main, _ = oos_selected(wf)
+    tr_main, _ = oos_selected(wf, D1)
     _, e1 = sim_bounds(D1["days"], MAIN)
     plans = {"main": W.null2_plan(tr_main, D1["days"], e1), "rep": W.null2_plan(rep["trades"], D2["days"], rep["bounds"][1])}
     holds = {"main": W.null2_holds(tr_main)[0], "rep": W.null2_holds(rep["trades"])[0]}   # 각 시험의 선택 설정 거래(RULINGS null2)
@@ -701,7 +706,9 @@ def results_md(res: dict, meta: dict) -> str:
               f"{_f(a.get('avg_loss_R'))} R · 승률(보고) {_f(a.get('win_share'), '{:.1%}')} · 체결 {a.get('n', 0):,}",
               f"- 비용 1배 R 합 {_f(part['cost']['x1']['R_sum'], '{:+.1f}')} / 2배 {_f(part['cost']['x2']['R_sum'], '{:+.1f}')} · 연복리 1배 "
               f"{_f(part['cost']['x1']['cagr'], '{:+.2%}')} / 2배 {_f(part['cost']['x2']['cagr'], '{:+.2%}')} · 평균 노출 {_f(part['exposure_mean'], '{:.1%}')} "
-              f"· KOSPI 보유 연복리 {_f(part['kospi_cagr'], '{:+.2%}')}",
+              f"· 최대 노출 {_f(part['exposure_max'], '{:.1%}')} · KOSPI 보유 연복리 {_f(part['kospi_cagr'], '{:+.2%}')}",
+              f"- 확률 NaN 판정일이 있던 거래 {rr.get('nan_prob', {}).get('n_trades_any_nan_decision', 0):,} · 대체 청산(ma200_fb) "
+              f"{rr.get('nan_prob', {}).get('n_fallback_exits', 0):,} (정정 GB-1)",
               f"- 털기율(손절 뒤 20일 안 진입가 회복) {_f(rr.get('shakeout', {}).get('rate'), '{:.1%}')} (손절 {rr.get('shakeout', {}).get('n_stop', 0)}) · "
               f"골든 도달 {_f(rr.get('golden_share'), '{:.1%}')} · 보유 중앙 {_f(rr.get('hold_days', {}).get('median'), '{:.0f}')} 일",
               f"- 널 ① p50/p95 {_f(part['null1'].get('p50'), '{:+.1f}')} / {_f(part['null1'].get('p95'), '{:+.1f}')} · 널 ② "
