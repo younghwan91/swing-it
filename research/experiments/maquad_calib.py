@@ -12,7 +12,8 @@ R2 템플릿 충족 부분집합, R3 정배열 아닌 유니버스 전 종목-�
 
 사용(실제 실행은 컨트롤러가 한 번):
 ``set -a; . ~/git/quant-airflow/.env; set +a; NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1
-uv run --with numba --extra pg python research/experiments/maquad_calib.py [--smoke] [--workers 16] [--m-sens]``
+uv run --with numba --extra pg python research/experiments/maquad_calib.py [--smoke] [--workers 16] [--no-m-sens]``
+(실제 실행은 ``--m-sens`` 가 기본 켬 — 한 번뿐이라 같이 낸다.)
 """
 from __future__ import annotations
 
@@ -79,6 +80,8 @@ RULINGS = {
     "member": "라이브러리 모집단 universe_mask(adv_floor=10억, min_history=N+60), q=0 은 min_history=70.",
     "r3": "R3 = 정배열 아닌 유니버스 종목-일의 결정적 20% 표본(blake2b(code|date) % 5 == 0).",
     "label_end": "t+k 거래일 ≤ 2023-12-28, t ≥ 2017-01-02.",
+    "suspension": "정정 MQ-2: 거래량 0 또는 결측인 날의 종가(와 원 종가)를 load 맨 앞에서 NaN — 적합·σ·이평선·라벨 창에 끼면 신호·라벨 없음. "
+                  "평평한 종가 유지판 보고 열은 내지 않는다. 수는 data.n_suspension_cells_nan.",
     "eps_tolerance": "판정 문턱 비교는 부동소수 오차 1e-12 만큼 너그럽다(등호 포함 — ma_quad_calib._EPS).",
 }
 
@@ -98,7 +101,7 @@ def load(con) -> dict:
     from swing_it.storage import read_prices, read_prices_wide
 
     # session="raw": 창 끝(2024-01-31)이 애프터마켓 오염(2026-09-14~) 전이라 정규장과 같고, 이 표는 regular 를 받지 않는다.
-    p = read_prices_wide(con, cols=("close", "trade_value", "raw_close"), table=PRICE_TABLE, start=DATA[0], end=DATA[1],
+    p = read_prices_wide(con, cols=("close", "trade_value", "raw_close", "volume"), table=PRICE_TABLE, start=DATA[0], end=DATA[1],
                          session="raw")
     days = pd.DatetimeIndex(p["close"].index)
     codes = pd.Index([str(c) for c in p["close"].columns])
@@ -106,8 +109,13 @@ def load(con) -> dict:
     def arr(c):
         return np.array(p[c].to_numpy(dtype=float).T, dtype=np.float64, order="C", copy=True)   # 쓰기 가능한 사본
 
-    C, TV, RC = arr("close"), arr("trade_value"), arr("raw_close")
+    C, TV, RC, V = arr("close"), arr("trade_value"), arr("raw_close"), arr("volume")
     p = None                                           # 와이드 DataFrame 해제
+    C_src = C.copy()                                   # pre_listing 검사용 원 종가(정지일 NaN 전 — 검사가 헛돌지 않게)
+    # 정정 MQ-2: 정지일(거래량 0 또는 결측)의 종가는 NaN — 맨 먼저. 그 날이 적합·σ·이평선·라벨 창에 끼면 신호·라벨 없음.
+    # 원 종가(1,000원 규칙 원천)도 같이 비운다. 거래대금은 종가 파생이 아니라 그대로(0 이면 ADV20 평균에 0 으로 든다).
+    n_susp = mask_suspensions(C, V, RC)
+    del V
     cs = read_prices(con, cols=("code", "date", "close_src"), table=PRICE_TABLE, start=DATA[0], end=DATA[1],
                      session="raw", parse_dates=True)
     pl = cs.loc[cs["close_src"] == "pre_listing", ["code", "date"]]
@@ -116,8 +124,9 @@ def load(con) -> dict:
     cj = codes.get_indexer(pl["code"].astype(str))
     if (di < 0).any() or (cj < 0).any():
         raise RuntimeError("pre_listing 행이 와이드 패널 격자 밖이다")
-    if np.isfinite(C[cj, di]).any():
-        raise RuntimeError(f"pre_listing 칸 {int(np.isfinite(C[cj, di]).sum())} 개에 종가가 있다 — 자료가 바뀌었다, 멈춘다")
+    if np.isfinite(C_src[cj, di]).any():
+        raise RuntimeError(f"pre_listing 칸 {int(np.isfinite(C_src[cj, di]).sum())} 개에 종가가 있다 — 자료가 바뀌었다, 멈춘다")
+    del C_src
     for a in (C, TV, RC):
         a[cj, di] = np.nan
     n_nonpos = int((C <= 0).sum())
@@ -128,8 +137,17 @@ def load(con) -> dict:
     meta = load_listing_meta(con)
     info = {"table": PRICE_TABLE, "start": DATA[0], "end": DATA[1], "first_day": str(days[0].date()),
             "last_day": str(days[-1].date()), "n_codes": len(codes), "n_days": len(days),
-            "n_pre_listing_cells": len(pl), "n_close_nonpositive": n_nonpos, "n_price_rule_from_adj_close": n_rc_fill}
+            "n_pre_listing_cells": len(pl), "n_suspension_cells_nan": n_susp, "n_close_nonpositive": n_nonpos,
+            "n_price_rule_from_adj_close": n_rc_fill}
     return {"days": days, "codes": list(codes), "C": C, "raw_close": PX, "tv": TV, "meta": meta, "info": info}
+
+
+def mask_suspensions(C: np.ndarray, V: np.ndarray, *derived: np.ndarray) -> int:
+    """정정 MQ-2: 종가가 유한한데 거래량이 0 또는 결측인 칸을 C 와 ``derived`` 에서 제자리 NaN. NaN 으로 만든 칸 수."""
+    bad = np.isfinite(C) & ~(np.nan_to_num(V, nan=0.0) > 0)
+    for a in (C, *derived):
+        a[bad] = np.nan
+    return int(bad.sum())
 
 
 def hash_sample(codes, days, ci, s, mod: int, salt: str = "") -> np.ndarray:
@@ -645,10 +663,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--smoke", action="store_true", help="모양·사건 수·시간만(50 종목·2017 + 전 패널 한 칸 시간 탐침)")
     ap.add_argument("--workers", type=int, default=16)
-    ap.add_argument("--m-sens", action="store_true", help="q=2 N=20 k=5, 판정 사건 1% 표본 M=1000 대 200 |Δp| (보고)")
+    ap.add_argument("--m-sens", action=argparse.BooleanOptionalAction, default=None,
+                    help="q=2 N=20 k=5, 판정 사건 1%% 표본 M=1000 대 200 |Δp| (보고) — 실제 실행은 기본 켬, 스모크는 기본 끔")
     ap.add_argument("--scratch", default=str(SCRATCH))
     ap.add_argument("--logs", default=str(LOGS))
     args = ap.parse_args(argv)
+    if args.m_sens is None:
+        args.m_sens = not args.smoke                   # 실제 실행은 한 번뿐(재실행 막음) — m-sens 를 같이 낸다
     warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
     scratch = Path(args.scratch)
     logs = Path(args.logs)
@@ -661,6 +682,7 @@ def main(argv=None) -> int:
     raw = load(con)
     log(f"load: 종목 {raw['info']['n_codes']:,} × 거래일 {raw['info']['n_days']:,} "
         f"({raw['info']['first_day']} ~ {raw['info']['last_day']}) · pre_listing 칸 {raw['info']['n_pre_listing_cells']} · "
+        f"정지일 NaN {raw['info']['n_suspension_cells_nan']:,} 칸 · "
         f"원 종가 없어 수정 종가로 1,000원 규칙 {raw['info']['n_price_rule_from_adj_close']:,} 칸 · {time.time() - t:.1f}s")
     t = time.time()
     codes, days = raw["codes"], raw["days"]

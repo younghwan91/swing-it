@@ -262,3 +262,94 @@ def test_results_md_and_gate(cell, tmp_path):
     for N in R.NS:
         assert f"| {N} |" in md
     R.write_json(res, tmp_path / "r.json")
+
+
+# --------------------------------------------------------------------------- 정지일(정정 MQ-2)
+
+def test_mask_suspensions_counts_and_nans():
+    C = np.array([[10.0, 11.0, 12.0, np.nan], [5.0, 5.0, 6.0, 7.0]])
+    V = np.array([[100.0, 0.0, np.nan, np.nan], [1.0, 1.0, 0.0, 2.0]])
+    PX = C.copy()
+    n = R.mask_suspensions(C, V, PX)
+    assert n == 3                                     # (0,1) 거래량 0 · (0,2) 결측 · (1,2) 0 — (0,3) 은 이미 NaN
+    exp = np.array([[10.0, np.nan, np.nan, np.nan], [5.0, 5.0, np.nan, 7.0]])
+    np.testing.assert_array_equal(C, exp)
+    np.testing.assert_array_equal(PX, exp)
+
+
+def _suspend(raw, c, b):
+    V = np.ones_like(raw["C"])
+    V[c, b] = 0.0
+    raw = dict(raw, C=raw["C"].copy(), raw_close=raw["raw_close"].copy())
+    R.mask_suspensions(raw["C"], V, raw["raw_close"])
+    return raw
+
+
+def test_suspension_in_ma120_window_removes_event():
+    raw = _synth()
+    base = R.prepare(raw, _all_eps)
+    k = 5
+    ci, s = R.build_events(base, k)
+    j = len(s) // 2
+    c, t = int(ci[j]), int(s[j])
+    b = t - 100                                        # MA120 창 안(적합 창·σ 창 밖)
+    X = R.prepare(_suspend(raw, c, b), _all_eps)
+    ev = set(zip(*R.build_events(X, k, pop="no_f200")))
+    assert (c, t) not in ev
+    # 정지일이 MA120 창에 드는 이 종목의 t 는 하나도 없다
+    for pop in ("judged", "no_f200"):
+        cc, ss = R.build_events(X, k, pop=pop)
+        assert not ((cc == c) & (ss >= b) & (ss <= b + 119)).any()
+    # R3(정배열 아님 ∧ 유니버스, d 거름 없음)는 사건으로 뽑히지만 확률·라벨이 NaN → 짝짓기에서 빠진다
+    cc, ss = R.build_events_all(X, k)
+    m = (cc == c) & (ss >= b) & (ss <= b + 119 - k)
+    assert m.sum() > 0
+    for q, N in ((2, 20), (1, 20), (0, 0)):
+        assert np.isnan(R.cell_probs(X, q, N, k, cc[m], ss[m])["p_align"]).all()
+    assert np.isnan(R.MQ.realized(X["C"], cc[m], ss[m], k)["p_align"]).all()
+
+
+def test_suspension_removes_library_origins_covering_it():
+    from research.signals import ma_quad as MQ
+    raw = _synth()
+    days = raw["days"]
+    c, N, k = 0, 20, 5
+    b = int(days.searchsorted(pd.Timestamp("2018-03-05")))
+    t_m = int(MQ.month_starts(days)[np.searchsorted(MQ.month_starts(days), b + 120)])
+
+    def origins(Xp):
+        fc = MQ.poly_forecast(Xp["y"], N, k, 2)
+        z = MQ.forecast_z(Xp["y"], fc, Xp["sigma"])
+        _, o = MQ.month_pool(days, z, Xp["member"][N + 60], t_m, k, return_origins=True)
+        return o[o[:, 0] == c, 1]
+
+    def hit(u):                                        # 라벨 창 u+1..u+k · 적합 창 u−N+1..u · σ 창 u−60..u 가 b 를 덮는 u
+        return (u >= b - k) & (u <= b + 60)
+    u0 = origins(R.prepare(raw, _all_eps))
+    assert hit(u0).sum() == 60 + k + 1                 # 정지 전에는 그 원점이 전부 있다
+    u1 = origins(R.prepare(_suspend(raw, c, b), _all_eps))
+    assert hit(u1).sum() == 0
+    assert set(u1.tolist()) == set(u0[~hit(u0)].tolist())         # 덮지 않는 원점은 그대로
+
+
+def test_m_sens_default_on_for_real_run_off_for_smoke(monkeypatch, tmp_path):
+    seen = {}
+
+    def stop(*a, **kw):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(R, "guard_rerun", lambda *a, **kw: None)
+    monkeypatch.setattr(R, "git_sha", lambda: {"sha": "x", "dirty": False})
+    monkeypatch.setattr(R, "_connect", stop)
+    real_parse = R.argparse.ArgumentParser.parse_args
+
+    def spy(self, argv=None, namespace=None):
+        ns = real_parse(self, argv, namespace)
+        seen["ns"] = ns
+        return ns
+
+    monkeypatch.setattr(R.argparse.ArgumentParser, "parse_args", spy)
+    for argv, exp in (([], True), (["--smoke"], False), (["--no-m-sens"], False), (["--smoke", "--m-sens"], True)):
+        with pytest.raises(SystemExit):
+            R.main(argv + ["--scratch", str(tmp_path / "s"), "--logs", str(tmp_path / "l")])
+        assert seen["ns"].m_sens is exp, argv
