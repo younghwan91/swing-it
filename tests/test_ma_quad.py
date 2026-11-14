@@ -7,6 +7,9 @@ import pytest
 
 from research.signals.ma_quad import (
     draw_index,
+    event_probs,
+    ma_state,
+    realized,
     forecast_z,
     month_pool,
     month_pools,
@@ -213,3 +216,137 @@ def test_draw_index_deterministic():
     assert not np.array_equal(a, draw_index("005930", pd.Timestamp("2020-04-01"), 2, 20, 5, 1000))
     assert not np.array_equal(a, draw_index("000660", d, 2, 20, 5, 1000))
     assert not np.array_equal(a, draw_index("005930", d, 1, 20, 5, 1000))
+
+
+# ---------------------------------------------------------------- Task 3
+
+def _panel(n_codes=3, n_days=400, seed=0):
+    rng = np.random.default_rng(seed)
+    return 100 * np.exp(np.cumsum(rng.normal(0.0005, 0.02, (n_codes, n_days)), axis=1))
+
+
+def _events(n_days, k, n_codes=3):
+    ci = np.array([0, 1, 2, 1])
+    s = np.array([150, 200, 250, 300])
+    assert (s + k < n_days).all()
+    return ci, s
+
+
+def test_zero_sigma_matches_realized():
+    k = 7
+    C = _panel()
+    ci, s = _events(C.shape[1], k)
+    fc = np.full(C.shape + (k,), np.nan)
+    for e, (c, t) in enumerate(zip(ci, s)):
+        fc[c, t] = np.log(C[c, t + 1 : t + k + 1])
+    sigma = np.zeros(C.shape)
+    pool = np.zeros((10, k))
+    idx = np.zeros((len(ci), 200), dtype=np.int64)
+    p = event_probs(C, fc, sigma, pool, idx, ci, s, k)
+    r = realized(C, ci, s, k)
+    for key in p:
+        assert np.array_equal(p[key], r[key]) and set(np.unique(p[key])) <= {0.0, 1.0}
+
+
+def test_known_part_arithmetic():
+    k = 5
+    C = _panel()
+    c, t = 1, 220
+    rng = np.random.default_rng(1)
+    pool = rng.normal(size=(50, k))
+    sig = np.full(C.shape, 0.01)
+    fc = np.full(C.shape + (k,), np.nan)
+    fc[c, t] = np.log(C[c, t]) + 0.001 * np.arange(1, k + 1)
+    idx = rng.integers(0, 50, (1, 200))
+    # 경로 하나씩 직접 만들어 pandas 로 MA 정배열 비율을 센다
+    cnt = 0
+    for m in range(200):
+        fut = np.exp(fc[c, t] + sig[c, t] * pool[idx[0, m]])
+        ser = pd.Series(np.concatenate([C[c, : t + 1], fut]))
+        a5, a20, a60, a120 = (ser.rolling(w).mean().iloc[-1] for w in (5, 20, 60, 120))
+        cnt += a5 > a20 > a60 > a120
+    p = event_probs(C, fc, sig, pool, idx, np.array([c]), np.array([t]), k)
+    assert abs(p["p_align"][0] - cnt / 200) < 1e-9
+
+
+def test_tie_is_not_aligned():
+    C = np.full((1, 300), 10.0)
+    st = ma_state(C)
+    assert not st["aligned"][0, 250]
+    k = 3
+    fc = np.full((1, 300, k), np.log(10.0))
+    p = event_probs(C, fc, np.zeros((1, 300)), np.zeros((4, k)), np.zeros((1, 200), dtype=np.int64),
+                    np.array([0]), np.array([200]), k)
+    assert p["p_align"][0] == 0.0 and p["p_up_5_20"][0] == 0.0
+
+
+def test_nan_history_skips_event():
+    k = 4
+    C = _panel(1, 300)
+    C[0, 150] = np.nan  # t=200, k=4 → MA120 창 [85..204] 안
+    fc = np.zeros((1, 300, k))
+    kw = dict(pool=np.zeros((3, k)), idx=np.zeros((1, 200), dtype=np.int64), ci=np.array([0]), k=k)
+    p = event_probs(C, fc, np.full((1, 300), 0.01), s=np.array([200]), **kw)
+    assert all(np.isnan(v[0]) for v in p.values())
+    # sigma / fc 가 비유한이어도 NaN
+    C2 = _panel(1, 300)
+    p = event_probs(C2, fc, np.full((1, 300), np.nan), s=np.array([200]), **kw)
+    assert np.isnan(p["p_align"][0])
+    fc2 = fc.copy()
+    fc2[0, 200, 2] = np.nan
+    p = event_probs(C2, fc2, np.full((1, 300), 0.01), s=np.array([200]), **kw)
+    assert np.isnan(p["p_align"][0])
+    # realized 는 창 NaN / 범위 밖에서 NaN
+    r = realized(C, np.array([0, 0]), np.array([200, 298]), k)
+    assert np.isnan(r["p_align"]).all()
+
+
+def test_p_in_unit_interval():
+    k = 20
+    C = _panel(2, 400, seed=3)
+    rng = np.random.default_rng(4)
+    fc = rng.normal(np.log(100), 0.1, C.shape + (k,))
+    sg = rng.uniform(0.005, 0.05, C.shape)
+    pool = rng.normal(size=(100, k))
+    ci = np.array([0, 1, 0])
+    s = np.array([200, 250, 300])
+    idx = rng.integers(0, 100, (3, 200))
+    p = event_probs(C, fc, sg, pool, idx, ci, s, k)
+    for v in p.values():
+        assert ((v >= 0) & (v <= 1)).all()
+        assert np.allclose(v * 200, np.round(v * 200))
+
+
+def test_k_ge_window_uses_path_only():
+    # k=130 > 120: 알려진 부분 없이 경로만으로 MA120 (sigma=0, 단조 상승 → 정배열 아님? 상승이면 MA5>MA20>...)
+    k = 130
+    C = _panel(1, 500, seed=5)
+    fc = np.full((1, 500, k), np.nan)
+    fc[0, 200] = np.log(C[0, 200]) + 0.002 * np.arange(1, k + 1)
+    p = event_probs(C, fc, np.zeros((1, 500)), np.zeros((2, k)), np.zeros((1, 200), dtype=np.int64),
+                    np.array([0]), np.array([200]), k)
+    assert p["p_align"][0] == 1.0
+
+
+def test_f200_and_tmpl_small_panel():
+    n = 400
+    up = 10 * np.exp(0.004 * np.arange(n))  # 꾸준한 상승
+    down = 10 * np.exp(-0.004 * np.arange(n))
+    C = np.vstack([up, down])
+    st = ma_state(C)
+    assert st["f200"][0, 300] and not st["f200"][1, 300]
+    assert not st["f200"][0, 100]  # MA200 없음 → False
+    assert st["tmpl"][0, 399] and not st["tmpl"][1, 399]
+    assert not st["tmpl"][0, 100]
+    # 20일 전보다 MA200 이 낮지 않아야 한다: 하락 후 반등 한 점
+    C2 = np.concatenate([np.linspace(100, 50, 300), np.linspace(50, 120, 100)])[None]
+    st2 = ma_state(C2)
+    assert st2["f200"][0, 399] == bool(C2[0, 399] > st2["ma"][200][0, 399] and st2["ma"][200][0, 399] > st2["ma"][200][0, 379])
+    # 30% 저점 위 조건: 평평한 가격은 C >= 1.3*min 실패
+    flat = np.full((1, 400), 10.0)
+    assert not ma_state(flat)["tmpl"][0, 399]
+    # d = 1 − 묶음하단/종가
+    s3 = ma_state(up[None])
+    low = np.minimum(np.minimum(s3["ma"][20], s3["ma"][60]), s3["ma"][120])
+    assert np.allclose(s3["bundle_low"][0, 200:], low[0, 200:])
+    assert np.allclose(s3["d"][0, 200:], (1 - low / up[None])[0, 200:])

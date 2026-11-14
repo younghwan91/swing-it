@@ -161,3 +161,139 @@ def draw_index(code: str, t_m_date: pd.Timestamp, q: int, N: int, k: int, P: int
     key = f"{code}|{t_m_date:%Y-%m}|{q}|{N}|{k}"
     seed = int.from_bytes(hashlib.blake2b(key.encode(), digest_size=8).digest(), "little")
     return np.random.default_rng(seed).integers(0, P, size=M).astype(np.int64)
+
+
+# ---------------------------------------------------------------- 경로 → 이평선 → 확률
+
+_MA_WINDOWS = (5, 20, 50, 60, 120, 150, 200)
+_PROB_KEYS = ("p_align", "p_up_5_20", "p_up_20_60", "p_up_60_120")
+
+
+def _rolling_mean(C: np.ndarray, w: int) -> np.ndarray:
+    """창 안에 NaN 이 있으면 NaN 인 단순 이동평균(pandas rolling(w, min_periods=w).mean())."""
+    return pd.DataFrame(C.T).rolling(w, min_periods=w).mean().to_numpy().T
+
+
+def ma_state(C: np.ndarray) -> dict:
+    """종가 패널 (n_codes, n_days) → 이평선·정배열·묶음 하단·d·200일 거름·미너비니 템플릿.
+
+    정배열 = MA5 > MA20 > MA60 > MA120(엄격). NaN 이 있으면 False. 전부 당일 t 포함.
+    """
+    C = np.asarray(C, dtype=np.float64)
+    ma = {w: _rolling_mean(C, w) for w in _MA_WINDOWS}
+    with np.errstate(invalid="ignore"):
+        aligned = (ma[5] > ma[20]) & (ma[20] > ma[60]) & (ma[60] > ma[120])
+        bundle_low = np.minimum(np.minimum(ma[20], ma[60]), ma[120])
+        d = 1.0 - bundle_low / C
+        prev200 = np.full_like(C, np.nan)
+        prev200[:, 20:] = ma[200][:, :-20]
+        f200 = (C > ma[200]) & (ma[200] > prev200)
+        lo = pd.DataFrame(C.T).rolling(250, min_periods=250).min().to_numpy().T
+        hi = pd.DataFrame(C.T).rolling(250, min_periods=250).max().to_numpy().T
+        tmpl = (
+            (C > ma[150])
+            & (ma[150] > ma[200])
+            & (ma[50] > ma[150])
+            & (C > ma[50])
+            & (C >= 1.30 * lo)
+            & (C >= 0.75 * hi)
+        )
+    return {"ma": ma, "aligned": aligned, "bundle_low": bundle_low, "d": d, "f200": f200, "tmpl": tmpl}
+
+
+@_jit
+def _event_kernel(C, fc_log, sigma, pool, idx, ci, s, k, out):
+    n_ev, M = idx.shape
+    n_days = C.shape[1]
+    wins = np.array([5, 20, 60, 120])
+    ma = np.empty(4)
+    path = np.empty(k)
+    for j in range(n_ev):
+        c = ci[j]
+        t = s[j]
+        sg = sigma[c, t]
+        ok = np.isfinite(sg) and t + k - 119 >= 0 and t < n_days
+        if ok:
+            for h in range(k):
+                if not np.isfinite(fc_log[c, t, h]):
+                    ok = False
+        if ok:
+            # 알려진 구간 C[t+k-119..t] (k<120 일 때) 이 전부 유한해야 한다
+            for u in range(max(t + k - 119, 0), t + 1):
+                if not np.isfinite(C[c, u]):
+                    ok = False
+                    break
+        if not ok:
+            for m in range(4):
+                out[m, j] = np.nan
+            continue
+        known = np.zeros(4)
+        for wi in range(4):
+            w = wins[wi]
+            acc = 0.0
+            for u in range(t + k - w + 1, t + 1):
+                acc += C[c, u]
+            known[wi] = acc
+        cnt = np.zeros(4)
+        for m in range(M):
+            row = idx[j, m]
+            for h in range(k):
+                path[h] = np.exp(fc_log[c, t, h] + sg * pool[row, h])
+            for wi in range(4):
+                w = wins[wi]
+                acc = known[wi]
+                for h in range(max(1, k - w + 1), k + 1):
+                    acc += path[h - 1]
+                ma[wi] = acc / w
+            if ma[0] > ma[1] and ma[1] > ma[2] and ma[2] > ma[3]:
+                cnt[0] += 1
+            if ma[0] > ma[1]:
+                cnt[1] += 1
+            if ma[1] > ma[2]:
+                cnt[2] += 1
+            if ma[2] > ma[3]:
+                cnt[3] += 1
+        for m in range(4):
+            out[m, j] = cnt[m] / M
+
+
+def event_probs(C, fc_log, sigma, pool, idx, ci, s, k: int) -> dict[str, np.ndarray]:
+    """사건 (ci, s) 마다 M 개 경로에서 t+k 의 정배열·단기>장기 비율. 입력이 비유한이면 NaN."""
+    out = np.empty((4, len(ci)), dtype=np.float64)
+    _event_kernel(
+        np.ascontiguousarray(C, dtype=np.float64),
+        np.ascontiguousarray(fc_log, dtype=np.float64),
+        np.ascontiguousarray(sigma, dtype=np.float64),
+        np.ascontiguousarray(pool, dtype=np.float64),
+        np.ascontiguousarray(idx, dtype=np.int64),
+        np.asarray(ci, dtype=np.int64),
+        np.asarray(s, dtype=np.int64),
+        int(k),
+        out,
+    )
+    return {key: out[i] for i, key in enumerate(_PROB_KEYS)}
+
+
+def realized(C, ci, s, k: int) -> dict[str, np.ndarray]:
+    """t+k 의 실제 MA 상태(0/1). s+k ≥ n_days 이거나 MA 가 NaN 이면 NaN."""
+    C = np.asarray(C, dtype=np.float64)
+    ci = np.asarray(ci, dtype=np.int64)
+    e = np.asarray(s, dtype=np.int64) + k
+    n = len(ci)
+    valid = (e < C.shape[1]) & (e - 119 >= 0)
+    ee = np.where(valid, e, 119)
+    mas = []
+    for w in (5, 20, 60, 120):
+        cols = ee[:, None] - np.arange(w)[None, :]
+        mas.append(C[ci[:, None], cols].mean(axis=1))  # NaN 전파
+    m5, m20, m60, m120 = mas
+    bad = ~valid | np.isnan(m5 + m20 + m60 + m120)
+    res = {
+        "p_align": ((m5 > m20) & (m20 > m60) & (m60 > m120)),
+        "p_up_5_20": m5 > m20,
+        "p_up_20_60": m20 > m60,
+        "p_up_60_120": m60 > m120,
+    }
+    return {key: np.where(bad, np.nan, v.astype(np.float64)) for key, v in res.items()} if n else {
+        key: np.empty(0) for key in _PROB_KEYS
+    }
