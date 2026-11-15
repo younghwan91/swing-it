@@ -231,3 +231,178 @@ def test_menu_and_neighbors():
     s[5] = 10.0
     nt = np.arange(288)
     assert T.select(s, nt) == int(np.argmax(nt))            # 이웃 중앙값이 전부 0 → 동률 → 거래 수 많은 쪽
+
+
+# ============================================================================== 재등록 MT-2 (PREREG 27334ef)
+
+COST = 0.00415
+
+
+def synth_kosdaq(seed: int = 3) -> pd.Series:
+    rng = np.random.default_rng(seed)
+    d = pd.bdate_range("2025-01-02", "2026-11-13")
+    return pd.Series(800 * np.exp(np.cumsum(rng.normal(0.0002, 0.015, len(d)))), index=d)
+
+
+def setup_v2(Ss, q):
+    RG = T.regime_on(q, Ss[0]["udates"], T.u1_share(Ss[0]))
+    costs = np.full((len(Ss[0]["udates"]), 2), COST)
+    mkt = np.zeros(len(Ss[0]["codes"]), np.int64)
+    for S in Ss:
+        S["regime"] = RG["on"]
+        T.add_floor_stop(S, costs, mkt)
+    return RG, costs, mkt
+
+
+def select_v2(Ss, q):
+    RG, costs, mkt = setup_v2(Ss, q)
+    OCs, dayclose = T.prepare(Ss, stops=("SF",))
+    C = T.all_candidates(Ss, OCs, costs, mkt, 2.0, axes=T.AXES_V2)
+    return T.wf_select(C, dayclose, MONTHS, key="Racct", drop_top=3, axes=T.AXES_V2), C, RG
+
+
+@pytest.fixture(scope="module")
+def full_v2(data):
+    m15, dc, tv, codes = data
+    Ss = build(m15, dc, tv, codes)
+    q = synth_kosdaq()
+    W, C, RG = select_v2(Ss, q)
+    return Ss, W, C, RG, q
+
+
+def test_menu_v2():
+    M = T.menu(T.AXES_V2)
+    assert len(M) == 288 and {m["stop"] for m in M} == {"SF"} and {m["regime"] for m in M} == {"ignore", "on"}
+    assert all(len(T.neighbors(i, T.AXES_V2)) == 11 for i in range(288))
+    assert list(M[0]) == ["tf", "up", "spread", "overnight", "exit", "stop", "regime"]
+
+
+def test_r_acct_formula():
+    """R_acct = ret × min(W_CAP/RISK, 1/거리) = 비중 × ret ÷ RISK(비중 = min(10%, 0.5%/거리))."""
+    ret = np.array([0.10, 0.10, -0.02, 0.03])
+    dist = np.array([0.01, 0.20, 0.05, 0.025])
+    assert np.allclose(T.r_acct(ret, dist), [2.0, 0.5, -0.4, 0.6])
+    w = np.minimum(T.W_CAP, T.RISK / dist)
+    assert np.allclose(T.r_acct(ret, dist), w * ret / T.RISK)
+    # 1차 R(손절 거리로 나눔)과는 거리 < 5% 에서 다르다 — 좁은 손절 거래의 R 이 20 배 상한으로 묶인다
+    assert not np.allclose(T.r_acct(ret, dist), ret / dist)
+
+
+def test_floor_dist_and_stop(full_v2):
+    """손절 거리 = max(구조 거리, 왕복 비용 × 2 × 3, 2%), 손절가 = 진입가 × (1 − 거리). 구조가 진입 전에 깨졌으면 거래 없음."""
+    assert np.allclose(T.floor_dist([0.005, 0.03, -0.01, 0.021], COST), [0.0249, 0.03, 0.0249, 0.0249])
+    assert np.allclose(T.floor_dist([0.005], 0.0025), [0.02])                 # 비용 × 6 < 2% 면 2%
+    Ss, W, C, RG, q = full_v2
+    floor = max(COST * 6, 0.02)
+    n_bind = n_floor = 0
+    for S in Ss:
+        ev = S["ev"]
+        ent, s1, sf = ev["entry_px"], ev["s1"], ev["sf"]
+        ok = np.isfinite(sf)
+        with np.errstate(invalid="ignore"):
+            assert not (ok & ~(s1 < ent)).any()                               # 구조 손절 ≥ 진입가 → NaN 유지
+            assert (np.isfinite(s1) & np.isfinite(ent) & (s1 < ent) == ok).all()
+        d = (ent[ok] - sf[ok]) / ent[ok]
+        sd = (ent[ok] - s1[ok]) / ent[ok]
+        assert (d >= floor - 1e-12).all()
+        assert np.allclose(d, np.maximum(sd, floor))
+        assert (sf[ok] <= s1[ok] + 1e-9).all()                                # 손절가는 넓히기만 한다
+        n_bind += int((sd > floor).sum())
+        n_floor += int((sd < floor).sum())
+    assert n_bind > 0 and n_floor > 0                                         # 두 경우가 모두 합성 자료에 있다
+    for c in C:
+        if len(c["ci"]):
+            assert (c["dist"] >= floor - 1e-12).all()
+            assert np.allclose(c["stop"], c["entry_px"] * (1 - c["dist"]))
+            assert np.allclose(c["Racct"], T.r_acct(c["ret"], c["dist"]))
+
+
+def test_train_score_drops_top3():
+    assert T.robust_sum([5, 3, 1, -2, -4], 3) == -6
+    assert T.robust_sum([4, -1], 3) == -1                                    # 양수만 뺀다
+    assert T.robust_sum([-1, -2], 3) == -3                                   # 손실을 빼서 점수가 오르지 않는다
+    assert T.robust_sum([5, 3, 1], 0) == 9
+    acc = {"realized": np.array([True, True, True, True, True, False]), "exit_ts": np.array([0, 1, 2, 3, 10 ** 12, 0]),
+           "Racct": np.array([9.0, 1.0, -1.0, 2.0, 50.0, 100.0]), "R": np.zeros(6)}
+    sc, nt = T.train_scores(acc, ["2026-09"], key="Racct", drop_top=3)
+    assert sc[0] == -1.0 and nt[0] == 4                                       # 9 + 1 − 1 + 2 − (9 + 2 + 1); 미실현·시험 뒤 청산 제외
+
+
+def test_regime_uses_prior_day_only(full_v2):
+    """국면(d) = d 전 마지막 지수 행 종가 > MA50 ∧ d 유니버스 U1 비율(전날 일봉) ≥ 25%. d 와 그 뒤 지수를 지우거나 교란해도 d 까지 같다.
+    음성 대조: 그날 지수를 전날 날짜로 당겨(미래 정보) 쓰면 국면이 바뀐다."""
+    Ss, W, C, RG, q = full_v2
+    ud = pd.DatetimeIndex(Ss[0]["udates"])
+    sh = T.u1_share(Ss[0])
+    assert np.isfinite(sh).all() and 0 < RG["on"].sum() < len(ud) and 0 < RG["idx_on"].sum() < len(ud)
+    rng = np.random.default_rng(9)
+    for k in (5, 20, 40, 60, len(ud) - 2):
+        d = ud[k]
+        qt = q[q.index < d]
+        rt = T.regime_on(qt, ud[: k + 1], sh[: k + 1])
+        assert np.array_equal(rt["on"], RG["on"][: k + 1]) and np.array_equal(rt["idx_on"], RG["idx_on"][: k + 1])
+        qp = q.copy()
+        qp[qp.index >= d] *= np.exp(rng.normal(0, 0.2, int((qp.index >= d).sum())))
+        rp = T.regime_on(qp, ud, sh)
+        assert np.array_equal(rp["on"][: k + 1], RG["on"][: k + 1])
+        assert (rt["prev_date"] < ud[: k + 1].values).all()
+    leak = T.regime_on(q.shift(-1).dropna(), ud, sh)                          # d−1 날짜에 d 종가 → 미래
+    assert not np.array_equal(leak["idx_on"], RG["idx_on"])
+    # U1 비율의 분자는 전날 행(up_prev) — 그날 행(up_same)을 쓰면 달라진다(음성 대조)
+    S = Ss[0]
+    same = (S["DS"]["up_same"][0] & S["MEMd"]).sum(0) / S["MEMd"].sum(0)
+    assert not np.allclose(same, sh)
+
+
+def test_regime_gene_blocks_off_day_entries(full_v2):
+    Ss, W, C, RG, q = full_v2
+    M = T.menu(T.AXES_V2)
+    for j, c in enumerate(M):
+        if c["regime"] != "on":
+            continue
+        k = M.index({**c, "regime": "ignore"})
+        a, b = C[j], C[k]
+        assert a["reg_on"].all()
+        S = Ss[T.AXES_V2["tf"].index(c["tf"])]
+        assert RG["on"][S["dix"][a["eb"]]].all()                             # 진입 체결일 국면 ON
+        assert set(zip(a["ci"], a["t"])) == set(zip(b["ci"][b["reg_on"]], b["t"][b["reg_on"]]))
+    assert any(len(C[k]["ci"]) > len(C[j]["ci"]) for j, k in
+               ((j, M.index({**c, "regime": "ignore"})) for j, c in enumerate(M) if c["regime"] == "on"))
+
+
+def test_v2_selection_ignores_test_month(data, full_v2):
+    """MT-2 선택(R_acct − 상위 3, 국면, 하한): 10월 1일부터 분봉·일봉·거래대금·지수를 교란해도 폴드 ≤ 10월 점수·선택이 같다. 11월은 바뀐다(음성 대조)."""
+    m15, dc, tv, codes = data
+    Ss, W, C, RG, q = full_v2
+    f = MONTHS.index("2026-10")
+    m2, dc2, tv2 = _perturb(m15, dc, tv, "2026-10-01")
+    q2 = q.copy()
+    s = q2.index >= "2026-10-01"
+    q2[s] *= np.exp(np.random.default_rng(4).normal(0, 0.05, int(s.sum())))
+    Wp, _, _ = select_v2(build(m2, dc2, tv2, codes), q2)
+    assert np.array_equal(Wp["scores"][:, : f + 1], W["scores"][:, : f + 1])
+    assert Wp["picks"][: f + 1] == W["picks"][: f + 1]
+    assert not np.array_equal(Wp["scores"][:, f + 1], W["scores"][:, f + 1])
+
+
+def test_v2_truncation_invariance(data, full_v2):
+    """날짜 2개 절단(분봉 그 시각 전, 일봉·지수 그날 전): 국면·U1 비율·하한 손절·MT-2 선택이 같다."""
+    m15, dc, tv, codes = data
+    Ss, W, C, RG, q = full_v2
+    for kd, hh in (("2026-09-15", 13), ("2026-11-04", 11)):
+        kday = pd.Timestamp(kd)
+        hi = kday + pd.Timedelta(hours=hh)
+        Tt = build(m15[m15.ts < hi], dc[dc.index < kday], tv[tv.index < kday], codes)
+        Wt, _, RGt = select_v2(Tt, q[q.index < kday])
+        nd = len(Tt[0]["udates"])
+        assert np.array_equal(RGt["on"], RG["on"][:nd]) and np.allclose(RGt["share"], RG["share"][:nd])
+        for F, X in zip(Ss, Tt):
+            fk = {(F["codes"][i], F["days"][t]): v for i, t, v in zip(F["ev"]["ci"], F["ev"]["t"], F["ev"]["sf"])}
+            for i, t, v in zip(X["ev"]["ci"], X["ev"]["t"], X["ev"]["sf"]):
+                if X["days"][t] < hi - pd.Timedelta(minutes=X["tf_min"]):
+                    a = fk[(X["codes"][i], X["days"][t])]
+                    assert (np.isnan(a) and np.isnan(v)) or np.isclose(a, v), (X["tf"], kd)
+        folds = [f for f, mo in enumerate(MONTHS) if pd.Timestamp(mo + "-01") <= kday]
+        for f in folds:
+            assert Wt["picks"][f] == W["picks"][f]
+            assert np.array_equal(Wt["scores"][:, f], W["scores"][:, f])

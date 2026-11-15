@@ -1,6 +1,8 @@
 """일봉 상승 중 아래 봉(15·30·60분) 역배열→정배열 전환 — 패널·사건·거래 경로·단일 계좌·워크포워드 선택. 순수 함수(DB 없음).
 
-정본: ``research/logs/mtf_transition/PREREG.md`` (4fb9525). 해석은 실행기 ``research/experiments/mtf_transition_wf.py`` 의 RULINGS.
+정본: ``research/logs/mtf_transition/PREREG.md`` (4fb9525; 재등록 MT-2 = 27334ef). 해석은 실행기 ``research/experiments/mtf_transition_wf.py`` 의
+RULINGS(1차)·RULINGS_V2(MT-2). MT-2 부품(``AXES_V2``·``add_floor_stop``·``r_acct``·``u1_share``·``regime_on``, ``drop_top``/``key``/``axes`` 인자)은
+기본값이 1차 동작 그대로라 1차 실행을 바꾸지 않는다.
 탐색 구현(``~/.cache/cc-swing/scratch/golden_ev/{transition,topdown_intraday_pit}``)의 시점 유니버스·분할 보정·전환 사건·구조 손절을
 레포로 옮긴 것이다(규약 그대로, 문체만 정리).
 
@@ -41,21 +43,33 @@ AXES = {
     "exit": ("X1", "X2", "X3", "X4"),
     "stop": ("S1", "S2"),
 }
+# 재등록 MT-2(27334ef): stop 유전자 1개(SF = 구조 손절 + 거리 하한), regime 유전자(무시 / 국면 OFF 날 신규 진입 금지). 곱 288.
+AXES_V2 = {
+    "tf": ("15m", "30m", "60m"),
+    "up": ("U1", "U2", "U3"),
+    "spread": (False, True),
+    "overnight": (True, False),
+    "exit": ("X1", "X2", "X3", "X4"),
+    "stop": ("SF",),
+    "regime": ("ignore", "on"),
+}
+FLOOR_COST_MULT, FLOOR_COST_K, FLOOR_ABS = 2.0, 3.0, 0.02   # 거리 하한 = max(왕복 비용 × 2 × 3, 2%)
+REGIME_MA, REGIME_U1_MIN = 50, 0.25                         # 국면 ON = 전날 KOSDAQ > MA50 ∧ 그날 유니버스 U1 비율 ≥ 25%
 WHY = {0: "미청산", 1: "손절", 2: "X1 아래 봉 MA60 이탈", 3: "X2 일봉 MA20 이탈", 4: "X3 일봉 MA10 이탈", 5: "X4 일봉 상승 꺼짐"}
 
 
-def menu() -> list[dict]:
-    """288 설정, 순서 고정(PREREG 표기 순: tf × up × spread × overnight × exit × stop)."""
-    return [dict(zip(AXES, v)) for v in itertools.product(*AXES.values())]
+def menu(axes: dict = AXES) -> list[dict]:
+    """288 설정, 순서 고정(PREREG 표기 순: tf × up × spread × overnight × exit × stop [× regime])."""
+    return [dict(zip(axes, v)) for v in itertools.product(*axes.values())]
 
 
-def _coords() -> list[tuple]:
-    return list(itertools.product(*(range(len(v)) for v in AXES.values())))
+def _coords(axes: dict = AXES) -> list[tuple]:
+    return list(itertools.product(*(range(len(v)) for v in axes.values())))
 
 
-def neighbors(i: int) -> list[int]:
-    """자기 + 유전자 하나만 다른 설정(모든 축을 범주로 — 다른 값 전부). 288 칸에서 자기 포함 11 개."""
-    co = _coords()
+def neighbors(i: int, axes: dict = AXES) -> list[int]:
+    """자기 + 유전자 하나만 다른 설정(모든 축을 범주로 — 다른 값 전부). 288 칸에서 자기 포함 11 개(1차·MT-2 모두)."""
+    co = _coords(axes)
     me = co[i]
     out = [i]
     for j, c in enumerate(co):
@@ -64,17 +78,17 @@ def neighbors(i: int) -> list[int]:
     return out
 
 
-def neighbor_medians(scores) -> np.ndarray:
+def neighbor_medians(scores, axes: dict = AXES) -> np.ndarray:
     s = np.asarray(scores, dtype=float)
-    if len(s) != len(_coords()):
+    if len(s) != len(_coords(axes)):
         raise ValueError("점수 수가 메뉴와 다르다")
     s = np.where(np.isfinite(s), s, -np.inf)
-    return np.array([np.median(s[neighbors(i)]) for i in range(len(s))])
+    return np.array([np.median(s[neighbors(i, axes)]) for i in range(len(s))])
 
 
-def select(scores, n_trades) -> int:
+def select(scores, n_trades, axes: dict = AXES) -> int:
     """이웃 중앙값 최대. 동률이면 (그 설정 자신의) 학습 실현 거래 수 많은 쪽, 그래도 같으면 메뉴 순서 앞."""
-    nm = neighbor_medians(scores)
+    nm = neighbor_medians(scores, axes)
     best = nm.max()
     cand = np.flatnonzero(nm == best)
     nt = np.asarray(n_trades)[cand]
@@ -315,7 +329,7 @@ def build_tf(m: pd.DataFrame, dc_all: pd.DataFrame, tv_all: pd.DataFrame, elig: 
     ts_min = (days.values.astype("datetime64[m]").astype(np.int64)).astype(np.int64)
     return {"tf": tf, "tf_min": TF_MIN[tf], "days": days, "codes": codes, "O": Op, "H": H, "Lo": Lo, "C": C, "V": V, "Cf": Cf, "ma": ma,
             "sig": sig, "fin": fin, "win": win, "date": date, "udates": udates, "dix": dix, "last_bar": last_bar, "first_bar": first_bar,
-            "is_last": is_last, "prevc": prevc, "dcl": dcl, "MEM": MEM, "memday": memday, "ts_min": ts_min, "ev": ev, "DS": DS,
+            "is_last": is_last, "prevc": prevc, "dcl": dcl, "MEM": MEM, "MEMd": MEMd, "memday": memday, "ts_min": ts_min, "ev": ev, "DS": DS,
             "info": {**info, "n_cond": int(c0.sum()), "n_first": n_first, "n_univ": n_univ, "n_u1": int(len(t)), "n_fill": DS["n_fill"]}}
 
 
@@ -403,13 +417,13 @@ def run_paths(S: dict, ci, eb, stop, mode: int, upk: int) -> dict:
     return dict(zip(("xb", "xpx", "why", "at_open", "realized", "mtm"), out))
 
 
-def outcomes(S: dict) -> dict:
-    """사건마다 (청산 변형 × 손절) 12 경로. 키 (변형 이름, "S1"|"S2")."""
+def outcomes(S: dict, stops: tuple = ("S1", "S2")) -> dict:
+    """사건마다 (청산 변형 × 손절) 경로. 키 (변형 이름, 손절 이름). 손절가 = ``ev[이름.lower()]``(S1·S2, MT-2 는 SF — add_floor_stop)."""
     ev = S["ev"]
     eb = ev["t"] + 1
     res = {}
-    for st in ("S1", "S2"):
-        stop = ev["s1"] if st == "S1" else ev["s2"]
+    for st in stops:
+        stop = ev[st.lower()]
         ok = ev["entry_ok"] & np.isfinite(stop) & (stop < ev["entry_px"])
         idx = np.flatnonzero(ok)
         for name, mode, upk in exit_variants():
@@ -423,6 +437,60 @@ def outcomes(S: dict) -> dict:
             full["stop"] = stop
             res[(name, st)] = full
     return res
+
+
+# --------------------------------------------------------------------------------------------- MT-2: 손절 하한·계좌 단위 R·국면
+
+def floor_dist(struct_dist, rt_cost, cost_mult: float = FLOOR_COST_MULT, k: float = FLOOR_COST_K, abs_min: float = FLOOR_ABS):
+    """MT-2 손절 거리 = max(구조 거리, 왕복 비용 × 2 × 3, 2%)."""
+    return np.maximum(np.maximum(np.asarray(struct_dist, float), np.asarray(rt_cost, float) * cost_mult * k), abs_min)
+
+
+def add_floor_stop(S: dict, costs: np.ndarray, mkt: np.ndarray) -> None:
+    """``ev["sf"]`` = 진입가 × (1 − 하한 거리). 구조 손절 S1 이 없거나 진입가 이상(구조가 진입 전에 이미 깨짐)이면 NaN(1차 '손절가 ≥ 진입가면
+    거래하지 않는다' 그대로). 왕복 비용은 진입 체결일 세율(RULINGS_V2["floor_cost"])."""
+    ev = S["ev"]
+    n = len(S["days"])
+    eb = np.minimum(ev["t"] + 1, n - 1)
+    eday = S["dix"][eb]
+    ent, s1 = ev["entry_px"], ev["s1"]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(ent) & (ent > 0) & np.isfinite(s1) & (s1 < ent)
+        dist = floor_dist((ent - s1) / ent, costs[eday, mkt[ev["ci"]]])
+        ev["sf"] = np.where(ok, ent * (1.0 - dist), np.nan)
+    ev["sf_struct_binding"] = ok & np.isclose(ev["sf"], s1)
+
+
+def r_acct(ret, dist):
+    """계좌 단위 R = 수익률 × min(W_CAP/RISK, 1/거리) = (비중 × 수익률) ÷ RISK — 비중 = min(W_CAP, RISK/거리)."""
+    return np.asarray(ret, float) * np.minimum(W_CAP / RISK, 1.0 / np.asarray(dist, float))
+
+
+def u1_share(S: dict) -> np.ndarray:
+    """거래일 d 의 유니버스(d−1 까지 거래대금) 중 일봉 U1 ON(전날 행 ∧ DEF) 비율. 분모 = 그날 유니버스이면서 패널에 있는 종목."""
+    M = S["MEMd"]
+    on = S["DS"]["up_prev"][0] & M
+    den = M.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(den > 0, on.sum(axis=0) / den, np.nan)
+
+
+def regime_on(kosdaq: pd.Series, udates, share, ma: int = REGIME_MA, thr: float = REGIME_U1_MIN) -> dict:
+    """국면 ON(거래일 d) = d 보다 엄격히 앞선 마지막 지수 행의 종가 > 그 행까지의 MA``ma``(min_periods = ma) ∧ share[d] ≥ thr."""
+    q = pd.Series(np.asarray(kosdaq, float), index=pd.DatetimeIndex(kosdaq.index)).sort_index().dropna()
+    m = q.rolling(ma, min_periods=ma).mean()
+    ud = np.asarray(udates, dtype="datetime64[ns]")
+    r = np.searchsorted(q.index.values, ud, side="left") - 1
+    ok = r >= 0
+    rr = np.maximum(r, 0)
+    close_prev = np.where(ok, q.to_numpy()[rr], np.nan)
+    ma_prev = np.where(ok, m.to_numpy()[rr], np.nan)
+    with np.errstate(invalid="ignore"):
+        idx_on = np.isfinite(ma_prev) & (close_prev > ma_prev)
+        sh = np.asarray(share, float)
+        on = idx_on & np.isfinite(sh) & (sh >= thr)
+    return {"on": on, "idx_on": idx_on, "share": sh, "close_prev": close_prev, "ma_prev": ma_prev,
+            "prev_date": np.where(ok, q.index.values[rr], np.datetime64("NaT", "ns"))}
 
 
 # --------------------------------------------------------------------------------------------- 후보·계좌
@@ -446,9 +514,15 @@ def candidates(S: dict, OC: dict, cfg: dict, tfi: int, costs: np.ndarray, mkt: n
         m &= ev["spread"]
     if not cfg["overnight"]:
         m &= ~ev["last"]
+    reg = S.get("regime")
+    n = len(S["ts_min"])
+    reg_ev = (reg[S["dix"][np.minimum(ev["t"] + 1, n - 1)]] if reg is not None else np.zeros(len(ev["t"]), bool))
+    if cfg.get("regime", "ignore") == "on":
+        if reg is None:
+            raise ValueError("regime 유전자 'on' 인데 S['regime'] 이 없다")
+        m &= reg_ev
     idx = np.flatnonzero(m)
     ts = S["ts_min"]
-    n = len(ts)
     eb = ev["t"][idx] + 1
     xb = o["xb"][idx]
     real = o["realized"][idx]
@@ -464,14 +538,14 @@ def candidates(S: dict, OC: dict, cfg: dict, tfi: int, costs: np.ndarray, mkt: n
     rv = ev["relvol"][idx]
     return {"ci": ev["ci"][idx], "t": ev["t"][idx], "eb": eb, "xb": xb, "entry_ts": ts[eb], "exit_ts": exit_ts, "free_ts": free,
             "eday": S["dix"][eb], "xday": xday, "entry_px": ent, "exit_px": xpx, "stop": stop, "dist": dist, "ret": ret,
-            "R": ret / dist, "realized": real, "why": o["why"][idx], "last": ev["last"][idx],
+            "R": ret / dist, "Racct": r_acct(ret, dist), "reg_on": reg_ev[idx], "realized": real, "why": o["why"][idx], "last": ev["last"][idx],
             "relvol": np.where(np.isfinite(rv), rv, -np.inf), "tfi": np.full(len(idx), tfi, np.int64),
             "cfg": np.full(len(idx), cfg_id, np.int64), "ev_idx": idx, "n_bars": np.full(len(idx), n, np.int64),
             "month": month_of(ts[eb])}
 
 
 CAND_KEYS = ("ci", "t", "eb", "xb", "entry_ts", "exit_ts", "free_ts", "eday", "xday", "entry_px", "exit_px", "stop", "dist", "ret",
-             "R", "realized", "why", "last", "relvol", "tfi", "cfg", "ev_idx", "n_bars", "month")
+             "R", "Racct", "reg_on", "realized", "why", "last", "relvol", "tfi", "cfg", "ev_idx", "n_bars", "month")
 
 
 INT_KEYS = ("ci", "t", "eb", "xb", "entry_ts", "exit_ts", "free_ts", "eday", "xday", "why", "tfi", "cfg", "ev_idx", "n_bars")
@@ -480,7 +554,7 @@ INT_KEYS = ("ci", "t", "eb", "xb", "entry_ts", "exit_ts", "free_ts", "eday", "xd
 def concat(parts: list) -> dict:
     parts = [p for p in parts if len(p["ci"])]
     if not parts:
-        return {k: np.zeros(0, dtype=object if k == "month" else (np.int64 if k in INT_KEYS else (bool if k in ("realized", "last") else float)))
+        return {k: np.zeros(0, dtype=object if k == "month" else (np.int64 if k in INT_KEYS else (bool if k in ("realized", "last", "reg_on") else float)))
                 for k in CAND_KEYS}
     return {k: np.concatenate([p[k] for p in parts]) for k in CAND_KEYS}
 
@@ -583,14 +657,23 @@ def month_start_ts(month: str) -> int:
     return int(np.datetime64(pd.Timestamp(month + "-01"), "m").astype(np.int64))
 
 
-def train_scores(acc: dict, months: list) -> tuple:
-    """폴드 m: 학습 = 계좌 시작 ~ m−1 말. 그 전에 청산 체결된(청산 봉 시작 < m 첫날) 거래의 R 합·수. 계좌가 인과적이라
-    전 기간 한 번 돌린 장부를 잘라도 학습 창만 돌린 장부와 같다(테스트 test_selection_ignores_test_month)."""
+def robust_sum(x, drop_top: int = 0) -> float:
+    """합에서 큰 순 ``drop_top`` 건을 뺀다 — 단 양수인 것만 뺀다(RULINGS_V2["train_score"]: 손실 거래를 빼서 점수가 오르지 않게)."""
+    x = np.asarray(x, float)
+    if drop_top <= 0 or len(x) == 0:
+        return float(x.sum())
+    top = np.sort(x)[::-1][:drop_top]
+    return float(x.sum() - top[top > 0].sum())
+
+
+def train_scores(acc: dict, months: list, key: str = "R", drop_top: int = 0) -> tuple:
+    """폴드 m: 학습 = 계좌 시작 ~ m−1 말. 그 전에 청산 체결된(청산 봉 시작 < m 첫날) 거래의 ``key`` 합(MT-2 = R_acct 합 − 상위 3건)·수.
+    계좌가 인과적이라 전 기간 한 번 돌린 장부를 잘라도 학습 창만 돌린 장부와 같다(테스트 test_selection_ignores_test_month)."""
     sc, nt = [], []
     for mo in months:
         cut = month_start_ts(mo)
         m = acc["realized"] & (acc["exit_ts"] < cut)
-        sc.append(float(acc["R"][m].sum()))
+        sc.append(robust_sum(acc[key][m], drop_top))
         nt.append(int(m.sum()))
     return np.array(sc), np.array(nt)
 
@@ -637,34 +720,34 @@ def rstats(R) -> dict:
 
 # --------------------------------------------------------------------------------------------- 전체 흐름(실행기·테스트 공용)
 
-def prepare(Ss: list) -> tuple:
-    """봉 단위별 사건 경로(12 변형)와 계좌 평가용 일 종가 더미(봉 단위 × 종목 × 거래일)."""
+def prepare(Ss: list, stops: tuple = ("S1", "S2")) -> tuple:
+    """봉 단위별 사건 경로(청산 변형 × 손절)와 계좌 평가용 일 종가 더미(봉 단위 × 종목 × 거래일)."""
     for S in Ss[1:]:
         if not (np.array_equal(S["udates"], Ss[0]["udates"]) and S["codes"] == Ss[0]["codes"]):
             raise ValueError("봉 단위끼리 거래일·종목이 같아야 한다")
-    OCs = [outcomes(S) for S in Ss]
+    OCs = [outcomes(S, stops) for S in Ss]
     dayclose = np.ascontiguousarray(np.stack([S["dcl"] for S in Ss]))
     return OCs, dayclose
 
 
-def all_candidates(Ss: list, OCs: list, costs: np.ndarray, mkt: np.ndarray, cost_mult: float) -> list:
+def all_candidates(Ss: list, OCs: list, costs: np.ndarray, mkt: np.ndarray, cost_mult: float, axes: dict = AXES) -> list:
     tfs = [S["tf"] for S in Ss]
     return [candidates(Ss[tfs.index(c["tf"])], OCs[tfs.index(c["tf"])], c, tfs.index(c["tf"]), costs, mkt, cost_mult, j)
-            for j, c in enumerate(menu())]
+            for j, c in enumerate(menu(axes))]
 
 
-def wf_select(cands: list, dayclose: np.ndarray, months: list) -> dict:
-    """설정마다 전 기간 단일 계좌 한 번 → 폴드별 학습 점수(그 달 전에 청산된 R 합) → 이웃 중앙값 최대."""
+def wf_select(cands: list, dayclose: np.ndarray, months: list, key: str = "R", drop_top: int = 0, axes: dict = AXES) -> dict:
+    """설정마다 전 기간 단일 계좌 한 번 → 폴드별 학습 점수(그 달 전에 청산된 ``key`` 합, 상위 ``drop_top`` 건 제외) → 이웃 중앙값 최대."""
     sc = np.zeros((len(cands), len(months)))
     nt = np.zeros((len(cands), len(months)), np.int64)
     for j, c in enumerate(cands):
         acc = account(c, dayclose)
-        sc[j], nt[j] = train_scores(acc, months)
+        sc[j], nt[j] = train_scores(acc, months, key, drop_top)
     picks, nmed = [], []
     for f in range(len(months)):
-        p = select(sc[:, f], nt[:, f])
+        p = select(sc[:, f], nt[:, f], axes)
         picks.append(p)
-        nmed.append(float(neighbor_medians(sc[:, f])[p]))
+        nmed.append(float(neighbor_medians(sc[:, f], axes)[p]))
     return {"picks": picks, "scores": sc, "n_train": nt, "nbr_median": nmed}
 
 
@@ -682,10 +765,10 @@ def entry_pool(S: dict) -> np.ndarray:
 
 
 def random_entries(Ss: list, pools: list, tr: dict, rng, costs: np.ndarray, mkt: np.ndarray, cost_mult: float,
-                   cache: dict | None = None) -> dict:
+                   cache: dict | None = None, axes: dict = AXES) -> dict:
     """널 ② 한 번: 전략 OOS 계좌의 진입마다 같은 봉 단위·같은 신호 봉(같은 날·같은 시각대)에서 그 폴드 up 유전자 ON 인 아무 종목을 골라
-    다음 봉 시가에 산다. 손절 거리 = 짝 거래의 손절 거리(%, RULINGS["null2_stop"]), 청산 = 짝 설정의 exit. 반환: 실현 R 배열 등."""
-    M = menu()
+    다음 봉 시가에 산다. 손절 거리 = 짝 거래의 손절 거리(%, RULINGS["null2_stop"]), 청산 = 짝 설정의 exit. 반환: 실현 R·R_acct 배열 등."""
+    M = menu(axes)
     cache = {} if cache is None else cache
     pick = np.full(len(tr["ci"]), -1, np.int64)
     for k in range(len(tr["ci"])):
@@ -699,6 +782,7 @@ def random_entries(Ss: list, pools: list, tr: dict, rng, costs: np.ndarray, mkt:
         if len(cand):
             pick[k] = cand[rng.integers(len(cand))]
     R = np.full(len(pick), np.nan)
+    Ra = np.full(len(pick), np.nan)
     real = np.zeros(len(pick), bool)
     names = {v[0]: (v[1], v[2]) for v in exit_variants()}
     var = np.array([variant_of(M[int(c)]) for c in tr["cfg"]])
@@ -715,6 +799,8 @@ def random_entries(Ss: list, pools: list, tr: dict, rng, costs: np.ndarray, mkt:
             r = run_paths(S, ci, eb, stop, mode, upk)
             xday = S["dix"][np.maximum(r["xb"], 0)]
             cst = costs[xday, mkt[ci]] * cost_mult
-            R[sel] = (r["xpx"] / ent - 1.0 - cst) / tr["dist"][sel]
+            ret = r["xpx"] / ent - 1.0 - cst
+            R[sel] = ret / tr["dist"][sel]
+            Ra[sel] = r_acct(ret, tr["dist"][sel])
             real[sel] = r["realized"]
-    return {"code": pick, "R": R, "realized": real}
+    return {"code": pick, "R": R, "Racct": Ra, "realized": real}
