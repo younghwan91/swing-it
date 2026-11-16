@@ -133,21 +133,40 @@ def summary(B: dict, name: str) -> dict:
             "expo": round(float(last["expo"]), 6) if last is not None else 0.0}
 
 
-def drift(prev_rows: list, now_rows: list, tol: float = DRIFT_TOL) -> list:
-    """앞 행에서 청산된 거래가 지금 장부에서 (종목, 진입, 청산, 사유, 수익률)로 같은가. 다른 것 목록."""
+def drift(prev_rows: list, now_rows: list, prev_asof: str | None = None, tol: float = DRIFT_TOL) -> list:
+    """앞 행과 지금 장부의 대조(정정 MTF30-1, 리뷰 M1). ① 앞 행에서 청산된 거래: (종목, 진입, 청산, 사유, 수익률) 같음.
+    ② 앞 행의 미청산 거래: 지금도 있고 손절 거리·비중이 같음. ③ 진입이 ``prev_asof`` 이하인 거래 집합이 같음(새로 생김 = '추가')."""
     now = {(r["code"], r["entry"]): r for r in now_rows}
     bad = []
     for r in prev_rows:
-        if not r["realized"]:
-            continue
         q = now.get((r["code"], r["entry"]))
         if q is None:
             bad.append({"code": r["code"], "entry": r["entry"], "what": "사라짐"})
-        elif (q["exit"] != r["exit"] or q["why"] != r["why"] or not q["realized"] or q["ret"] is None or r["ret"] is None
-              or abs(q["ret"] - r["ret"]) > tol):
-            bad.append({"code": r["code"], "entry": r["entry"], "what": "바뀜", "prev": [r["exit"], r["why"], r["ret"]],
-                        "now": [q["exit"], q["why"], q["ret"]]})
+        elif r["realized"]:
+            if (q["exit"] != r["exit"] or q["why"] != r["why"] or not q["realized"] or q["ret"] is None or r["ret"] is None
+                    or abs(q["ret"] - r["ret"]) > tol):
+                bad.append({"code": r["code"], "entry": r["entry"], "what": "바뀜", "prev": [r["exit"], r["why"], r["ret"]],
+                            "now": [q["exit"], q["why"], q["ret"]]})
+        elif q["dist"] is None or r["dist"] is None or abs(q["dist"] - r["dist"]) > tol or abs((q["size"] or 0) - (r["size"] or 0)) > 1:
+            bad.append({"code": r["code"], "entry": r["entry"], "what": "보유 바뀜", "prev": [r["dist"], r["size"]], "now": [q["dist"], q["size"]]})
+    if prev_asof is not None:
+        hi = str(pd.Timestamp(prev_asof) + pd.Timedelta(days=1))
+        seen = {(r["code"], r["entry"]) for r in prev_rows}
+        bad += [{"code": c, "entry": e, "what": "추가"} for (c, e) in now if e < hi and (c, e) not in seen]
     return bad
+
+
+def newly_realized(prev_rows: list, now_rows: list) -> list:
+    """이번 행에서 처음 실현된 거래(판정은 이 값으로 동결 — 정정 MTF30-1 M2)."""
+    done = {(r["code"], r["entry"]) for r in prev_rows if r["realized"]}
+    return [r for r in now_rows if r["realized"] and (r["code"], r["entry"]) not in done]
+
+
+def rows_ok(m15: pd.DataFrame, day: pd.Timestamp, frac: float = 0.90) -> bool:
+    """그날 15분봉 행 수 ≥ 직전 5거래일 중앙값 × ``frac``(장중 구멍 보조 점검, 리뷰 m3)."""
+    n = m15.groupby(m15["ts"].dt.normalize()).size()
+    prior = n[n.index < day].tail(5)
+    return day in n.index and (len(prior) == 0 or n[day] >= frac * float(prior.median()))
 
 
 def read_ledger(path: Path) -> list:
@@ -227,7 +246,7 @@ def main(argv=None) -> int:
         if d in D["tv"].index:
             row = D["tv"].loc[d].reindex(D["union"])
             expect[d] = set(row.index[row.to_numpy(dtype=float, na_value=np.nan) > 0])
-    ok_days = complete_days(m[m["ts"] >= tail[0]], expect)
+    ok_days = [d for d in complete_days(m[m["ts"] >= tail[0]], expect) if rows_ok(m, d)]
     if not ok_days:
         print(f"실패: 최근 3거래일({', '.join(str(d.date()) for d in tail)}) 분봉 완결 날 없음")
         return 1
@@ -243,6 +262,8 @@ def main(argv=None) -> int:
         print(f"이미 기록됨: {asof.date()}")
         return 0
     D = cut_to(D, asof)
+    if D["ix"].index.max() != asof:
+        print(f"감시: 지수 마지막 행 {D['ix'].index.max().date()} ≠ 자료 마지막 날 {asof.date()} — 국면 계산이 직전 지수 행을 쓴다")
     from swing_it.features.korea import cost_rt
 
     codes = sorted(D["m15"]["code"].unique())
@@ -262,7 +283,8 @@ def main(argv=None) -> int:
               f"main 진입 {len(rows['main'])} shadow 진입 {len(rows['shadow'])}, 다음 날 국면 {'ON' if nr['on'] else 'OFF'} ({time.time() - t0:.0f}s)")
         return 0
     prev = led[-1] if led else None
-    dr = {k: drift(prev[k]["trades"], rows[k]) for k in ("main", "shadow")} if prev else {"main": [], "shadow": []}
+    dr = {k: drift(prev[k]["trades"], rows[k], prev["asof"]) for k in ("main", "shadow")} if prev else {"main": [], "shadow": []}
+    nr_ = {k: newly_realized(prev[k]["trades"] if prev else [], rows[k]) for k in ("main", "shadow")}
     sha, dirty = _git()
     last = -1
     row = {"arm": ARM, "asof": str(asof.date()), "run_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), "git": sha, "dirty": dirty,
@@ -274,7 +296,8 @@ def main(argv=None) -> int:
            "regime": {"asof": {"on": bool(RG["on"][last]), "idx_on": bool(RG["idx_on"][last]), "u1_share": _num(RG["share"][last], 4)},
                       "next": {k: (_num(v, 4) if isinstance(v, float) else v) for k, v in nr.items()}},
            "main": {**summary(B, "main"), "trades": rows["main"]}, "main_c1": summary(B, "main_c1"),
-           "shadow": {**summary(B, "shadow"), "trades": rows["shadow"]}, "drift": dr}
+           "shadow": {**summary(B, "shadow"), "trades": rows["shadow"]}, "drift": dr, "newly_realized": nr_,
+           "note": "가격은 분할 보정 패널 기준(판정은 비율만), regime.next 의 대상은 패널 종목 한정 근사"}
     append_row(path, row)
     s = row["main"]
     print(f"기록: {ARM} {asof.date()} — main 진입 {s['n_entries']}(실현 {s['n_realized']}, 보유 {s['n_open']}), 자산 {s['equity']:,.0f}, "

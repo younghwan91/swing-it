@@ -57,7 +57,7 @@ def test_prefix_stability(data, full, cut):
     part = _book(data, cut)
     for k in ("main", "shadow"):
         a, b = P.trade_rows(part, k), P.trade_rows(full, k)
-        assert P.drift(a, b) == [], (k, cut)
+        assert P.drift(a, b, cut) == [], (k, cut)
         hi = str(pd.Timestamp(cut) + pd.Timedelta(days=1))
         assert {(r["code"], r["entry"]) for r in a} == {(r["code"], r["entry"]) for r in b if r["entry"] < hi}, (k, cut)
         sa = {(r["code"], r["entry"]): r["size"] for r in a}
@@ -94,3 +94,20 @@ def test_complete_days():
     m = pd.DataFrame(rows, columns=["code", "ts"])
     assert P.complete_days(m, {d1: {"A", "B"}, d2: {"A", "B"}}) == [d1]
     assert P.complete_days(m, {d1: {"A", "B"}, d2: {"A", "B"}}, cover_min=0.5) == [d1, d2]
+
+
+def test_drift_catches_added_and_open_changes():
+    a = [{"code": "A", "entry": "2026-11-17 10:00:00", "realized": False, "dist": 0.03, "size": 1e6, "exit": None, "why": "미청산", "ret": 0.01}]
+    b = [dict(a[0], dist=0.05), {"code": "B", "entry": "2026-11-17 11:00:00", "realized": False, "dist": 0.02, "size": 1e6, "exit": None,
+                                 "why": "미청산", "ret": 0.0}]
+    w = {x["what"] for x in P.drift(a, b, "2026-11-17")}
+    assert w == {"보유 바뀜", "추가"}
+    assert P.drift(a, b[1:2] + [{**b[1], "code": "C", "entry": "2026-11-18 09:30:00"}], "2026-11-17")[0]["what"] == "사라짐"
+    c = [dict(a[0], realized=True, exit="2026-11-18 09:00:00", why="손절", ret=-0.03)]
+    assert P.newly_realized(a, c) == c and P.newly_realized(c, c) == []
+
+
+def test_rows_ok():
+    days = pd.bdate_range("2026-11-09", "2026-11-16")
+    m = pd.DataFrame({"code": "A", "ts": np.repeat(days, [26, 26, 26, 26, 26, 10])})
+    assert P.rows_ok(m, days[4]) and not P.rows_ok(m, days[5])
