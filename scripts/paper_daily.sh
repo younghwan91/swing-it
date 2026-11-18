@@ -7,19 +7,41 @@ cd "$(dirname "$0")/.."
 set -a; . ~/git/quant-airflow/.env; set +a
 export NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1
 UV=/home/young/.local/bin/uv
+# 겹친 실행 방지(수동 실행과 cron 이 같은 장부에 덧붙이거나 git 색인을 같이 잡지 않게). 잠금은 프로세스가 끝나면 풀린다.
+mkdir -p "$HOME/.cache/cc-swing"
+exec 9>"$HOME/.cache/cc-swing/paper_daily.lock"
+flock -n 9 || { echo "실패: 이미 다른 paper_daily 가 돌고 있다 — 이번 실행은 건너뜀"; exit 1; }
+FAILS=()
+# 팔 하나 실행: 이름, 시간 제한(초), 명령. pipefail 이라 파이썬이 죽으면 grep 이 다른 줄을 건져도 실패로 남는다(정정 F1-3 과 같은 규칙).
+# 시간 제한이 없으면 한 팔이 멈췄을 때 뒤 팔과 장부 커밋이 모두 막힌다.
+run_arm() {
+    local name=$1 lim=$2
+    shift 2
+    echo "== $(date '+%F %T') $name"
+    ( set -o pipefail; timeout "$lim" "$@" | grep -E "^(기록|이미 기록됨|시작 전|감시|실패)" ) || { echo "실패: $name"; FAILS+=("$name"); }
+}
+# leader 팔은 한 팔에 약 2분 15초. -W ignore 는 pandas 경고(팔마다 수십 줄)만 지운다 — 예외 추적은 그대로 로그에 남는다.
 for arm in leader_A leader_C leader_C20 leader_A_rs leader_C_rs leader_C20_rs leader_M leader_P leader_M_ana; do
-    echo "== $(date '+%F %T') $arm"
-    $UV run --with numba --extra pg python research/paper/leader_paper.py --arm "$arm" | grep -E "^(기록|이미 기록됨|시작 전)" || echo "실패: $arm"
+    run_arm "$arm" 900 $UV run --with numba --extra pg python -W ignore research/paper/leader_paper.py --arm "$arm"
 done
 # PEAD 순위 북 전진 팔(research/paper/PEAD_FORWARD_PREREG.md) — 위 leader 팔 뒤에 따로 돈다. 실패·시간 초과(15분)여도 leader 장부와
 # 아래 커밋은 그대로 간다(set -e 없음, 오류는 이 로그로). 행 쓰기는 덧붙이기 전용이라 실패한 날은 --asof 로 채운다.
-echo "== $(date '+%F %T') pead_rank_F1"
 # 정정 F1-3: pipefail 이라 파이썬이 죽거나 부실한 결정일 행을 거부하면(종료 1) grep 이 다른 줄을 건져도 실패로 남는다. grep 이 감시·실패 줄도 남긴다.
 # "이미 기록됨(재실행)" 은 오늘 쓴 행, "이미 기록됨(새 거래일 없음)" 은 휴장 아니면 DB 지연이다. 가격이 지수보다 뒤처지면 pead_paper 가 실패: 로 찍고,
 # 지수까지 멈춘 경우는 quant-airflow 헬스체크(report_paper_ledger, 11:35·18:10)가 장부 날짜·그 뒤 틱으로 잡는다 — 이 스크립트가 안 돌아도 잡힌다.
-( set -o pipefail; timeout 900 $UV run --extra pg python -W ignore research/paper/pead_paper.py | grep -E "^(기록|이미 기록됨|시작 전|감시|실패)" ) || echo "실패: pead_rank_F1"
+run_arm pead_rank_F1 900 $UV run --extra pg python -W ignore research/paper/pead_paper.py
 # 일봉 상승 중 30분봉 전환 전진 팔(research/paper/MTF30_FORWARD_PREREG.md) — 전날 분봉으로 계좌를 처음부터 다시 돌려 한 줄 덧붙인다(약 30초).
-echo "== $(date '+%F %T') mtf30_fwd"
-( set -o pipefail; timeout 1200 $UV run --with numba --extra pg python -W ignore research/paper/mtf_paper.py | grep -E "^(기록|이미 기록됨|시작 전|감시|실패)" ) || echo "실패: mtf30_fwd"
-git add research/paper/*_ledger.jsonl
-git diff --cached --quiet || git commit -q -m "research(paper): $(date +%F) 장부(cron)" && echo "커밋 $(git rev-parse --short HEAD)"
+run_arm mtf30_fwd 1200 $UV run --with numba --extra pg python -W ignore research/paper/mtf_paper.py
+# 장부 경로만 커밋한다(git commit -- 경로). 예전처럼 색인 전체를 커밋하면 그 시각 이 워크트리에 누가 스테이징해 둔 연구 파일까지
+# "장부(cron)" 커밋에 섞여 들어간다. 다른 스테이징은 그대로 남는다.
+LEDGERS=(research/paper/*_ledger.jsonl)
+git add -- "${LEDGERS[@]}"
+if git diff --cached --quiet -- "${LEDGERS[@]}"; then
+    echo "커밋 없음: 장부 변화 없음"
+elif git commit -q -m "research(paper): $(date +%F) 장부(cron)" -- "${LEDGERS[@]}"; then
+    echo "커밋 $(git rev-parse --short HEAD)"
+else
+    echo "실패: 장부 커밋"
+    FAILS+=("commit")
+fi
+echo "요약: $(date '+%F %T') 실패 ${#FAILS[@]}건${FAILS[*]:+ — ${FAILS[*]}}"

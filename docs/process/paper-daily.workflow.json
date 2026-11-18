@@ -1,0 +1,408 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "매일 모의매매 파이프라인 (paper_daily.sh) — 프로세스와 문제점",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "docs/process/paper-daily.workflow.html",
+    "repository": {
+      "url": "https://github.com/younghwan91/swing-it.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "a87cbe408ae47f77bceb6476b012d0df97555891"
+    },
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "실행 단계"
+        },
+        "security": {
+          "label": "문제점"
+        },
+        "database": {
+          "label": "저장소"
+        },
+        "external": {
+          "label": "시작 · 외부 점검"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "shell",
+      "label": "cron · 셸"
+    },
+    {
+      "id": "arms",
+      "label": "팔 스크립트"
+    },
+    {
+      "id": "store",
+      "label": "DB · 장부"
+    },
+    {
+      "id": "issues",
+      "label": "문제점",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "run",
+      "label": "팔 실행 (순차)",
+      "fromCol": 1,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "persist",
+      "label": "보존 · 감시",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "cron",
+    "leader",
+    "pead",
+    "mtf",
+    "commit",
+    "health"
+  ],
+  "nodes": [
+    {
+      "id": "cron",
+      "lane": "shell",
+      "col": 0,
+      "type": "external",
+      "label": "cron 07:43",
+      "sublabel": "평일, fcs 워크트리",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 1,
+          "end_line": 9,
+          "label": "실행 환경"
+        }
+      ]
+    },
+    {
+      "id": "leader",
+      "lane": "arms",
+      "col": 1,
+      "type": "backend",
+      "label": "leader 9팔",
+      "sublabel": "팔마다 새 프로세스",
+      "tag": "약 18분",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 10,
+          "end_line": 13,
+          "label": "9팔 루프"
+        },
+        {
+          "path": "research/paper/leader_paper.py",
+          "line": 66,
+          "end_line": 86,
+          "label": "load_db"
+        }
+      ]
+    },
+    {
+      "id": "pead",
+      "lane": "arms",
+      "col": 2,
+      "type": "backend",
+      "label": "pead_rank_F1",
+      "sublabel": "timeout 900",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 16,
+          "end_line": 20
+        },
+        {
+          "path": "research/paper/pead_paper.py",
+          "line": 817,
+          "end_line": 831,
+          "label": "append_row"
+        }
+      ]
+    },
+    {
+      "id": "mtf",
+      "lane": "arms",
+      "col": 3,
+      "type": "backend",
+      "label": "mtf30_fwd",
+      "sublabel": "timeout 1200",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 21,
+          "end_line": 23
+        },
+        {
+          "path": "research/paper/mtf_paper.py",
+          "line": 178,
+          "end_line": 185,
+          "label": "append_row"
+        }
+      ]
+    },
+    {
+      "id": "db",
+      "lane": "store",
+      "col": 1,
+      "type": "database",
+      "label": "kr_quant DB",
+      "sublabel": "읽기 전용",
+      "sources": [
+        {
+          "path": "research/paper/leader_paper.py",
+          "line": 100,
+          "end_line": 101,
+          "label": "connect"
+        }
+      ]
+    },
+    {
+      "id": "ledger",
+      "lane": "store",
+      "col": 3,
+      "type": "database",
+      "label": "*_ledger.jsonl",
+      "sublabel": "덧붙이기 전용",
+      "sources": [
+        {
+          "path": "research/paper/leader_paper.py",
+          "line": 169,
+          "end_line": 181,
+          "label": "leader 쓰기"
+        },
+        {
+          "path": "research/paper/mtf_paper.py",
+          "line": 178,
+          "end_line": 185,
+          "label": "mtf 쓰기"
+        }
+      ]
+    },
+    {
+      "id": "commit",
+      "lane": "shell",
+      "col": 4,
+      "type": "backend",
+      "label": "git add · commit",
+      "sublabel": "fcs 브랜치",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 24,
+          "end_line": 25
+        }
+      ]
+    },
+    {
+      "id": "health",
+      "lane": "shell",
+      "col": 5,
+      "type": "external",
+      "label": "헬스체크",
+      "sublabel": "quant-airflow 11:35·18:10"
+    },
+    {
+      "id": "p_reload",
+      "lane": "issues",
+      "col": 0,
+      "type": "security",
+      "label": "P3 같은 자료 9번",
+      "sublabel": "2016~ 가격 매번 적재",
+      "sources": [
+        {
+          "path": "research/paper/leader_paper.py",
+          "line": 66,
+          "end_line": 72
+        }
+      ]
+    },
+    {
+      "id": "p_timeout",
+      "lane": "issues",
+      "col": 1,
+      "type": "security",
+      "label": "P2 timeout 없음",
+      "sublabel": "한 팔이 멈추면 커밋까지 막힘",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 12
+        }
+      ]
+    },
+    {
+      "id": "p_echo",
+      "lane": "issues",
+      "col": 3,
+      "type": "security",
+      "label": "P5 로그 신호 묻힘",
+      "sublabel": "경고 수백 줄·거짓 '커밋'",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 12
+        },
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 25
+        }
+      ]
+    },
+    {
+      "id": "p_commit",
+      "lane": "issues",
+      "col": 4,
+      "type": "security",
+      "label": "P1 인덱스 통째 커밋",
+      "sublabel": "남이 스테이징한 것도 들어감",
+      "sources": [
+        {
+          "path": "scripts/paper_daily.sh",
+          "line": 24,
+          "end_line": 25
+        }
+      ]
+    },
+    {
+      "id": "p_health",
+      "lane": "issues",
+      "col": 5,
+      "type": "security",
+      "label": "P4 mtf30 감시 밖",
+      "sublabel": "행 키 순서가 달라 안 읽힘",
+      "sources": [
+        {
+          "path": "research/paper/mtf_paper.py",
+          "line": 290
+        },
+        {
+          "path": "research/paper/leader_paper.py",
+          "line": 147
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-cron-leader",
+      "from": "cron",
+      "to": "leader",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-leader-pead",
+      "from": "leader",
+      "to": "pead"
+    },
+    {
+      "id": "e-pead-mtf",
+      "from": "pead",
+      "to": "mtf"
+    },
+    {
+      "id": "e-mtf-commit",
+      "from": "mtf",
+      "to": "commit",
+      "label": "git add 장부"
+    },
+    {
+      "id": "e-commit-health",
+      "from": "commit",
+      "to": "health",
+      "variant": "dashed",
+      "role": "async",
+      "label": "몇 시간 뒤"
+    },
+    {
+      "id": "e-leader-db",
+      "from": "leader",
+      "to": "db",
+      "label": "읽기",
+      "role": "branch"
+    },
+    {
+      "id": "e-mtf-ledger",
+      "from": "mtf",
+      "to": "ledger",
+      "label": "한 줄 덧붙임",
+      "role": "branch"
+    },
+    {
+      "id": "e-leader-p3",
+      "from": "leader",
+      "to": "p_reload",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-leader-p2",
+      "from": "leader",
+      "to": "p_timeout",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-commit-p1",
+      "from": "commit",
+      "to": "p_commit",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-commit-p5",
+      "from": "commit",
+      "to": "p_echo",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-health-p4",
+      "from": "health",
+      "to": "p_health",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "흐름",
+      "items": [
+        "세 종류 팔이 모두 kr_quant 를 읽고 자기 장부에 한 줄씩 덧붙인다(그림은 대표 연결만)",
+        "장부만 fcs 브랜치에 커밋 — 워크트리 삭제로 장부를 잃은 사고(10-24) 때문",
+        "헬스체크는 다른 레포(quant-airflow)가 장부 날짜를 본다"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "고친 것 (이 브랜치)",
+      "items": [
+        "P1 장부 경로만 커밋(git commit -- 경로), 커밋 없으면 '커밋 없음'",
+        "P2 leader 팔마다 timeout·pipefail, 겹친 실행은 flock 으로 막음",
+        "P5 leader 도 -W ignore, 끝에 기록·실패 요약 한 줄"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "남은 것 (결정 필요)",
+      "items": [
+        "P3 9팔 한 프로세스 적재 — 바이트 동일 증명이 필요한 성능 변경",
+        "P4 quant-airflow 헬스체크에 mtf30 장부 추가 — 다른 레포 PR"
+      ]
+    }
+  ]
+}

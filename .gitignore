@@ -56,3 +56,6 @@ research/combined/BEST*.json
 research/combined/BEST_HISTORY.jsonl
 /run.log
 /results.tsv
+
+# archify 스킬(18MB 외부 패키지) — 커밋하지 않고 skills-lock.json 으로 고정, 설치는 docs/process/README.md
+.claude/skills/archify/
