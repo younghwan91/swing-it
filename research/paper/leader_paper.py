@@ -86,22 +86,11 @@ def load_db(con, session: str = "raw", info: "dict | None" = None, unpatched: st
     return days, codes, O, H, L_, C, TR, cost, mkt
 
 
-def main() -> None:
-    import psycopg2
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", default="leader_A")
-    ap.add_argument("--ledger", default=None, help="기본: 팔별 장부(ARM_LEDGER), 없으면 leader21_ledger.jsonl")
-    ap.add_argument("--legacy-close", action="store_true", help="정정 G28-3 전 결함 가격(daily_bars.close)으로 시총 — 비교용만")
-    ap.add_argument("--asof", default="", help="빠진 날 채우기: 쉼표로 이은 거래일(YYYY-MM-DD) — 그날까지만 시뮬레이션하고 행에 backfilled=true")
-    a = ap.parse_args()
-    price = ARM_PRICE.get(a.arm, PRICE_RAW)
-    if a.legacy_close and a.arm in ARM_PRICE:
-        raise SystemExit(f"{a.arm}: --legacy-close 는 쌍 팔에 쓰지 않는다(원 종가 정문의 애프터마켓 보정이 이 팔의 정의)")
-    con = psycopg2.connect(os.environ["KR_QUANT_DB"])
-    con.set_session(readonly=True)
+def prepare(con, price: dict, legacy_close: bool) -> tuple:
+    """가격 설정 하나의 시뮬레이션 입력(가격 적재 · 패널 · 실제 KOSPI 국면). 같은 설정의 팔들이 같이 쓴다(P3 — 9팔이 같은 자료를 9번 읽던 것)."""
     px_info: dict = {}
     days, codes, O, H, L_, C, TR, cost, mkt = load_db(con, session=price["session"], info=px_info, unpatched=price["unpatched"])  # noqa: E741
-    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not a.legacy_close,
+    D = L.build(days, codes, O, H, L_, C, TR, cost, mkt, con, pit_shares=True, krx_patch=True, raw_close=not legacy_close,
                 session=price["session"], aftermarket_fix=price["aftermarket_fix"], unpatched=price["unpatched"])
     # 국면 = 실제 KOSPI(sector_index 001) 종가 ≥ 200일선(검증 24차 MUST-FIX) — 지수 200일선이 생긴 날부터, 그 전은 시총 가중 대용
     from swing_it.storage import read_index
@@ -112,21 +101,67 @@ def main() -> None:
     for d_, v in kon.dropna().items():
         if d_ in days:
             D["regime_on"][days.get_loc(d_)] = bool(v)
-    cfg = ARMS[a.arm]
+    return days, D, px_info
+
+
+def arm_inputs(con, D: dict, cfg: dict, days, codes) -> dict:
+    """팔별 추가 신호를 얕은 사본에만 붙인다 — 같은 설정을 쓰는 다른 팔의 D 는 그대로."""
+    Da = dict(D)
     if cfg.get("rank_score") == "score_rl32":     # 32 RL-1: 후보 칸 예측 R(해시 검사 포함)
         from research.experiments.rl32 import score_array
-        D["score_rl32"] = score_array(D, cfg, con)
+        Da["score_rl32"] = score_array(Da, cfg, con)
     if cfg.get("cand_and") == "F_ana":             # 정정 31-3: 시험 31 과 같은 신호 코드
         from research.experiments.ana31 import WIN, report_events, window_sum
         net, _ = report_events(con, days, codes)
-        D["F_ana"] = window_sum(net, WIN) >= 1
-    a.ledger = a.ledger or ARM_LEDGER.get(a.arm, LEDGER)
+        Da["F_ana"] = window_sum(net, WIN) >= 1
+    return Da
+
+
+def main() -> None:
+    import psycopg2
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arm", default="leader_A")
+    ap.add_argument("--arms", default="", help="쉼표로 이은 팔들을 한 프로세스에서 — 가격 설정이 같은 팔은 자료를 한 번만 읽는다(--arm 무시)")
+    ap.add_argument("--ledger", default=None, help="기본: 팔별 장부(ARM_LEDGER), 없으면 leader21_ledger.jsonl (--arm 하나일 때만)")
+    ap.add_argument("--ledger-dir", default=None, help="팔별 기본 장부 파일 이름을 이 폴더 아래로(대조 시험용)")
+    ap.add_argument("--legacy-close", action="store_true", help="정정 G28-3 전 결함 가격(daily_bars.close)으로 시총 — 비교용만")
+    ap.add_argument("--asof", default="", help="빠진 날 채우기: 쉼표로 이은 거래일(YYYY-MM-DD) — 그날까지만 시뮬레이션하고 행에 backfilled=true")
+    a = ap.parse_args()
+    arms = [x for x in a.arms.split(",") if x] or [a.arm]
+    if len(arms) > 1 and a.ledger:
+        raise SystemExit("--ledger 는 팔 하나일 때만(여러 팔은 --ledger-dir)")
+    for arm in arms:
+        if arm not in ARMS:
+            raise SystemExit(f"모르는 팔: {arm}")
+        if a.legacy_close and arm in ARM_PRICE:
+            raise SystemExit(f"{arm}: --legacy-close 는 쌍 팔에 쓰지 않는다(원 종가 정문의 애프터마켓 보정이 이 팔의 정의)")
+    con = psycopg2.connect(os.environ["KR_QUANT_DB"])
+    con.set_session(readonly=True)
     names = pd.read_sql("select code, name from stocks", con).set_index("code")["name"].to_dict()
-    ends = [pd.Timestamp(x) for x in a.asof.split(",") if x] or [days[-1]]
-    for end in ends:                                # --asof: 그날 아침 돌렸을 행을 그날까지의 데이터로 다시 만든다(결정적·인과적 시뮬레이션)
-        if end not in days:
-            raise SystemExit(f"--asof {end.date()} 는 DB 거래일이 아니다")
-        record(a, con, D, days[: days.get_loc(end) + 1], cfg, price, px_info, names, backfilled=bool(a.asof))
+    groups: dict = {}                               # 가격 설정 → 팔들(입력 순서 유지)
+    for arm in arms:
+        groups.setdefault(tuple(sorted(ARM_PRICE.get(arm, PRICE_RAW).items())), []).append(arm)
+    failed = []
+    for key, members in groups.items():
+        price = dict(key)
+        days, D, px_info = prepare(con, price, a.legacy_close)
+        for arm in members:
+            try:
+                cfg = ARMS[arm]
+                Da = arm_inputs(con, D, cfg, days, D["codes"])
+                aa = argparse.Namespace(**{**vars(a), "arm": arm})
+                default = ARM_LEDGER.get(arm, LEDGER)
+                aa.ledger = a.ledger or (os.path.join(a.ledger_dir, os.path.basename(default)) if a.ledger_dir else default)
+                ends = [pd.Timestamp(x) for x in a.asof.split(",") if x] or [days[-1]]
+                for end in ends:                    # --asof: 그날 아침 돌렸을 행을 그날까지의 데이터로 다시 만든다(결정적·인과적 시뮬레이션)
+                    if end not in days:
+                        raise SystemExit(f"--asof {end.date()} 는 DB 거래일이 아니다")
+                    record(aa, con, Da, days[: days.get_loc(end) + 1], cfg, price, px_info, names, backfilled=bool(a.asof))
+            except Exception as e:                  # 한 팔의 실패가 같은 묶음 다른 팔을 막지 않게 — 실패 줄은 cron 이 잡는다
+                print(f"실패: {arm} — {type(e).__name__}: {e}"[:300])
+                failed.append(arm)
+    if failed:
+        raise SystemExit(1)
 
 
 def record(a, con, D: dict, days: pd.DatetimeIndex, cfg: dict, price: dict, px_info: dict, names: dict, backfilled: bool) -> None:

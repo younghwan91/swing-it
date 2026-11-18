@@ -656,7 +656,11 @@ def pead_step_of_paper_daily() -> str:
     text = (Path(__file__).parents[1] / "scripts" / "paper_daily.sh").read_text(encoding="utf-8")
     lines = [x for x in text.splitlines() if "pead_paper.py" in x and not x.startswith("#")]
     assert len(lines) == 1
-    return lines[0]
+    # 팔 실행은 공용 함수 run_arm(시간 제한·pipefail·실패 줄) — 스크립트의 정의를 그대로 떼어 같이 돌린다
+    body = text.splitlines()
+    a = body.index("run_arm() {")
+    b = a + body[a:].index("}")
+    return "FAILS=()\n" + "\n".join(body[a:b + 1]) + "\n" + lines[0]
 
 
 @pytest.mark.parametrize("py_out,rc,want,unwanted", [

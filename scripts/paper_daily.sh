@@ -20,10 +20,11 @@ run_arm() {
     echo "== $(date '+%F %T') $name"
     ( set -o pipefail; timeout "$lim" "$@" | grep -E "^(기록|이미 기록됨|시작 전|감시|실패)" ) || { echo "실패: $name"; FAILS+=("$name"); }
 }
-# leader 팔은 한 팔에 약 2분 15초. -W ignore 는 pandas 경고(팔마다 수십 줄)만 지운다 — 예외 추적은 그대로 로그에 남는다.
-for arm in leader_A leader_C leader_C20 leader_A_rs leader_C_rs leader_C20_rs leader_M leader_P leader_M_ana; do
-    run_arm "$arm" 900 $UV run --with numba --extra pg python -W ignore research/paper/leader_paper.py --arm "$arm"
-done
+# leader 9팔을 한 프로세스로 — 가격 설정(원값·정문 보정) 두 묶음마다 자료를 한 번만 읽는다(P3: 9번 따로 1228초 → 269초,
+# 2026-11-19 임시 장부로 팔별 행이 run_at 빼고 바이트 동일 확인). 한 팔이 죽으면 그 팔만 "실패: <팔>" 을 찍고 나머지는 계속 간다.
+# -W ignore 는 pandas 경고만 지운다 — 예외 추적은 그대로 로그에 남는다.
+LEADER_ARMS=leader_A,leader_C,leader_C20,leader_A_rs,leader_C_rs,leader_C20_rs,leader_M,leader_P,leader_M_ana
+run_arm leader 1800 $UV run --with numba --extra pg python -W ignore research/paper/leader_paper.py --arms "$LEADER_ARMS"
 # PEAD 순위 북 전진 팔(research/paper/PEAD_FORWARD_PREREG.md) — 위 leader 팔 뒤에 따로 돈다. 실패·시간 초과(15분)여도 leader 장부와
 # 아래 커밋은 그대로 간다(set -e 없음, 오류는 이 로그로). 행 쓰기는 덧붙이기 전용이라 실패한 날은 --asof 로 채운다.
 # 정정 F1-3: pipefail 이라 파이썬이 죽거나 부실한 결정일 행을 거부하면(종료 1) grep 이 다른 줄을 건져도 실패로 남는다. grep 이 감시·실패 줄도 남긴다.

@@ -392,16 +392,10 @@
       "title": "고친 것 (이 브랜치)",
       "items": [
         "P1 장부 경로만 커밋(git commit -- 경로), 커밋 없으면 '커밋 없음'",
-        "P2 leader 팔마다 timeout·pipefail, 겹친 실행은 flock 으로 막음",
-        "P5 leader 도 -W ignore, 끝에 기록·실패 요약 한 줄"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "남은 것 (결정 필요)",
-      "items": [
-        "P3 9팔 한 프로세스 적재 — 바이트 동일 증명이 필요한 성능 변경",
-        "P4 quant-airflow 헬스체크에 mtf30 장부 추가 — 다른 레포 PR"
+        "P2 팔마다 timeout·pipefail, 겹친 실행은 flock 으로 막음",
+        "P3 9팔 한 프로세스 · 가격 설정당 한 번 적재: 1228초 → 269초, 행 동일",
+        "P4 quant-airflow 헬스체크가 mtf30 장부·표류 줄도 봄(#32)",
+        "P5 leader 도 -W ignore, 끝에 실패 요약 한 줄"
       ]
     }
   ]
