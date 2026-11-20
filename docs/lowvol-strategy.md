@@ -64,10 +64,10 @@
 + 지수 인버스 ETF 헤지다(`swing_it.strategies.hedge`). 저변동은 원래 롱 다리가 저변동주라
 헤지 후에도 PEAD 보다 손실이 작지만, 고변동 숏 알파는 포기된다.
 
-## 배포북은 비공개
+## 배포북은 scalp-it 에 있다
 
 결합(PEAD ⊕ 저변동) + 인버스헤지의 **재현 성적표와 적합된 역변동성 비중**은 판정문이
-아니라 따라 할 수 있는 배포 레시피다. 이 저장소는 공개라, 그 북과 재현 스크립트는
-비공개 `scalp-it` (`docs/archive/pead-migrated-to-swing-it/`)에 둔다. 여기에는
+아니라 따라 할 수 있는 배포 레시피다. 그 북과 재현 스크립트는 `scalp-it`
+(`docs/archive/pead-migrated-to-kr-quant/`)에 있다(scalp-it 도 공개다). 여기에는
 재현 가능한 **라이브러리와 테스트**만 남는다 — `swing_it.strategies.{lowvol,combo,hedge}`,
 `swing_it.features.volatility`.
