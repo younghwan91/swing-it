@@ -21,6 +21,9 @@
 
 섹터 수급 관측 화면과 일일 리포트는 이 저장소에 없다(별도 저장소 [`sector-flow`](https://github.com/younghwan91/sector-flow)).
 
+이 브랜치(main)는 심사 프레임워크만 담는다. 스윙·미너비니 패턴 탐색, 진화(GA) 연구, 모의매매 장부 같은 실제 연구는
+공개 브랜치 [`feature-combined-strategy`](https://github.com/younghwan91/swing-it/tree/feature-combined-strategy) 에 있다(main 에 머지되지 않았다).
+
 ## Quick start
 
 ```bash
@@ -164,7 +167,7 @@ uv run python scripts/make_hero.py            # 첫 화면 그림 재생성 → 
 
 ## 라이선스
 
-MIT
+MIT — [LICENSE](LICENSE).
 
 ## 만든 사람
 
