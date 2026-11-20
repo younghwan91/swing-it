@@ -19,7 +19,7 @@
   아니라 공용 하버스에 박혀 있고, 그 하버스를 안 쓰는 게이트는 CI 린트가 빌드를 깨뜨린다.
 - **기각이 산출물이다.** 통과든 기각이든 근거 숫자와 함께 `research/logs/*/VERDICT.md` 에 남는다.
 
-섹터 수급 관측 화면과 일일 리포트는 이 저장소에 없다(비공개 별도 저장소 `sector-flow`).
+섹터 수급 관측 화면과 일일 리포트는 이 저장소에 없다(별도 저장소 [`sector-flow`](https://github.com/younghwan91/sector-flow)).
 
 ## Quick start
 
