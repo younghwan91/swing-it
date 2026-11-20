@@ -13,7 +13,16 @@ from __future__ import annotations
 
 import itertools
 
-import numba as nb
+try:  # numba 는 선택(:mod:`research.signals.vcp` 와 같은 규약) — 없으면 같은 소스가 파이썬으로 돈다.
+    import numba
+
+    def _njit(fn):
+        return numba.njit(cache=False)(fn)
+
+except ImportError:  # pragma: no cover - CI 경로
+
+    def _njit(fn):
+        return fn
 import numpy as np
 import pandas as pd
 
@@ -226,7 +235,7 @@ def universe(tv_all: pd.DataFrame, elig: list, codes: list, udates, topn: int = 
     return Md, memday
 
 
-@nb.njit(cache=False)
+@_njit
 def struct_stop(rev, Lf, ci, t, m):
     """전환 전 역배열 구간 최저가: t−1 부터 거슬러 가장 가까운 역배열 봉(m 봉 안) → 그 연속 역배열 구간 시작부터 t 까지 저가 최저(탐색 trans 그대로)."""
     out = np.full(len(t), np.nan)
@@ -335,7 +344,7 @@ def build_tf(m: pd.DataFrame, dc_all: pd.DataFrame, tv_all: pd.DataFrame, elig: 
 
 # --------------------------------------------------------------------------------------------- 거래 경로
 
-@nb.njit(cache=False)
+@_njit
 def paths(Op, H, L, C, MA60, dix, is_last, prevc, dclose, dma10, dma20, dup, ci, eb, stop, mode, upk, lim_dn):
     """거래 경로(계좌 무관). eb = 진입 봉(시가 체결), stop = 초기 손절가. mode 1 = X1(아래 봉 MA60 종가 이탈 → 다음 봉 시가),
     2 = X2(일봉 종가 < 일봉 MA20 → 다음 날 첫 봉 시가), 3 = X3(MA10), 4 = X4(그날 일봉 상승 상태[upk] 꺼짐 → 다음 날 첫 봉 시가).
@@ -568,7 +577,7 @@ def order(c: dict) -> np.ndarray:
     return np.lexsort((c["ci"], c["tfi"], -c["relvol"], c["entry_ts"]))
 
 
-@nb.njit(cache=False)
+@_njit
 def _account(entry_ts, free_ts, code, eday, entry_px, tfi, ret, dist, dayclose, slots, w_cap, risk, cash0, min_size):
     N = len(entry_ts)
     taken = np.zeros(N, np.bool_)
