@@ -1,7 +1,11 @@
-# swing-it
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/wordmark-dark.svg">
+  <img alt="swing-it" src="docs/images/brand/wordmark-light.svg" height="56">
+</picture>
 
-**한국 주식(KOSPI·KOSDAQ) 리서치 저장소.** 알파 가설을 "자기 자신의 랜덤 버전을 이기는가"로
-심사한다. 산출물은 전략이 아니라 판정문이다.
+**한국어** | [English](README.en.md)
+
+**한국 주식(KOSPI·KOSDAQ) 리서치 저장소 — 알파 가설을 "자기 자신의 랜덤 버전을 이기는가"로 심사하는 통계적 검증 프레임워크.** 산출물은 전략이 아니라 판정문입니다.
 
 [![CI](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
