@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <defs>
+    <linearGradient id="sw-bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#064E3B"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="sw-wave" x1="12" y1="42" x2="52" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6EE7B7"/>
+      <stop offset="100%" stop-color="#A7F3D0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#sw-bg)"/>
+  <rect x="1" y="1" width="62" height="62" rx="13" stroke="#6EE7B7" stroke-opacity="0.3" stroke-width="1"/>
+  <!-- Null-distribution baseline -->
+  <line x1="12" y1="36" x2="52" y2="36" stroke="#FFFFFF" stroke-opacity="0.2" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <!-- Smooth swing wave -->
+  <path d="M12 40C17 40 19 24 25 24C31 24 33 44 39 44C44 44 47 22 52 18" stroke="url(#sw-wave)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Statistical gate node -->
+  <circle cx="52" cy="18" r="3.2" fill="#ECFDF5"/>
+  <!-- Gate badge (top-left) -->
+  <circle cx="19" cy="18" r="6" fill="#064E3B" stroke="#6EE7B7" stroke-width="1.6"/>
+  <path d="M16.5 18L18.2 19.7L21.7 16.2" stroke="#6EE7B7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
