@@ -21,7 +21,7 @@
 - **origin 은 PUBLIC 이다.** 배포북(재현 성적표·적합된 비중·유니버스 문턱처럼 따라 할 수 있는 레시피)은 2026-08-27 에 공개 브랜치에서
   뺐다(`docs/alpha-research.md` §8 끝 — 배포북을 공개 푸시했다가 회수·히스토리 재작성한 사고). **2026-11-21 사용자 결정으로 이 규칙은
   풀렸다** — 개인정보가 없어 fcs 를 공개 origin 에 올린다(`docs/individual-trader-method.md`·`deploy/p1_satellite.json`·`research/paper/` 포함).
-- 메시지: 한국어 conventional — `research(prereg|evolve|paper|verdict): …`, `fix(…)`, `perf(…)`, `docs(…)`.
+- 메시지: English Conventional Commits — `research(prereg|evolve|paper|verdict): …`, `fix(…)`, `perf(…)`, `docs(…)`.
 - `perf` 변경은 결과가 비트/바이트 동일함을 확인하고 메시지에 적는다(예 5074842 "결과 같음", da10c58 "바이트 동일").
 - 미너비니 책 원본(저작권)·`.orca/` 는 커밋 금지. `.orca/` gitignore 는 main 계열에만 있으니 fcs 에서는 `git add -A` 대신 경로를 지정한다.
 
