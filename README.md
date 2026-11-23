@@ -1,167 +1,80 @@
+<div align="center">
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/brand/wordmark-dark.svg">
   <img alt="swing-it" src="docs/images/brand/wordmark-light.svg" height="52">
 </picture>
 
-**한국어** | [English](README.en.md)
+# swing-it
 
 **한국 주식(KOSPI·KOSDAQ) 리서치 저장소 — 알파 가설을 "자기 자신의 랜덤 버전을 이기는가"로 심사하는 통계적 검증 프레임워크.** 산출물은 전략이 아니라 판정문입니다.
+
+섹터 수급 관측 화면과 일일 리포트는 [`sector-flow`](https://github.com/younghwan91/sector-flow)에서 관리하며, 스윙·미너비니·GA 연구는 [`feature-combined-strategy`](https://github.com/younghwan91/swing-it/tree/feature-combined-strategy) 브랜치에 있습니다.
 
 [![CI](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml/badge.svg)](https://github.com/younghwan91/swing-it/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-younghwan--chae-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/younghwan-chae/)
 
+[가이드](docs/guide.md) · [알파 연구](docs/alpha-research.md) · [가드레일](docs/GUARDRAILS.md) · [English](README.en.md)
+
+</div>
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-  <img alt="시뮬레이션 5,000개 중 신호 없는 랜덤 전략의 절반가량이 6폴드 중 5폴드 양수를 통과한다. 그래서 판별 기준은 폴드 수가 아니라 자기 랜덤 버전의 95 백분위를 이기는가이다." src="docs/images/hero-light.png" width="100%">
+  <img alt="시뮬레이션 5,000개 중 신호 없는 랜덤 전략의 절반가량이 6폴드 중 5폴드 양수를 통과합니다. 그래서 판별 기준은 폴드 수가 아니라 자기 랜덤 버전의 95 백분위를 이기는가입니다." src="docs/images/hero-light.png" width="100%">
 </picture>
 
-- **순수 노이즈도 "6폴드 중 5폴드 양수"를 절반가량 통과한다.** 신호가 전혀 없는 합성 전략
-  5,000개 중 55% 가 그 바를 넘는다(위 그림, `scripts/make_hero.py` 로 재현). 폴드 수는 기준이 못 된다.
-- **기준은 자기 랜덤 버전의 95 백분위다.** 랜덤 음성대조·purge/embargo·Deflated Sharpe 는 권고가
-  아니라 공용 하버스에 박혀 있고, 그 하버스를 안 쓰는 게이트는 CI 린트가 빌드를 깨뜨린다.
-- **기각이 산출물이다.** 통과든 기각이든 근거 숫자와 함께 `research/logs/*/VERDICT.md` 에 남는다.
-
-섹터 수급 관측 화면과 일일 리포트는 이 저장소에 없다(별도 저장소 [`sector-flow`](https://github.com/younghwan91/sector-flow)).
-
-이 브랜치(main)는 심사 프레임워크만 담는다. 스윙·미너비니 패턴 탐색, 진화(GA) 연구, 모의매매 장부 같은 실제 연구는
-공개 브랜치 [`feature-combined-strategy`](https://github.com/younghwan91/swing-it/tree/feature-combined-strategy) 에 있다(main 에 머지되지 않았다).
+<p align="center"><sub>시뮬레이션 5,000개 중 신호 없는 랜덤 전략의 55%가 6폴드 중 5폴드 양수를 통과합니다. 그래서 폴드 수가 아니라 자기 랜덤 버전의 95 백분위를 기준으로 삼습니다.</sub></p>
 
 ## Quick start
 
 ```bash
 git clone https://github.com/younghwan91/swing-it && cd swing-it
-uv venv && uv pip install -e ".[viz,dev]"     # TimescaleDB 를 쓰면 pg extra 를 더한다
-cp .env.example .env                          # KR_QUANT_DB 접속정보 (비우면 로컬 SQLite)
+uv venv && uv pip install -e ".[viz,dev]"     # TimescaleDB 를 쓰면 pg extra 를 더합니다
+cp .env.example .env                          # KR_QUANT_DB 접속정보 (비우면 로컬 SQLite 를 씁니다)
 
 uv run python research/experiments/prop_gate.py   # 심사 배터리 + 랜덤 음성대조 — DB·API 키 없이 1초
 ```
 
-> **데이터 수집은 이 저장소에 없다.** DART·키움·KRX·네이버 커넥터와 TimescaleDB 적재는
-> [quant-airflow](https://github.com/younghwan91/quant-airflow) 의 몫이고, 여기서는 그 DB 를 읽기만 한다.
+실행하면 50회 랜덤 음성대조에서 신호 없는 전략이 6폴드 중 5폴드 양수를 46% 확률로 통과하는 결과를 바로 확인합니다.
 
-## 목차
+> **데이터 수집은 이 저장소에 없습니다.** DART·키움·KRX·네이버 커넥터와 TimescaleDB 적재는 [quant-airflow](https://github.com/younghwan91/quant-airflow)가 맡고, 이 저장소는 그 DB를 읽기만 합니다.
 
-1. [무엇을 하나](#1-무엇을-하나)
-2. [왜 이렇게 만들었나 — 알파 심사 프레임워크](#2-왜-이렇게-만들었나--알파-심사-프레임워크)
-3. [구조](#3-구조)
-4. [개발](#4-개발)
-5. [문서](#5-문서)
-
----
-
-## 1. 무엇을 하나
+## 무엇을 하나
 
 | 명령 | 하는 일 | DB |
 |---|---|---|
-| `sw-pead` | 게이트를 통과한 알파의 재현 백테스트 | 읽기 전용 |
-| `research/` + `swing_it.validation`·`diagnostics` | 알파 가설을 개별 트레이드 분포로 심사하는 배터리. 판정문과 시행 원장을 남긴다 | 읽기 전용(배터리 자체는 불요) |
-| `python -m swing_it.pipeline status` | 연구마다 11단계 중 어디까지 왔는지 원장에서 읽어 보여 준다 | 불요 |
+| `sw-pead` | 게이트를 통과한 알파의 재현 백테스트를 실행합니다 | 읽기 전용 |
+| `research/` + `swing_it.validation`·`diagnostics` | 알파 가설을 개별 트레이드 분포로 심사해 판정문과 시행 원장을 남깁니다 | 읽기 전용(배터리 자체는 불요) |
+| `python -m swing_it.pipeline status` | 연구마다 11단계 중 어디까지 왔는지 원장에서 읽어 보여 줍니다 | 불요 |
 
-## 2. 왜 이렇게 만들었나 — 알파 심사 프레임워크
+## 왜 이렇게 만들었나
 
-백테스트는 거의 언제나 우상향 곡선을 그린다. 그래서 이 저장소가 남기려는 것은 전략이 아니라
-**판별 능력**이다. 후보 알파를 개별 트레이드 분포로 심사하고, 통과든 기각이든 근거 숫자와 함께
-판정문에 남긴다.
+- **순수 노이즈도 6폴드 중 5폴드를 절반가량 통과합니다.** 신호가 전혀 없는 합성 전략 5,000개 중 55%가 그 기준을 넘습니다(`scripts/make_hero.py`로 재현). 폴드 수만으로는 신호를 가릴 수 없습니다.
+- **자기 랜덤 버전의 95 백분위를 넘어야 통과합니다.** 랜덤 음성대조·purge/embargo·Deflated Sharpe를 공용 하버스에 고정했고, 이를 건너뛰면 CI 린트가 빌드를 멈춥니다.
+- **기각도 통과와 같은 산출물입니다.** 모든 가설은 근거 숫자와 함께 `research/logs/*/VERDICT.md`에 남습니다. 지금까지 게이트를 통과한 알파는 PEAD 하나뿐입니다.
 
-DB 도 API 키도 없이 1초 만에 재현되는 근거가 첫 화면의 그림이다.
+게이트 8개 관문, 11단계 파이프라인, 저장소 구조와 개발 명령은 [가이드](docs/guide.md)에서 자세히 볼 수 있습니다.
 
-```bash
-uv run python research/experiments/prop_gate.py
-```
-
-```text
-  랜덤 음성대조 — 50 draws × 600 trades (게이트 위양성률 보정)
-  raw ≥5/6 폴드 도달: 46.0% of draws
-```
-
-**신호가 아예 없는 합성 데이터로 만든 전략이 6폴드 중 5폴드 양수를 46% 확률로 달성한다**
-(같은 seed 7 로 5,000 draw 까지 늘리면 55% — 첫 50 draw 가 같은 수열이라 첫 화면 그림과 같은 실험이다, `scripts/make_hero.py`). 그래서 판별 기준을 폴드 수에 두지 않고
-전략이 자기 자신의 랜덤 버전을 이기는가를 본다.
-
-게이트는 8개 관문이다 — walk-forward 재현성 · 랜덤 음성대조 · 손 안 댄 최종 구간 · 비용 2배 ·
-취약성 · Deflated Sharpe(시행 원장 자동 집계) · purge/embargo · 유니버스 무결성. 이 규율은
-부탁이 아니라 CI 린트([`scripts/check_guardrails.py`](scripts/check_guardrails.py))로 강제된다.
-게이트가 공용 하버스를 안 쓰거나 시행 수를 원장에 안 남기면 빌드가 깨진다.
-
-**심사 결과: 게이트를 통과한 것은 PEAD 하나, 나머지 알파 가설과 위험 오버레이는 전부 기각.**
-기각된 가설도 같은 형식의 판정문으로 남아 있어, 같은 가설을 파라미터만 바꿔 다시 돌리는 낚시를 막는다.
-PEAD 를 넘어선 두 후속 연구도 닫혔다. 위험모델·최적화 북은 **판단 불가**(비교할 만큼 신호가 강하지 않았다,
-[`research/logs/pead_optimizer/B_verified.md`](research/logs/pead_optimizer/B_verified.md)), ML 수익률 예측은
-**비용 뒤 이득 없음**([`research/logs/ml_forecast/S2_verified.md`](research/logs/ml_forecast/S2_verified.md)).
-
-> 판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 · 데이터 스키마:
-> [`docs/alpha-research.md`](docs/alpha-research.md). 규칙 원본은 [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md),
-> 통과한 유일한 알파는 [`docs/pead-strategy.md`](docs/pead-strategy.md)(재현 CLI `sw-pead`).
-
-**연구는 11단계를 순서대로만 지난다** — 유니버스 → 데이터 → 알파 발굴 → 알파 검증(IC/ICIR) → ML 예측 →
-위험모델 → 포트폴리오 → 거래비용 → 백테스트 → 주문 실행 → 성과 기여·모니터링. 연구마다
-`research/logs/<연구>/PIPELINE.jsonl` 원장에 단계별 판정과 증거 파일 해시를 적고, 러너는 앞 단계가 열려 있어야
-돌며(`require_stage`), CI 가 그 선언을 검사한다. 실수와 망각을 막는 장치이지 위조를 막는 보안 장치는 아니다.
-10단계(주문)와 11단계의 전진 모니터링은 main 에 구현이 없고, 게이트는 그것을 부른 코드만 막는다 — 자세한 한계는
-[`docs/PIPELINE.md`](docs/PIPELINE.md).
-
-## 3. 구조
-
-```mermaid
-flowchart TD
-    AF["quant-airflow (외부 저장소)\nDART·키움·KRX·네이버 수집"] -->|적재| DB[("PostgreSQL /\nTimescaleDB")]
-
-    DB -->|"SELECT 전용"| ST["storage.py\n유일한 DB 접근 정문"]
-
-    ST --> ALPHA["research/ +\nengine·validation·diagnostics·features·book"]
-    ALPHA --> PEAD["sw-pead\n(strategies/pead.py)\n게이트 통과 알파 재현 백테스트"]
-    GATE["pipeline/\n11단계 게이트 + PIPELINE.jsonl"] -. "앞 단계가 열려야 돈다" .-> ALPHA
-```
-
-```
-src/swing_it/
-├── storage.py           # 읽기 전용 DB 접근 — 유일한 정문
-├── pipeline/            # 11단계 게이트 · 원장 · 단계 입력 검사
-├── book/                # 포트폴리오 북 — 순위·최적화 구성, 위험모델 입력, 비용, 회계, 널
-├── price_adjust.py      # 조정주가 생성 (quant-airflow 의 *_price_adjust DAG 가 실행)
-├── news/                # 기사 LLM 판정 (Batch API)
-└── engine/ validation/ diagnostics/ features/ strategies/   # 알파 심사 라이브러리
-scripts/                 # check_guardrails · make_hero
-research/                # 신호 정의 · 실험 러너 · VERDICT/TRIALS 원장
-docs/                    # alpha-research.md · GUARDRAILS.md · 전략 문서
-```
-
-## 4. 개발
-
-```bash
-uv run --extra dev pytest -q                  # 네트워크·DB 불요
-uv run --extra dev ruff check src/ tests/ research/ scripts/ examples/
-uv run python scripts/check_guardrails.py     # 경계·판정·정문·하버스·신원 규율 검사 (CI 단계)
-uv run python scripts/make_hero.py            # 첫 화면 그림 재생성 → docs/images/hero-{light,dark}.png
-```
-
-`src` 는 `research` 를 import 하지 않는다(린트 (a)). 실험 파이프라인 규약은 [`research/TEMPLATE.md`](research/TEMPLATE.md).
-
-## 5. 문서
+## 문서
 
 | 문서 | 내용 |
 |---|---|
+| [`docs/guide.md`](docs/guide.md) | 알파 심사 프레임워크 · 저장소 구조 · 개발 및 테스트 명령 |
 | [`docs/alpha-research.md`](docs/alpha-research.md) | 판정 기록 전문 · 게이트의 구조 · 엣지의 해부 · 가드레일 린트 · 데이터 스키마 |
 | [`docs/GUARDRAILS.md`](docs/GUARDRAILS.md) | 연구 규율 원본 — 사전등록 템플릿·완료 정의 |
 | [`docs/PIPELINE.md`](docs/PIPELINE.md) | 11단계 — 단계별 함수, 게이트 규칙, 새 연구를 더하는 법, 막지 못하는 것 |
 | [`docs/execution/DESIGN.md`](docs/execution/DESIGN.md) | 주문 실행 설계(미구현) |
 | [`docs/pead-strategy.md`](docs/pead-strategy.md) | 게이트를 통과한 유일한 알파 (재현 CLI `sw-pead`) |
-| `research/logs/*/VERDICT.md` | 가설별 판정문 전문. 기각도 통과와 같은 형식으로 남는다 |
+| `research/logs/*/VERDICT.md` | 가설별 판정문 전문. 기각도 통과와 같은 형식으로 남습니다 |
+
+## 기여 및 문의
+
+- **만든 사람**: 채영환 (Younghwan Chae) · [GitHub](https://github.com/younghwan91) · [LinkedIn](https://www.linkedin.com/in/younghwan-chae/)
+- **퀀트 스택**: 전체 오픈소스 퀀트 스택은 [프로필](https://github.com/younghwan91)에서 볼 수 있습니다.
+- **이슈 및 제안**: 버그 제보, 질문, 기능 제안은 [GitHub Issues](https://github.com/younghwan91/swing-it/issues)에 남겨 주세요.
 
 ## 라이선스
 
 MIT — [LICENSE](LICENSE).
-
-## 만든 사람
-
-**채영환 (Younghwan Chae)** · [GitHub @younghwan91](https://github.com/younghwan91) · [LinkedIn](https://www.linkedin.com/in/younghwan-chae/)
-
-전체 오픈소스 퀀트 스택은 [프로필](https://github.com/younghwan91)에서 볼 수 있습니다.
-
-## 기여 및 이슈 제보
-
-- 🐛 버그 제보, 질문, 기능 제안: [GitHub Issues](https://github.com/younghwan91/swing-it/issues)
-- 📈 업데이트 소식: [팔로우 @younghwan91](https://github.com/younghwan91)
-
