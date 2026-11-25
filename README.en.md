@@ -27,6 +27,18 @@ Sector-flow observation views and daily reports live in [`sector-flow`](https://
 
 <p align="center"><sub>Across 5,000 simulations, 55% of zero-signal random strategies pass 5 of 6 positive folds. The bar is the 95th percentile of the strategy's own randomized version, not fold count.</sub></p>
 
+## Key results
+
+Of six hypotheses judged, one passed (PEAD); the rest were rejected. Rejections get the same verdict format as passes.
+
+- **Passed: PEAD (earnings drift).** About +8%p/yr excess return over the universe, t ~ 2.16, net-of-cost Sharpe 0.65. Adding delisted names makes the benchmark more conservative. [Verdict](research/logs/survivorship_bias/VERDICT.md)
+- **Rejected: Minervini-style breakout.** Portfolio performance was leverage and compounding; per-trade expectancy of -0.029R sits below the random null (+0.078R). [Verdict](research/logs/minervini_prop/VERDICT.md)
+- **Rejected: pullback mean reversion.** The premise (high win rate) did not hold (35%); -0.329R is below the null (-0.267R). [Verdict](research/logs/pullback_prop/VERDICT.md)
+- **Rejected: institutional flow acceleration.** Indistinguishable from zero whether mass is market cap or traded value (+0.005R, CI [-0.095, +0.108]). The first run was VOID for lack of data; after backfill it was rerun on the unchanged preregistration and rejected. [Verdict](research/logs/inst_flow_accel/VERDICT.md)
+- **Rejected: regime off-switch (200-day MA).** The +0.3%p drawdown gain sits at the 53rd percentile of a rotation null: it is time spent out of the market, not timing. [Verdict](research/logs/regime_switch/VERDICT.md)
+
+The other rejections (retail-capitulation contrarian, earnings-surprise concentration) and their numbers are in the [verdict record](docs/alpha-research.md).
+
 ## Quick start
 
 ```bash
@@ -68,6 +80,13 @@ The 8-check gate, 11-stage pipeline, repository layout, and development commands
 | [`docs/execution/DESIGN.md`](docs/execution/DESIGN.md) | Order execution design (unimplemented) |
 | [`docs/pead-strategy.md`](docs/pead-strategy.md) | Sole gate-passing alpha (reproducible CLI `sw-pead`) |
 | `research/logs/*/VERDICT.md` | Per-hypothesis verdicts; rejections are logged in the same format as passes |
+
+## Tools by the same author
+
+- [kiwoom-client](https://github.com/younghwan91/kiwoom-client): Kiwoom REST API Python client (with MCP server)
+- [fin-checkup](https://github.com/younghwan91/fin-checkup): listed-company financial traffic lights from DART filings (measurements only, not advice)
+- [krx-quant-core](https://github.com/younghwan91/krx-quant-core): shared KRX quant core (costs, risk, portfolio) used by this repo
+- [portfolio-research](https://github.com/younghwan91/portfolio-research): US equity factor research that charges for its own search; rejections ship too
 
 ## Contributing & Contact
 
