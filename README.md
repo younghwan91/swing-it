@@ -27,6 +27,18 @@
 
 <p align="center"><sub>시뮬레이션 5,000개 중 신호 없는 랜덤 전략의 55%가 6폴드 중 5폴드 양수를 통과합니다. 그래서 폴드 수가 아니라 자기 랜덤 버전의 95 백분위를 기준으로 삼습니다.</sub></p>
 
+## 핵심 결과
+
+심사한 가설 6개 중 통과한 것은 PEAD 하나이고, 나머지는 모두 기각했습니다. 기각도 통과와 같은 형식의 판정문으로 남깁니다.
+
+- **통과 — PEAD(실적 드리프트).** 유니버스 대비 초과수익 약 +8%p/년, t ≈ 2.16, 비용 후 Sharpe 0.65. 상장폐지 종목을 넣으면 벤치마크가 더 보수적으로 바뀝니다. [판정](research/logs/survivorship_bias/VERDICT.md)
+- **기각 — 미너비니식 돌파.** 포트폴리오 성과는 레버리지·복리 효과였고, 트레이드 기대값 −0.029R 은 랜덤 널(+0.078R) 아래입니다. [판정](research/logs/minervini_prop/VERDICT.md)
+- **기각 — 눌림목 평균회귀.** 전제인 고승률이 성립하지 않았고(35%), −0.329R 로 널(−0.267R)보다 낮습니다. [판정](research/logs/pullback_prop/VERDICT.md)
+- **기각 — 기관 수급 가속.** 질량을 시총·거래대금 어느 쪽으로 잡아도 0과 구분되지 않습니다(+0.005R, CI [−0.095, +0.108]). 데이터 부족으로 먼저 VOID 가 났고, 백필 뒤 사전등록 그대로 재실행해 기각했습니다. [판정](research/logs/inst_flow_accel/VERDICT.md)
+- **기각 — 국면 오프스위치(200일선).** MDD 개선 +0.3%p 는 회전 널의 53 퍼센타일, 곧 타이밍이 아니라 쉬어 간 시간의 효과입니다. [판정](research/logs/regime_switch/VERDICT.md)
+
+개미 투매 역발상·실적 서프라이즈 집중 등 나머지 기각과 근거 숫자는 [판정 기록](docs/alpha-research.md#3-판정-기록)에 있습니다.
+
 ## Quick start
 
 ```bash
@@ -68,6 +80,13 @@ uv run python research/experiments/prop_gate.py   # 심사 배터리 + 랜덤 �
 | [`docs/execution/DESIGN.md`](docs/execution/DESIGN.md) | 주문 실행 설계(미구현) |
 | [`docs/pead-strategy.md`](docs/pead-strategy.md) | 게이트를 통과한 유일한 알파 (재현 CLI `sw-pead`) |
 | `research/logs/*/VERDICT.md` | 가설별 판정문 전문. 기각도 통과와 같은 형식으로 남습니다 |
+
+## 같은 저자의 도구
+
+- [kiwoom-client](https://github.com/younghwan91/kiwoom-client) — 키움 REST API 파이썬 클라이언트(MCP 서버 포함)
+- [fin-checkup](https://github.com/younghwan91/fin-checkup) — DART 공시로 계산한 상장사 재무 신호등(측정값만, 투자 권유 아님)
+- [krx-quant-core](https://github.com/younghwan91/krx-quant-core) — 이 저장소가 쓰는 KRX 퀀트 공용 코어(비용·리스크·포트폴리오)
+- [portfolio-research](https://github.com/younghwan91/portfolio-research) — 미국 주식 팩터 연구, 탐색 비용을 스스로 물리고 기각도 공개
 
 ## 기여 및 문의
 
