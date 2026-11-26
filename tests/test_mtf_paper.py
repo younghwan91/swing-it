@@ -111,3 +111,14 @@ def test_rows_ok():
     days = pd.bdate_range("2026-11-09", "2026-11-16")
     m = pd.DataFrame({"code": "A", "ts": np.repeat(days, [26, 26, 26, 26, 26, 10])})
     assert P.rows_ok(m, days[4]) and not P.rows_ok(m, days[5])
+
+
+def test_union_asof_drops_later_members():
+    """--asof 백필: asof 뒤에야 거래대금 상위에 든 종목은 패널에서 빠진다(그날 아침 실행은 몰랐다)."""
+    idx = pd.bdate_range("2026-11-16", "2026-11-20")
+    mem = pd.DataFrame({"A": [True] * 5, "B": [False, False, False, True, True], "C": [False] * 5}, index=idx)
+    m15 = pd.DataFrame({"code": ["A", "B", "A", "B"], "ts": [idx[0], idx[0], idx[3], idx[3]]})
+    D = {"mem": mem, "union": ["A", "B"], "m15": m15}
+    d = P.union_asof(D, idx[2])
+    assert d["union"] == ["A"] and set(d["m15"]["code"]) == {"A"}
+    assert P.union_asof(D, idx[3])["union"] == ["A", "B"]

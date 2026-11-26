@@ -219,7 +219,7 @@ def load(con) -> dict:
     ix = read_index(con, ["001", "101"], cols=("code", "date", "close"), start=IDX_START, with_level=True, order_by_date=True, parse_dates=True)
     w = ix.pivot(index="date", columns="code", values="level").rename(columns={"001": "kospi", "101": "kosdaq"})
     w.index = pd.DatetimeIndex(w.index)
-    return {"dc": dc, "tv": tv, "meta": meta, "elig": elig, "union": union, "m15": m, "ix": w, "krx_session": dict(pw.krx_session)}
+    return {"dc": dc, "tv": tv, "meta": meta, "elig": elig, "union": union, "mem": mem, "m15": m, "ix": w, "krx_session": dict(pw.krx_session)}
 
 
 def cut_to(D: dict, asof: pd.Timestamp) -> dict:
@@ -228,11 +228,21 @@ def cut_to(D: dict, asof: pd.Timestamp) -> dict:
             "ix": D["ix"][D["ix"].index <= asof]}
 
 
+def union_asof(D: dict, asof: pd.Timestamp) -> dict:
+    """``--asof`` 백필 전용: 패널 종목을 asof 까지의 거래대금 상위 이력(``mem``)만으로 다시 고른다. 그날 아침 실행은 asof 뒤
+    거래대금을 못 봤다 — 뒤에 상위에 든 종목을 패널에 넣지 않는다(일별 대상은 원래 인과적이라 결과는 같아야 하고, 행의 종목 수가 맞는다)."""
+    mem = D["mem"][D["mem"].index <= asof]
+    union = sorted(mem.columns[mem.any(axis=0)])
+    return {**D, "union": union, "m15": D["m15"][D["m15"]["code"].isin(union)]}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--fwd-start", default=FWD_START, help="바꾸면 언제나 dry-run(스모크용)")
     ap.add_argument("--ledger", default=str(LEDGER))
+    ap.add_argument("--asof", default="", help="빠진 날 채우기: 쉼표로 이은 거래일(오름차순, 장부 마지막 행 뒤) — 그날까지의 자료만으로 "
+                    "다시 만들고 행에 backfilled=true (leader·pead 의 --asof 와 같은 규약)")
     a = ap.parse_args(argv)
     dry = a.dry_run or a.fwd_start != FWD_START
     t0 = time.time()
@@ -240,19 +250,55 @@ def main(argv=None) -> int:
     D = load(con)
     m = D["m15"]
     days = sorted(m["ts"].dt.normalize().unique())
-    tail = [pd.Timestamp(d) for d in days[-3:]]
-    expect = {}
-    for d in tail:
-        if d in D["tv"].index:
-            row = D["tv"].loc[d].reindex(D["union"])
-            expect[d] = set(row.index[row.to_numpy(dtype=float, na_value=np.nan) > 0])
-    ok_days = [d for d in complete_days(m[m["ts"] >= tail[0]], expect) if rows_ok(m, d)]
-    if not ok_days:
-        print(f"실패: 최근 3거래일({', '.join(str(d.date()) for d in tail)}) 분봉 완결 날 없음")
+
+    def expected(Dx: dict, ds: list) -> dict:
+        out = {}
+        for d in ds:
+            if d in Dx["tv"].index:
+                row = Dx["tv"].loc[d].reindex(Dx["union"])
+                out[d] = set(row.index[row.to_numpy(dtype=float, na_value=np.nan) > 0])
+        return out
+
+    if not a.asof:
+        tail = [pd.Timestamp(d) for d in days[-3:]]
+        expect = expected(D, tail)
+        ok_days = [d for d in complete_days(m[m["ts"] >= tail[0]], expect) if rows_ok(m, d)]
+        if not ok_days:
+            print(f"실패: 최근 3거래일({', '.join(str(d.date()) for d in tail)}) 분봉 완결 날 없음")
+            return 1
+        asof = ok_days[-1]
+        if asof != tail[-1]:
+            print(f"감시: 분봉 마지막 날 {tail[-1].date()} 미완결 — {asof.date()} 까지만 쓴다")
+        return write_day(D, asof, expect, a, dry, t0, backfilled=False)
+    # --asof: 날마다 그날까지의 자료로 아침 실행을 다시 한다. 장부는 덧붙이기 전용이고 표류 점검이 직전 행과 견주므로
+    # 오름차순·장부 마지막 행 뒤만 받는다(사이에 끼워 넣으면 다음 행의 표류 기준이 어긋난다).
+    targets = [pd.Timestamp(x) for x in a.asof.split(",") if x]
+    led = [r for r in read_ledger(Path(a.ledger)) if r.get("arm") == ARM]
+    last = pd.Timestamp(led[-1]["asof"]) if led else None
+    if targets != sorted(set(targets)):
+        print(f"실패: --asof 는 겹치지 않는 오름차순이어야 한다 ({a.asof})")
         return 1
-    asof = ok_days[-1]
-    if asof != tail[-1]:
-        print(f"감시: 분봉 마지막 날 {tail[-1].date()} 미완결 — {asof.date()} 까지만 쓴다")
+    if last is not None and targets[0] <= last:
+        print(f"실패: --asof {targets[0].date()} 는 장부 마지막 행 {last.date()} 뒤가 아니다 — 덧붙이기 전용")
+        return 1
+    for d in targets:
+        if d not in days:
+            print(f"실패: --asof {d.date()} 는 분봉 거래일이 아니다")
+            return 1
+        Dd = union_asof(D, d)
+        md = Dd["m15"]
+        expect = expected(Dd, [d])
+        if not (complete_days(md[(md["ts"] >= d) & (md["ts"] < d + pd.Timedelta(days=1))], expect) and rows_ok(md, d)):
+            print(f"실패: --asof {d.date()} 분봉 미완결 — 쓰지 않는다")
+            return 1
+        rc = write_day(Dd, d, expect, a, dry, t0, backfilled=True)
+        if rc:
+            return rc
+    return 0
+
+
+def write_day(D: dict, asof: pd.Timestamp, expect: dict, a, dry: bool, t0: float, backfilled: bool) -> int:
+    """asof 하루의 장부 행(아침 실행과 ``--asof`` 백필이 같은 경로)."""
     if asof < pd.Timestamp(a.fwd_start) and not dry:
         print(f"시작 전: 자료 마지막 {asof.date()} < 시작 {a.fwd_start}")
         return 0
@@ -298,6 +344,8 @@ def main(argv=None) -> int:
            "main": {**summary(B, "main"), "trades": rows["main"]}, "main_c1": summary(B, "main_c1"),
            "shadow": {**summary(B, "shadow"), "trades": rows["shadow"]}, "drift": dr, "newly_realized": nr_,
            "note": "가격은 분할 보정 패널 기준(판정은 비율만), regime.next 의 대상은 패널 종목 한정 근사"}
+    if backfilled:                                  # 빠진 날 채우기 — 그날 아침 실행이 아니다(워크트리 삭제로 크론이 못 돈 날, 2026-11-27)
+        row["backfilled"] = True
     append_row(path, row)
     s = row["main"]
     print(f"기록: {ARM} {asof.date()} — main 진입 {s['n_entries']}(실현 {s['n_realized']}, 보유 {s['n_open']}), 자산 {s['equity']:,.0f}, "
