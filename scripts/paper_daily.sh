@@ -1,6 +1,8 @@
 #!/bin/bash
 # 전진 모의매매 하루 한 번(평일 07:43, DB 확정 06:30 뒤 장 전) — 팔마다 장부에 덧붙이고 장부만 이 브랜치에 커밋한다.
 # 커밋까지 하는 이유: 10-13~10-23 장부가 커밋 전에 워크트리째 지워져 사라졌다(2026-10-24 복구, 행에 backfilled=true).
+# 커밋 뒤 origin 에도 올린다: 11-21 워크트리가 다시 지워졌다 — 이번엔 11-20 커밋이 push 돼 있어 살았지만, 로컬 커밋만으로는
+# 워크트리 삭제를 못 견딘다(2026-11-27 복구, 행에 backfilled=true).
 # leader_P_RL 은 빠진다 — RL-1 기각(30 독립 표본) 뒤 모델 디렉터리(~/.cache/cc-swing/models/rl32)도 없다.
 set -u
 cd "$(dirname "$0")/.."
@@ -39,10 +41,33 @@ LEDGERS=(research/paper/*_ledger.jsonl)
 git add -- "${LEDGERS[@]}"
 if git diff --cached --quiet -- "${LEDGERS[@]}"; then
     echo "커밋 없음: 장부 변화 없음"
-elif git commit -q -m "research(paper): $(date +%F) 장부(cron)" -- "${LEDGERS[@]}"; then
+# 메시지는 영어 — 전역 commit-msg 훅(2026-11-24~)이 한글 메시지를 거부한다.
+elif git commit -q -m "research(paper): $(date +%F) ledger (cron)" -- "${LEDGERS[@]}"; then
     echo "커밋 $(git rev-parse --short HEAD)"
 else
     echo "실패: 장부 커밋"
     FAILS+=("commit")
+fi
+# origin/feature-combined-strategy 에 올린다(이 브랜치는 장부 브랜치 — PR 없이 바로). 커밋이 없어도 앞선 날 push 가 실패해
+# 남은 커밋이 있으면 올린다. 장부 밖 파일을 건드린 커밋이 섞여 있으면 사람 몫이라 올리지 않고 실패로 남긴다(공개 origin).
+# SKIP_CI_LOCAL: 전역 pre-push 의 로컬 CI(장부만 바뀐 커밋엔 무의미, 아침 실행을 늘린다). 신원 검사는 그대로 돈다.
+BR=feature-combined-strategy
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BR" ]; then
+    echo "실패: 장부 push — 이 워크트리가 $BR 이 아니다($(git rev-parse --abbrev-ref HEAD))"
+    FAILS+=("push")
+elif ! timeout 60 git fetch -q origin "$BR"; then
+    echo "실패: 장부 push — origin fetch 실패"
+    FAILS+=("push")
+elif [ -n "$(git rev-list "origin/$BR..HEAD")" ]; then
+    other=$(git diff --name-only "origin/$BR...HEAD" | grep -vE '^research/paper/[^/]+_ledger\.jsonl$')
+    if [ -n "$other" ]; then
+        echo "실패: 장부 push 보류 — origin 에 없는 커밋이 장부 밖 파일을 바꾼다: $(echo $other | head -c 200)"
+        FAILS+=("push")
+    elif SKIP_CI_LOCAL=1 PUSH_SYNC_SKIP=1 timeout 180 git push -q origin "HEAD:refs/heads/$BR"; then
+        echo "push origin/$BR $(git rev-parse --short HEAD)"
+    else
+        echo "실패: 장부 push (origin 이 앞서 있으면 사람이 합친다)"
+        FAILS+=("push")
+    fi
 fi
 echo "요약: $(date '+%F %T') 실패 ${#FAILS[@]}건${FAILS[*]:+ — ${FAILS[*]}}"
